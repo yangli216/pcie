@@ -61,6 +61,7 @@ const visibleMessages = computed(() => messages.value.filter(m => m.role !== 'sy
 const input = ref("");
 const imageDataUrl = ref<string | null>(null);
 const sending = ref(false);
+const webSearchEnabled = ref(false);
 
 const chatVoiceInput = useChatVoiceInput({
   recorder: audioRecorder,
@@ -152,6 +153,7 @@ async function handleSend() {
         trackClick('chat_leakage_blocked');
       }
     }, undefined, undefined, undefined, {
+      enableWebSearch: webSearchEnabled.value,
       traceContext: {
         scene: 'chat-stream',
         sourceModule: 'chat_panel',
@@ -217,6 +219,12 @@ function onCompositionEnd() {
 function handleEnter(e: KeyboardEvent) {
   if (isComposing.value || e.isComposing) return;
   handleSend();
+}
+
+function toggleWebSearch() {
+  if (sending.value) return;
+  webSearchEnabled.value = !webSearchEnabled.value;
+  trackClick('chat_web_search_toggle', { enabled: webSearchEnabled.value });
 }
 
 // function handleFileChange(e: Event) {
@@ -381,6 +389,17 @@ async function handleFeedback(messageId: string, feedbackType: 'positive' | 'neg
               :aria-label="recording ? '停止录音' : '开始语音输入'" :title="recording ? '停止录音' : '语音输入'">
               <Icon :icon="recording ? 'lucide:mic-off' : 'lucide:mic'" class="icon" size="16" aria-hidden="true" />
             </button>
+            <button
+              class="action-btn web-search-btn"
+              :class="{ active: webSearchEnabled }"
+              :disabled="sending"
+              :aria-pressed="webSearchEnabled"
+              :aria-label="webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'"
+              :title="webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'"
+              @click="toggleWebSearch"
+            >
+              <Icon icon="lucide:globe" class="icon" size="16" aria-hidden="true" />
+            </button>
           </div>
           <div class="chat-footer-tools-right">
             <button :class="{'send-btn': true, 'disabled': !input.trim() && !imageDataUrl}" :disabled="sending" :aria-busy="sending" :aria-label="sending ? '发送中...' : '发送消息'"
@@ -508,16 +527,26 @@ async function handleFeedback(messageId: string, feedbackType: 'positive' | 'neg
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  max-width: min(85%, 340px);
+}
+
+.msg.assistant .msg-container {
+  width: 100%;
+  min-width: 0;
 }
 
 .msg.user .msg-container {
   align-items: flex-end;
+  max-width: min(85%, 340px);
 }
 
 .msg-container-item {
   display: flex;
   align-items: flex-start;
+}
+
+.msg.assistant .msg-container-item {
+  width: 100%;
+  min-width: 0;
 }
 
 .avatar {
@@ -536,6 +565,9 @@ async function handleFeedback(messageId: string, feedbackType: 'positive' | 'neg
 }
 
 .msg.assistant .bubble {
+  flex: 1;
+  width: auto;
+  min-width: 0;
   background: var(--surface-glass);
   color: var(--color-text-strong);
   border: 1px solid var(--color-border-light);
@@ -694,6 +726,7 @@ async function handleFeedback(messageId: string, feedbackType: 'positive' | 'neg
 .chat-footer-tools-left {
   display: flex;
   align-items: center;
+  gap: 6px;
 }
 
 .action-btn {
@@ -727,6 +760,24 @@ async function handleFeedback(messageId: string, feedbackType: 'positive' | 'neg
 
 .action-btn input { display: none; }
 .action-btn .icon { width: 20px; height: 20px; }
+
+.web-search-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+.web-search-btn.active {
+  color: var(--color-primary);
+  background: var(--color-primary-50);
+}
+.web-search-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.web-search-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 
 .send-btn {
   width: 80px;

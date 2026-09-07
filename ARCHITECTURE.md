@@ -725,7 +725,7 @@ eventListeners.unregisterAllListeners();
 
 | 组件 | 职责 | 文件 |
 |------|------|------|
-| `ChatPanel.vue` | LLM 对话界面；聊天语音按钮只编排 UI、输入回填与错误提示，录音和实时语音会话交由 `features/chat/model/useChatVoiceInput.ts` | [src/components/ChatPanel.vue](src/components/ChatPanel.vue) |
+| `ChatPanel.vue` | LLM 对话界面；助手回复宽度跟随消息区可用宽度，用户短消息保持紧凑右对齐；页面持有默认关闭的会话级联网开关，并只通过 `LLMConfigOverride.enableWebSearch` 为 `chat-stream / chat_panel` 流式请求声明联网意图；聊天语音按钮只编排 UI、输入回填与错误提示，录音和实时语音会话交由 `features/chat/model/useChatVoiceInput.ts` | [src/components/ChatPanel.vue](src/components/ChatPanel.vue) |
 | `SettingsPanel.vue` | 系统设置 shell：只保留通用设置与关于版本，负责主题、窗口置顶、区域后台地址/机构编码、连接测试、音频输入设备、语音录音目录、缓存管理和 HIS 联调日志入口；不再提供模式开关或模型/语音/知识库密钥配置。音频输入设备、录音目录和保存快照分别下沉到 settings model，通用页签与保存条为受控 UI | [src/components/SettingsPanel.vue](src/components/SettingsPanel.vue) |
 | `ConsultationPage.vue` | 完整症状问诊主链路，同时承接新的“内嵌灵活模式”；支持根据 `/assist` 上下文直接跳过症状采集进入病历详情页，继续复用现有推荐诊断、诊断鉴别、推荐用药、推荐检查与诊断路径能力；进入 `record` 阶段后不再继续内嵌维护旧结果页，而是把当前病历、诊断、治疗快照切换到独立的症状结果页包装组件，由后者复用共享结果页主体；PHIS 引用闭环状态仍由症状包装层承接；患者 / 就诊锚点变化时是硬 reset 边界，必须清空上一患者的症状、诊断、治疗方案、缓存快照和事实核查状态，并递增 AI 请求序列作废慢响应；页面 scoped 样式原样外置到 `features/symptom-consultation/ui/ConsultationPage.css`，SFC 继续保留模板、脚本和问诊状态机；AI 推荐链路采用成功后覆盖与当前诊断上下文校验，解析失败或慢请求过期时保留上一版结果；患者文本读取、既往史解析、患者草稿/诊断预填、诊断 identity / AI 请求防串线、同类诊断候选 / 替换列表更新、病历草稿 AI 请求规格与本地兜底、病历草稿主诉 / 现病史本地拼装、中医诊断证候 / 治法映射、诊断展示分组、诊断 / 治疗事实核查编排、LLM JSON 宽容解析、诊断/治疗推荐反馈目标落库 / 注册编排、完成问诊推荐采纳 / 拒绝埋点编排、医嘱文案生成、最终报告数据拼装、当前医疗 payload、智能问诊用户日志快照、PHIS 引用 key / 状态图 / 回执归一 / 引用展示判断等数据处理逐步下沉到 `features/symptom-consultation/lib|model`；western 诊断 raw 映射、western 治疗推荐 raw 映射和 PHIS 提交前治疗选择 / 库存提示 / 处理意见摘要复用 `features/clinical-result`；同类诊断卡片内联下拉开合与候选状态复用 `features/consultation-result/model/useRelatedDiagnosisDropdown.ts`，页面仅保留候选来源、诊断替换、选中同步和埋点；页面层只保留状态、副作用依赖注入和流程编排 | [src/components/ConsultationPage.vue](src/components/ConsultationPage.vue) |
 | `entities/patient/*` | 患者实体展示与后续稳定转换归属。当前 `PatientHeader.vue` 是无副作用患者头部展示组件，接收 patient/payType/avatar props 和 actions slot，复用既有 patientContext / patientAvatar 工具解析姓名、性别、年龄、过敏史和头像；不持有问诊流程状态、不调用 Tauri / HIS / toast。智能问诊和语音问诊均通过 `@entities/patient` 复用，旧 `src/components/PatientHeader.vue` 已删除 | [src/entities/patient](src/entities/patient) |
@@ -1025,7 +1025,7 @@ startAuditUploader() (startup flush + enqueue flush + 30s retry)
 
 | 服务 | 唯一运行路径 |
 |------|-------------|
-| LLM Chat | 签名 SSE/POST `/v1/ai/chat`，模型凭据由服务端持有 |
+| LLM Chat | 签名 SSE/POST `/v1/ai/chat`，模型凭据由服务端持有；客户端与服务端双重限制 `enableSearch` 只作用于 `chat-stream / chat_panel` 流式小助手请求，其他问诊与病历场景强制关闭 |
 | 批量语音转写 | 签名 POST `/v1/ai/speech/transcribe` |
 | 阿里实时语音 | 签名 WebSocket `/v1/ai/speech/realtime/ws`，失败后降级签名 POST `/v1/ai/speech/realtime` |
 | Prompt / 模板 | bootstrap + delta 覆盖，本地内置内容仅作失联兜底 |

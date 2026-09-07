@@ -43,6 +43,59 @@ describe('server-managed LLM routing', () => {
     expect(chunks).toEqual(['chunk']);
   });
 
+  it('enables web search only for the assistant streaming scene', async () => {
+    mocks.createRegionalSSE.mockResolvedValue(undefined);
+
+    await chatStream([{ role: 'user', content: 'latest guidance' }], vi.fn(), undefined, undefined, undefined, {
+      enableWebSearch: true,
+      traceContext: {
+        scene: 'chat-stream',
+        sourceModule: 'chat_panel',
+      },
+    });
+
+    expect(mocks.createRegionalSSE).toHaveBeenCalledWith(
+      '/v1/ai/chat',
+      expect.objectContaining({ enableSearch: true, stream: true }),
+      expect.any(Function),
+    );
+  });
+
+  it('rejects web search intent outside the assistant streaming scene', async () => {
+    mocks.createRegionalSSE.mockResolvedValue(undefined);
+
+    await chatStream([{ role: 'user', content: 'clinical task' }], vi.fn(), undefined, undefined, undefined, {
+      enableWebSearch: true,
+      traceContext: {
+        scene: 'voice-intent-recognition',
+        sourceModule: 'voice_consultation',
+      },
+    });
+
+    expect(mocks.createRegionalSSE).toHaveBeenCalledWith(
+      '/v1/ai/chat',
+      expect.objectContaining({ enableSearch: false, stream: true }),
+      expect.any(Function),
+    );
+  });
+
+  it('keeps web search disabled by default', async () => {
+    mocks.createRegionalSSE.mockResolvedValue(undefined);
+
+    await chatStream([{ role: 'user', content: 'hello' }], vi.fn(), undefined, undefined, undefined, {
+      traceContext: {
+        scene: 'chat-stream',
+        sourceModule: 'chat_panel',
+      },
+    });
+
+    expect(mocks.createRegionalSSE).toHaveBeenCalledWith(
+      '/v1/ai/chat',
+      expect.objectContaining({ enableSearch: false, stream: true }),
+      expect.any(Function),
+    );
+  });
+
   it('routes transcription through the signed server endpoint', async () => {
     mocks.regionalPost.mockResolvedValue({ text: 'transcript' });
     const blob = new Blob(['audio'], { type: 'audio/webm' });

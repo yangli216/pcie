@@ -50,11 +50,17 @@ function buildRegionalChatRequestPayload(
   traceSourceModule: string,
   stream: boolean
 ) {
+  const enableSearch = customConfig?.enableWebSearch === true
+    && traceScene === 'chat-stream'
+    && traceSourceModule === 'chat_panel'
+    && stream;
+
   return {
     configProfile: customConfig?.configProfile || 'default',
     consultationId: customConfig?.traceContext?.consultationId,
     messages: payloadMessages,
     stream,
+    enableSearch,
     traceId: trace.traceId,
     scene: traceScene,
     sourceModule: traceSourceModule,
