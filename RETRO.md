@@ -850,3 +850,10 @@
 - **根因**: `record-confirmed` 只描述诊断、病历和 `orderList` 药品明细，没有表达处方头级别的慢病长处方语义；PHIS `saveAIPres` 从明细重新组装 `HiOdsPresVO` 时因此使用默认 `slowMedicine = 0`，打印链路继续按已落库处方头选择普通处方。
 - **解决方案**: 跨端契约增加中性 `prescriptionAttributes.chronicLongTerm`，只由实际含药品的 `chronic-refill` 回写产生；PHIS 在客户端边界复用签约状态和慢病诊断配置校验，再以独立处方属性参数传到后端，普通西药 / 中成药处方头落库为 `slowMedicine = 1`，不污染 `orderList` 明细。
 - **后续防护**: 回归必须覆盖慢病含药回写、慢病无药回写、普通语音/症状/独立方案回写、非签约患者、诊断未命中配置、普通处方与精麻处方分组，并核对 payload、处方头数据库字段、重新打开处方勾选状态和打印模板选择四层结果。
+
+### RETRO-111: 慢病回写直接默认长处方标志导致未签约患者在 PHIS 端失败 [已解决]
+
+- **现象**: 慢病复诊只要选择药品，客户端就默认发送 `prescriptionAttributes.chronicLongTerm=true`；未签约患者在 PHIS 回写时收到“当前患者未签约”错误。
+- **根因**: PCIE 通过通用 `searchByIdPi` 获取患者信息，该接口不填充慢病签约状态；PHIS 医生站实际使用 `searchByIdPiMB`，通过外部慢病接口或 `v_mbyth_qyxx` 计算 `qyzt`，仅 `qyzt='8'` 表示当前签约。结果页既没有中性签约状态，也没有按签约状态决定是否携带处方头语义。
+- **解决方案**: PHIS Adapter 改用慢病专用患者查询，将 PHIS `qyzt='8'` 映射为中性 `signed=true`；结果页仅在慢病复诊含药且 `signed===true` 时发送长处方标志，未签约或状态未知按普通处方回写，PHIS 端保留最终防御性校验。
+- **后续防护**: 回归必须覆盖 `searchByIdPiMB` 外部接口返回、`v_mbyth_qyxx` 回退、有签约/未签约/状态未知三种上下文，确认普通处方不再被错误拦截，且只有明确签约患者落库 `slowMedicine=1`。

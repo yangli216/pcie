@@ -2995,6 +2995,7 @@ async function handleBatchWriteBack(): Promise<void> {
       prescriptionAttributes: resolveRecordConfirmedPrescriptionAttributes(
         resultChannel.value,
         orderList,
+        props.initialPatientData,
       ),
       extra: {
         referenceType: 'batch',

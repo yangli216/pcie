@@ -1308,7 +1308,7 @@ ws://127.0.0.1:8081/api/consultation/events/ws
 9. 没有 `writebackScope` 的历史客户端仍按完整回写契约处理，继续携带完整 `outpatientRecord`、`diagList` 与 `orderList`；PHIS 不得要求旧版本补传 scope。
 10. 固定既往史、个人史、家族史模板在桌面端编辑时使用 `{体健}` / `{否认}` / `{有}` 状态槽位；为兼容既有 PHIS，顶层病历字段和 `outpatientRecord` 中发送的是去掉花括号后的自然文本。若医生选择回写的病史字段中存在由明确上下文改为 `{有}` 的槽位，payload 额外携带 `recordTemplateChanges`；PHIS 应优先按 `field + slotKey` 精确更新对应模板值。未选字段不出现在变化清单中；没有变化时整个对象省略。旧 PHIS 可忽略此新增对象并继续读取自然文本。
 11. `physicalExam` 固定以 `T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{收缩压}/{舒张压}mmHg。` 槽位开头；对话、结构化问诊或本次 HIS 上下文有明确数值时，各槽位分别替换为带花括号的值。花括号是 PHIS 体格检查字段标记，不等同于已确认状态。选择回写体格检查且至少一个槽位已有数值时，payload 额外携带 `physicalExamVitalSigns`；未选择体格检查或仍全部为具名占位词时省略该对象。
-12. `prescriptionAttributes.chronicLongTerm = true` 只允许出现在 `chronic-refill` 慢病复诊渠道且本次 `orderList` 至少包含一项已选药品时；它是跨 HIS 的中性处方头语义，不是药品明细字段。普通语音、症状问诊、独立诊疗方案以及无药回写必须省略该对象。PHIS 收到后先校验当前患者签约状态与本次正式诊断是否命中院内慢病长处方诊断配置，校验通过后映射为普通西药 / 中成药处方头 `slowMedicine = "1"`；失败必须回执失败，不得保存成普通处方。后续打印以落库的处方头标志选择慢病长处方版式。
+12. `prescriptionAttributes.chronicLongTerm = true` 只允许出现在 `chronic-refill` 慢病复诊渠道、本次 `orderList` 至少包含一项已选药品且 HIS 当前患者签约状态明确为已签约时；它是跨 HIS 的中性处方头语义，不是药品明细字段。未签约、签约状态未知、普通语音、症状问诊、独立诊疗方案以及无药回写必须省略该对象并按普通处方处理。PHIS 收到后仍须复用 `searchByIdPiMB` 的签约判定，并校验本次正式诊断是否命中院内慢病长处方诊断配置；校验通过后映射为普通西药 / 中成药处方头 `slowMedicine = "1"`，失败必须回执失败，不得保存成普通处方。后续打印以落库的处方头标志选择慢病长处方版式。
 
 慢病复诊含药回写时额外出现：
 

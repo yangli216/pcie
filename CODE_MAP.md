@@ -8,6 +8,8 @@
 
 ## 快速导航
 
+慢病回写签约判定：PHIS `searchByIdPiMB` -> HIS Adapter 中性 `signed` -> `recordConfirmedPayload.ts`；仅明确签约的慢病复诊含药回写携带 `prescriptionAttributes.chronicLongTerm`，未签约或未知状态按普通处方处理。
+
 | 我要做什么 | 该读哪里 |
 |-----------|---------|
 | 了解整体架构 | [ARCHITECTURE.md](./ARCHITECTURE.md) |

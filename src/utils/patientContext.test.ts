@@ -60,6 +60,30 @@ describe('patientContext age precedence', () => {
   });
 });
 
+describe('patientContext signing status', () => {
+  it('keeps the neutral HIS signing status for chronic refill writeback', () => {
+    expect(buildPatientContext({
+      payload: { idPi: 'signed-patient' },
+      hisInfo: {
+        patientId: 'signed-patient',
+        name: '已签约患者',
+        gender: 'M',
+        signed: true,
+      },
+    })?.signed).toBe(true);
+
+    expect(buildPatientContext({
+      payload: { idPi: 'unsigned-patient' },
+      hisInfo: {
+        patientId: 'unsigned-patient',
+        name: '未签约患者',
+        gender: 'M',
+        signed: false,
+      },
+    })?.signed).toBe(false);
+  });
+});
+
 describe('patientContext clinical history mapping', () => {
   it('preserves explicit personal and family history from the reception payload', () => {
     const context = buildPatientContext({

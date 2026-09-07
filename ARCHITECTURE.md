@@ -340,7 +340,7 @@ const isRiskAnalyzing = ref(false);
 11.2 风险胶囊对报告场景只提供一个“报告助手”动作：历史报告进入报告解读工作台，本次报告回诊上下文同时存在时由工作台提供“生成后续诊疗方案”升级动作。报告解读是只读认知辅助，不直接形成诊断、处方或 PHIS 回写；报告回诊继续复用 `OutpatientFollowUpPage` 和治疗推荐回写闭环。两种 opportunity 可以同时存在于 session，但 UI 不展示两个相似入口。
 12. 慢病复诊的病历事实与推荐上下文必须分层：`chronicRefillRecord.ts` 可以把有效库存名称和规格发送给模型生成治疗方案，但 `historyOfPresentIllness` 只能使用患者诊断、历史用药和本次病情等事实。规则兜底不得拼接库存摘要；模型现病史命中库存、可续方或推荐方案语义时视为不合格，回退到事实型草稿。
 13. 慢病复诊核查采用“单次 LLM 结果 + Composable Controller + deterministic record Builder”：模型在病历结果中同时返回最少问题、选项和推荐值，程序只做数量、结构和证据字段校验；医生在共享结果页点击选项是把推荐值升级为病历事实的唯一门禁。等待态由结果域 session controller 管理，不新增全局 store，也不恢复独立确认页。
-14. 慢病长处方采用“渠道语义 -> 中性回写契约 -> PHIS 私有映射”的单向链路：共享结果页仅在 `chronic-refill` 且最终 `orderList` 含药品时，由 `recordConfirmedPayload.ts` 发送 `prescriptionAttributes.chronicLongTerm = true`；其他渠道和无药回写省略该对象。PHIS `MedHermes.js` 在诊断保存前复用患者签约状态与院内慢病诊断配置校验，再把中性属性作为兼容新增的 `saveAIPresWithAttributes` 独立处方属性参数传给后端，原三参数 `saveAIPres` 保持不变；`ClinicDoctorCoreAIModule` 只对普通西药 / 中成药处方头设置 `HiOdsPresVO.slowMedicine = "1"`，明细 `orderList` 不承载 PHIS 私有标记，打印继续读取已落库处方头。
+14. 慢病长处方采用“渠道语义 -> HIS 中性签约状态 -> 中性回写契约 -> PHIS 私有映射”的单向链路：PHIS Adapter 使用慢病专用患者查询返回签约事实并映射为中性 `signed`，共享结果页仅在 `chronic-refill`、最终 `orderList` 含药品且 `signed === true` 时，由 `recordConfirmedPayload.ts` 发送 `prescriptionAttributes.chronicLongTerm = true`；未签约、状态未知、其他渠道和无药回写省略该对象并按普通处方处理。PHIS `MedHermes.js` 在诊断保存前复用 `searchByIdPiMB` 的患者签约状态与院内慢病诊断配置校验，再把中性属性作为兼容新增的 `saveAIPresWithAttributes` 独立处方属性参数传给后端，原三参数 `saveAIPres` 保持不变；`ClinicDoctorCoreAIModule` 只对普通西药 / 中成药处方头设置 `HiOdsPresVO.slowMedicine = "1"`，明细 `orderList` 不承载 PHIS 私有标记，打印继续读取已落库处方头。
 
 ---
 

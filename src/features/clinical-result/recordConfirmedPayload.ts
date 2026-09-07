@@ -369,11 +369,17 @@ export interface RecordConfirmedPrescriptionAttributes {
   chronicLongTerm: true;
 }
 
+export interface RecordConfirmedPatientSigningContext {
+  /** 仅接受 HIS 明确返回的已签约状态；undefined 表示状态未知。 */
+  signed?: boolean;
+}
+
 export function resolveRecordConfirmedPrescriptionAttributes(
   channel: ClinicalResultChannel,
   orderList: Array<Record<string, string | number>>,
+  patient?: RecordConfirmedPatientSigningContext,
 ): RecordConfirmedPrescriptionAttributes | undefined {
-  if (channel !== 'chronic-refill') return undefined;
+  if (channel !== 'chronic-refill' || patient?.signed !== true) return undefined;
   const hasMedicine = orderList.some((item) => item.sdSrv === '11' || item.sdSrv === '12');
   return hasMedicine ? { chronicLongTerm: true } : undefined;
 }

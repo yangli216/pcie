@@ -516,6 +516,7 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
       prescriptionAttributes: resolveRecordConfirmedPrescriptionAttributes(
         'chronic-refill',
         medicineOrders,
+        { signed: true },
       ),
     });
     const ordinaryPayload = buildRecordConfirmedPayload({
@@ -529,8 +530,10 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
 
     expect(chronicPayload.prescriptionAttributes).toEqual({ chronicLongTerm: true });
     expect(ordinaryPayload).not.toHaveProperty('prescriptionAttributes');
-    expect(resolveRecordConfirmedPrescriptionAttributes('voice', medicineOrders)).toBeUndefined();
-    expect(resolveRecordConfirmedPrescriptionAttributes('symptom', medicineOrders)).toBeUndefined();
-    expect(resolveRecordConfirmedPrescriptionAttributes('chronic-refill', [])).toBeUndefined();
+    expect(resolveRecordConfirmedPrescriptionAttributes('voice', medicineOrders, { signed: true })).toBeUndefined();
+    expect(resolveRecordConfirmedPrescriptionAttributes('symptom', medicineOrders, { signed: true })).toBeUndefined();
+    expect(resolveRecordConfirmedPrescriptionAttributes('chronic-refill', [], { signed: true })).toBeUndefined();
+    expect(resolveRecordConfirmedPrescriptionAttributes('chronic-refill', medicineOrders, { signed: false })).toBeUndefined();
+    expect(resolveRecordConfirmedPrescriptionAttributes('chronic-refill', medicineOrders)).toBeUndefined();
   });
 });

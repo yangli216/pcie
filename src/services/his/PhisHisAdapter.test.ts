@@ -21,12 +21,13 @@ const collectConsoleOutput = (...spies: Array<ReturnType<typeof vi.spyOn>>): str
 describe('PhisHisAdapter.fetchPatientInfo', () => {
   it('keeps PHIS month age as a complete ageText without exposing it as years', async () => {
     const service = {
-      searchPatientByIdPi: vi.fn().mockResolvedValue({
+      searchPatientByIdPiMB: vi.fn().mockResolvedValue({
         idPi: 'patient-infant',
         naPi: '婴儿',
         sdSex: '2',
         ageNum: 10,
         ageUnit: 'M',
+        qyzt: '8',
       }),
     } as unknown as HisService;
 
@@ -35,14 +36,15 @@ describe('PhisHisAdapter.fetchPatientInfo', () => {
     expect(patient).toMatchObject({
       age: undefined,
       ageText: '10个月',
+      signed: true,
     });
   });
 
   it('keeps PHIS day age and derives adult years only for Y', async () => {
     const service = {
-      searchPatientByIdPi: vi
+      searchPatientByIdPiMB: vi
         .fn()
-        .mockResolvedValueOnce({ idPi: 'patient-newborn', naPi: '新生儿', sdSex: '1', ageNum: 10, ageUnit: 'D' })
+        .mockResolvedValueOnce({ idPi: 'patient-newborn', naPi: '新生儿', sdSex: '1', ageNum: 10, ageUnit: 'D', qyzt: '7' })
         .mockResolvedValueOnce({ idPi: 'patient-adult', naPi: '成人', sdSex: '1', ageNum: 35, ageUnit: 'Y' }),
     } as unknown as HisService;
     const adapter = new PhisHisAdapter(service);
@@ -50,10 +52,12 @@ describe('PhisHisAdapter.fetchPatientInfo', () => {
     expect(await adapter.fetchPatientInfo('patient-newborn')).toMatchObject({
       age: undefined,
       ageText: '10天',
+      signed: false,
     });
     expect(await adapter.fetchPatientInfo('patient-adult')).toMatchObject({
       age: 35,
       ageText: '35岁',
+      signed: undefined,
     });
   });
 });

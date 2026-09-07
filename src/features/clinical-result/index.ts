@@ -403,6 +403,7 @@ export type {
   BuildRecordConfirmedPayloadInput,
   OrderItemResolvers,
   RecordConfirmedResultType,
+  RecordConfirmedPatientSigningContext,
   RecordConfirmedPrescriptionAttributes,
   RecordConfirmedWritebackField,
   RecordConfirmedWritebackOrderType,
