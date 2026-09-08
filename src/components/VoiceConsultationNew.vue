@@ -1446,12 +1446,13 @@ function supplementDifferentialDirection(diag: Diagnosis): void {
 
 async function promoteDifferentialToFormal(diag: Diagnosis): Promise<void> {
   const originalDirectionKey = getDiagnosisSuggestionDirectionKey(diag);
-  const standardMatch = getStandardDiagnosisId(diag)
+  const assessment = getStandardDiagnosisId(diag)
     ? null
-    : medicalDataService.matchDiagnosis(diag.name, diag.code ? { icdCode: diag.code } : undefined)
-      || (diag.originalName
-        ? medicalDataService.matchDiagnosis(diag.originalName, diag.code ? { icdCode: diag.code } : undefined)
-        : null);
+    : medicalDataService.assessDiagnosisMatch(
+        diag.originalName || diag.name,
+        diag.code ? { icdCode: diag.code } : undefined,
+      );
+  const standardMatch = assessment?.matchedItem || assessment?.suggestedMatchItem || null;
 
   if (!getStandardDiagnosisId(diag) && !standardMatch) {
     showToast?.(`${diag.name} 未匹配院内标准诊断库，暂不能转为正式诊断`, 'warning');
@@ -1465,6 +1466,11 @@ async function promoteDifferentialToFormal(diag: Diagnosis): Promise<void> {
         code: standardMatch.code,
         name: standardMatch.name,
         originalName: diag.originalName || diag.name,
+        catalogMatchStatus: assessment?.status === 'compatible' ? 'confirmed' : 'exact',
+        suggestedMatchItem: assessment?.status === 'compatible' ? standardMatch : null,
+        catalogMatchReason: assessment?.status === 'compatible'
+          ? '医生转入正式诊断时确认标准库近似项'
+          : assessment?.reason,
       }
     : diag;
   const diagnosisIndex = aiDiagnoses.value.findIndex(
@@ -1624,7 +1630,7 @@ async function fetchAIDiagnosis(
     aiDiagnoses.value = await applyRecommendationPreferenceRanking(
       mapClinicalResultAiDiagnoses({
         rawDiagnoses: parsed,
-        matchDiagnosis: (query, context) => medicalDataService.matchDiagnosis(query, context),
+        assessDiagnosis: (query, context) => medicalDataService.assessDiagnosisMatch(query, context),
       }),
       buildDiagnosisPreferenceCandidate,
       buildPreferenceContext('diagnosis'),
@@ -2044,9 +2050,10 @@ async function handleTreatmentRefresh(event?: Event): Promise<void> {
 
 const relatedDiagnosisDropdown = useRelatedDiagnosisDropdown<DiagnosisItem>({
   getDiagnosisKey: (diag) => diag.id || diag.code,
-  getCandidates: (diag) => medicalDataService
-    .getRelatedDiagnoses(diag.code)
-    .filter((item) => item.code !== diag.code),
+  getCandidates: (diag) => Array.from(new Map([
+    ...(diag.catalogAlternatives || []),
+    ...medicalDataService.getRelatedDiagnoses(diag.code),
+  ].filter((item) => item.code !== diag.code).map((item) => [item.id, item])).values()),
 });
 const {
   closeRelatedDropdown,
@@ -2219,6 +2226,10 @@ function swapDiagnosis(originalDiag: Diagnosis, newItem: { id?: string; code: st
     id: newItem.id,
     code: newItem.code,
     name: newItem.name,
+    originalName: aiDiagnoses.value[index].originalName || aiDiagnoses.value[index].name,
+    catalogMatchStatus: 'manual',
+    suggestedMatchItem: null,
+    catalogMatchReason: '医生手动选择标准诊断',
   };
 
   aiDiagnoses.value[index] = updatedDiag;

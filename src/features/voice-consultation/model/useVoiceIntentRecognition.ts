@@ -1124,14 +1124,16 @@ export function useVoiceIntentRecognition() {
   }
 
   function matchDiagnosisHint(hint: DiagnosisHint): MatchedDiagnosis {
-    let matchedItem: MatchedDiagnosis['matchedItem'] = null;
     const matchContext = hint.code ? { icdCode: hint.code } : undefined;
-    const matched = medicalDataService.matchDiagnosis(hint.name, matchContext)
-      || (hint.code ? medicalDataService.matchDiagnosis(hint.code) : null);
-    if (matched) {
-      matchedItem = { id: matched.id, code: matched.code, name: matched.name };
-    }
-    return { ...hint, matchedItem };
+    const assessment = medicalDataService.assessDiagnosisMatch(hint.name, matchContext);
+    return {
+      ...hint,
+      matchedItem: assessment.matchedItem,
+      suggestedMatchItem: assessment.suggestedMatchItem,
+      catalogMatchStatus: assessment.status,
+      catalogMatchReason: assessment.reason,
+      catalogAlternatives: assessment.alternatives,
+    };
   }
 
   function matchTreatmentHint(hint: TreatmentHint): MatchedTreatment {

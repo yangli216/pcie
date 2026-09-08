@@ -11,6 +11,10 @@ import {
   explicitlyRequestsRestrictedMedicalItem,
   isRestrictedMedicalCatalogItem,
 } from './medicalCatalogPolicy';
+import {
+  assessDiagnosisCatalogMatch,
+  type DiagnosisCatalogAssessment,
+} from './diagnosisCatalogMatch';
 
 export interface DiagnosisItem {
   id: string;
@@ -690,60 +694,27 @@ class MedicalDataService {
   }
 
   /**
-   * Find best matching diagnosis
-   * @param query AI output string
+   * Assess an AI diagnosis against the current HIS catalog without silently
+   * accepting modifier conflicts or broader/narrower disease names.
+   */
+  public assessDiagnosisMatch(
+    queryName: string,
+    context?: { icdCode?: string },
+  ): DiagnosisCatalogAssessment<DiagnosisItem> {
+    return assessDiagnosisCatalogMatch({
+      queryName,
+      icdCode: context?.icdCode,
+      catalog: this.catalog.diagnoses,
+    });
+  }
+
+  /**
+   * Compatibility wrapper for callers that can only represent a safe automatic
+   * match. Near matches must use assessDiagnosisMatch and explicit confirmation.
    */
   public matchDiagnosis(query: string, context?: { icdCode?: string }): DiagnosisItem | null {
-    if (!query) return null;
-    const normalizedQuery = query.trim().toLowerCase();
-
-    const exact = this.catalog.diagnoses.find(d =>
-      d.name.toLowerCase() === normalizedQuery || d.code.toLowerCase() === normalizedQuery
-    );
-    if (exact) return exact;
-
-    const codeMatches = this.catalog.diagnoses.filter(d =>
-      d.code.toLowerCase().startsWith(normalizedQuery)
-    );
-
-    if (codeMatches.length > 0) {
-      codeMatches.sort((a, b) => a.code.length - b.code.length || a.code.localeCompare(b.code));
-      return codeMatches[0];
-    }
-
-    const candidates: Array<{ item: DiagnosisItem; rawScore: number }> = [];
-    for (const item of this.catalog.diagnoses) {
-      const score = this.calculateScore(normalizedQuery, item.name, item.keywords);
-      if (score > 0.3) {
-        candidates.push({ item, rawScore: score });
-      }
-    }
-
-    if (candidates.length === 0) return null;
-
-    if (context?.icdCode) {
-      const preferredCategory = this.extractIcd10CategoryCode(context.icdCode);
-      const preferredChapter = this.getIcd10CategoryInfo(context.icdCode)?.key;
-
-      for (const c of candidates) {
-        const itemCategory = this.extractIcd10CategoryCode(c.item.code);
-        const itemChapter = this.getIcd10CategoryInfo(c.item.code)?.key;
-
-        if (preferredCategory && itemCategory && preferredCategory === itemCategory) {
-          continue;
-        }
-
-        if (preferredChapter && itemChapter && preferredChapter === itemChapter) {
-          c.rawScore *= 0.7;
-          continue;
-        }
-
-        c.rawScore *= 0.4;
-      }
-    }
-
-    candidates.sort((a, b) => b.rawScore - a.rawScore);
-    return candidates[0].rawScore > 0.3 ? candidates[0].item : null;
+    const assessment = this.assessDiagnosisMatch(query, context);
+    return assessment.status === 'exact' ? assessment.matchedItem : null;
   }
 
   /**

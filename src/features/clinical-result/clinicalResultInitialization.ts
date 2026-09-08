@@ -66,12 +66,17 @@ export function initClinicalDiagnoses(
 ): Diagnosis[] {
   return matched.map((item) => {
     const inheritedDiagnosis = item as MatchedDiagnosis & Partial<Diagnosis>;
-    const name = item.matchedItem?.name || item.name;
-    const standardId = item.matchedItem?.id || getStandardDiagnosisId(inheritedDiagnosis as Diagnosis);
+    const suggestedMatch = inheritedDiagnosis.catalogMatchStatus === 'compatible'
+      ? inheritedDiagnosis.suggestedMatchItem
+      : null;
+    const name = item.matchedItem?.name || suggestedMatch?.name || item.name;
+    const standardId = inheritedDiagnosis.catalogMatchStatus === 'compatible'
+      ? ''
+      : item.matchedItem?.id || getStandardDiagnosisId(inheritedDiagnosis as Diagnosis);
     return {
       id: standardId || undefined,
       name,
-      code: item.matchedItem?.code || item.code || '',
+      code: item.matchedItem?.code || suggestedMatch?.code || item.code || '',
       rate: inheritedDiagnosis.rate || formatDiagnosisConfidence(item.confidence),
       rationale: options.buildRationale(item, name),
       clinicalRole: inheritedDiagnosis.clinicalRole,
@@ -81,7 +86,13 @@ export function initClinicalDiagnoses(
       suggestionType: inheritedDiagnosis.suggestionType,
       missingInformation: inheritedDiagnosis.missingInformation,
       isTCM: inheritedDiagnosis.isTCM,
-      originalName: inheritedDiagnosis.originalName || (item.matchedItem ? item.name : undefined),
+      originalName: inheritedDiagnosis.originalName
+        || (item.matchedItem || suggestedMatch ? item.name : undefined),
+      catalogMatchStatus: inheritedDiagnosis.catalogMatchStatus
+        || (item.matchedItem ? 'exact' : 'unmatched'),
+      suggestedMatchItem: inheritedDiagnosis.suggestedMatchItem,
+      catalogMatchReason: inheritedDiagnosis.catalogMatchReason,
+      catalogAlternatives: inheritedDiagnosis.catalogAlternatives,
       syndrome: inheritedDiagnosis.syndrome,
       syndromeCode: inheritedDiagnosis.syndromeCode,
       syndromeMatched: inheritedDiagnosis.syndromeMatched,

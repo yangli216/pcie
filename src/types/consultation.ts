@@ -1,3 +1,18 @@
+export interface DiagnosisCatalogItem {
+    id: string;
+    code: string;
+    name: string;
+}
+
+export type DiagnosisCatalogMatchStatus =
+    | 'exact'
+    | 'compatible'
+    | 'ambiguous'
+    | 'conflict'
+    | 'unmatched'
+    | 'confirmed'
+    | 'manual';
+
 export interface Diagnosis {
     id?: string;
     code: string;
@@ -18,6 +33,13 @@ export interface Diagnosis {
     missingInformation?: string;
     isTCM?: boolean; // 标记是否为中医诊断
     originalName?: string; // AI 原始推荐的诊断名称
+    /** 标准诊断库语义匹配状态；compatible 必须经医生确认后才能进入选择。 */
+    catalogMatchStatus?: DiagnosisCatalogMatchStatus;
+    /** compatible 状态下展示、但尚未绑定为可回写诊断的标准库候选。 */
+    suggestedMatchItem?: DiagnosisCatalogItem | null;
+    catalogMatchReason?: string;
+    /** 仅供医生手动替换时查看的相关候选，不参与自动选择。 */
+    catalogAlternatives?: DiagnosisCatalogItem[];
     // 中医辨证论治相关字段
     syndrome?: string; // 证候(如:风寒束表证)
     syndromeCode?: string;

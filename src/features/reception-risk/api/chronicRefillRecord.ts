@@ -82,9 +82,15 @@ function buildMedicationSummary(medications: string[]): string {
   return medications.length > 0 ? medications.join('、') : '当前有效库存中未匹配到历史续方药品';
 }
 
-function isPatientFactHistory(value: string): boolean {
+function isPatientFactHistory(value: string, candidate: ChronicRefillCandidate): boolean {
   if (value.length < 30 || /未提供新发不适信息/u.test(value)) return false;
-  return !/(?:当前(?:有效)?库存|库存内|可续方药品|可参考药品|推荐药品|推荐使用|建议使用|后续治疗方案为|待(?:医生)?核实|规律(?:服药|用药)|按时服药|依从性良好|病情(?:控制)?平稳|控制(?:良好|平稳)|无明显(?:相关)?不适|未见(?:明显)?不良反应|监测(?:结果|指标)?(?:正常|平稳))/u.test(value);
+  const compactValue = value.replace(/\s+/gu, '');
+  const containsHistoricalMedicine = candidate.medications
+    .map(standardizeMedicineName)
+    .filter(Boolean)
+    .some((name) => compactValue.includes(name.replace(/\s+/gu, '')));
+  if (containsHistoricalMedicine) return false;
+  return !/(?:当前(?:有效)?库存|库存内|可续方药品|可参考药品|推荐药品|推荐使用|建议使用|后续治疗方案为|待(?:医生)?核实|(?:近期|既往|长期|曾经|目前)?(?:用药|服药|开具|处方)|口服|每次\s*\d|每(?:日|天)\s*\d+\s*次|\d+\s*天|共\s*\d+\s*(?:盒|瓶|片|粒|支|袋)|规律(?:服药|用药)|按时服药|依从性良好|病情(?:控制)?平稳|控制(?:良好|平稳)|无明显(?:相关)?不适|未见(?:明显)?不良反应|监测(?:结果|指标)?(?:正常|平稳))/u.test(value);
 }
 
 function normalizeChronicRefillHealthEducation(value: unknown, fallback: string): string {
@@ -149,24 +155,30 @@ function standardizeMedicineName(value: string): string {
       .trim();
 }
 
+function buildHistoricalMedicationNames(candidate: ChronicRefillCandidate): string[] {
+  return Array.from(new Set(
+    candidate.medications
+      .map(standardizeMedicineName)
+      .filter(Boolean),
+  ));
+}
+
 function fallbackDraft(
   patient: AppPatient,
   candidate: ChronicRefillCandidate,
   availableMedications: string[],
 ): NormalizedChronicRefillDraft {
   const diagnosisText = candidate.diagnoses.join('、');
+  const historicalMedicationNames = buildHistoricalMedicationNames(candidate);
   const medicationText = availableMedications.length > 0
     ? availableMedications.join('、')
     : (candidate.medications.length > 0 ? '当前库存未匹配到可直接续方的历史药品' : '暂无可直接沿用的历史药品');
-  const historicalMedicationText = candidate.medications.length > 0
-    ? `近期门诊曾开具${candidate.medications.join('、')}。`
-    : '';
   return {
     chiefComplaint: `${diagnosisText}复诊配药`,
-    historyOfPresentIllness: `患者既往确诊${diagnosisText}。${historicalMedicationText}今复诊配药。`,
+    historyOfPresentIllness: `患者既往确诊${diagnosisText}。今复诊配药。`,
     pastMedicalHistory: getPatientContextPastMedicalHistory(patient) || `既往有${diagnosisText}病史。`,
-    currentMedicationHistory: candidate.medications.length > 0
-      ? candidate.medications.join('、')
+    currentMedicationHistory: historicalMedicationNames.length > 0
+      ? historicalMedicationNames.join('、')
       : '历史用药方案待医生核实',
     treatmentPlan: candidate.medications.length > 0 && availableMedications.length > 0
       ? `医生核实病情控制、依从性及禁忌证后，可从当前有效库存中的历史处方药品续方：${medicationText}。`
@@ -211,11 +223,11 @@ function normalizeDraft(
       && candidate.diagnoses.every((diagnosis) => chiefComplaint.includes(diagnosis))
       ? chiefComplaint
       : fallback.chiefComplaint,
-    historyOfPresentIllness: isPatientFactHistory(historyOfPresentIllness)
+    historyOfPresentIllness: isPatientFactHistory(historyOfPresentIllness, candidate)
       ? historyOfPresentIllness
       : fallback.historyOfPresentIllness,
     pastMedicalHistory: pastMedicalHistory || fallback.pastMedicalHistory,
-    currentMedicationHistory: value.currentMedicationHistory?.trim() || fallback.currentMedicationHistory,
+    currentMedicationHistory: fallback.currentMedicationHistory,
     treatmentPlan: fallback.treatmentPlan,
     healthEducation: normalizeChronicRefillHealthEducation(
       healthEducation,
@@ -380,10 +392,10 @@ export async function generateChronicRefillRecord(
         content: [
           '你是基层门诊慢性病复诊配药病历助手。',
           '慢病范围已由医生确认；主诉、现病史、诊断和推荐用药只能围绕已选慢病，不得加入患者其他慢病。',
-          '根据患者近90天就诊中的慢病就诊记录和配药信息生成本次可编辑病历草稿，不得编造当前症状、生命体征、检查结果或病情稳定程度。',
+          '根据患者近90天就诊中的慢病就诊记录和配药信息生成本次可编辑病历草稿，不得编造当前症状、生命体征、检查结果或病情稳定程度。历史处方仅用于当前用药史、用药推荐与复诊核查。',
           '主诉应写明具体慢病和“复诊配药”目的。',
-          '本次尚未完成当前用药、依从性、控制情况、不适和不良反应核查；historyOfPresentIllness只能写历史明确诊断、历史曾开具的规范药名和本次复诊配药目的，不得提前写规律服药、控制平稳、无不适或监测结果。',
-          'historyOfPresentIllness禁止写入年龄、性别、当前库存、可续方药品、可参考药品、推荐药品、待医生核实或后续治疗方案；库存信息只能用于recommendedMedicines。',
+          '本次尚未完成当前用药、依从性、控制情况、不适和不良反应核查；historyOfPresentIllness只能写医生已确认的慢病诊断和本次复诊配药目的，不得提前写规律服药、控制平稳、无不适或监测结果。',
+          'historyOfPresentIllness禁止写入任何历史药名、规格、剂量、频次、用法、疗程、总量，也禁止写入年龄、性别、当前库存、可续方药品、可参考药品、推荐药品、待医生核实或后续治疗方案；历史规范药名只能写入currentMedicationHistory，完整处方信息只能用于recommendedMedicines和reviewPlan。',
           '正式病历字段不得写“待医生补充完善、建议询问、信息不足、未提供相关信息”等工作流提示；也不得写“对话中未提及、问诊中未说明、资料中未记录”等信息来源或缺失状态。没有有效临床事实时保持字段为空。currentMedicationHistory 的历史用药待核实占位是唯一例外。',
           '禁止使用“未提供新发不适信息”等近义表达作为主诉或现病史主体，也不得把未提及自动改写为“无不适”或“病情稳定”。',
           '药品按“库存同品 → 库存等效药 → 规范通用名兜底”选择；无库存通用名仅供医生参考。',

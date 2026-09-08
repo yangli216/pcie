@@ -75,9 +75,9 @@ describe('generateChronicRefillRecord', () => {
 
     expect(result.chiefComplaint).toBe('高血压复诊配药');
     expect(result.historyOfPresentIllness).not.toContain('未提供新发不适信息');
-    expect(result.historyOfPresentIllness).toContain('近期门诊曾开具苯磺酸氨氯地平片');
-    expect(result.historyOfPresentIllness).toContain('今复诊配药');
-    expect(result.historyOfPresentIllness).not.toMatch(/库存|可续方药品|可参考药品|推荐药品/u);
+    expect(result.historyOfPresentIllness).toBe('患者既往确诊高血压。今复诊配药。');
+    expect(result.historyOfPresentIllness).not.toMatch(/苯磺酸氨氯地平片|厄贝沙坦片|库存|可续方药品|可参考药品|推荐药品/u);
+    expect(result.currentMedicationHistory).toBe('苯磺酸氨氯地平片、厄贝沙坦片');
     expect(result.treatments).toHaveLength(2);
     expect(result.treatments[0].name).toBe('苯磺酸氨氯地平片');
     expect(result.treatments[0]).toMatchObject({
@@ -163,9 +163,10 @@ describe('generateChronicRefillRecord', () => {
     const result = await generateChronicRefillRecord(patient, candidate);
 
     expect(result.chiefComplaint).toBe('2型糖尿病复诊配药');
-    expect(result.historyOfPresentIllness).toBe('患者既往确诊2型糖尿病。近期门诊曾开具盐酸二甲双胍片。今复诊配药。');
+    expect(result.historyOfPresentIllness).toBe('患者既往确诊2型糖尿病。今复诊配药。');
     expect(result.historyOfPresentIllness).not.toMatch(/女性|36岁|待医生核实/u);
-    expect(result.historyOfPresentIllness).not.toMatch(/规律服药|血糖平稳|无低血糖/u);
+    expect(result.historyOfPresentIllness).not.toMatch(/盐酸二甲双胍片|规律服药|血糖平稳|无低血糖/u);
+    expect(result.currentMedicationHistory).toBe('盐酸二甲双胍片');
     expect(result.chronicRefillReview?.items).toHaveLength(3);
     expect(result.healthEducation).toBe(
       '按医嘱规律服药并记录家庭监测结果；出现症状变化或指标异常时及时复诊。',
@@ -254,12 +255,16 @@ describe('generateChronicRefillRecord', () => {
       totalQty: '2',
       totalUnit: '瓶',
     });
+    expect(result.historyOfPresentIllness).toBe('患者既往确诊糖尿病。今复诊配药。');
+    expect(result.historyOfPresentIllness).not.toMatch(/盐酸二甲双胍片|口服|每日3次|30天|共2瓶/u);
+    expect(result.currentMedicationHistory).toBe('盐酸二甲双胍片');
 
     const messages = vi.mocked(chatStream).mock.calls[0][0];
     const prompt = messages.map((message) => message.content).join('\n');
     expect(prompt).toContain('盐酸二甲双胍片｜0.25g*60片/瓶');
     expect(prompt).not.toContain('可用库存');
     expect(prompt).toContain('recommendedMedicines 必须返回结构化药品对象');
+    expect(prompt).toContain('historyOfPresentIllness禁止写入任何历史药名、规格、剂量、频次、用法、疗程、总量');
     expect(prompt).toContain('对话中未提及、问诊中未说明、资料中未记录');
     expect(prompt).toContain('"targetDose":"目标临床一次剂量数值"');
     expect(prompt).toContain('days、totalQty、totalUnit必须留空');

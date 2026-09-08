@@ -36,6 +36,29 @@ describe('clinicalResultInitialization', () => {
     });
   });
 
+  it('initializes a compatible diagnosis with the standard candidate visible but unbound', () => {
+    const [result] = initClinicalDiagnoses([{
+      name: '急性胃肠炎',
+      code: 'K52.905',
+      confidence: 'high',
+      matchedItem: null,
+      suggestedMatchItem: { id: 'diag-a09', code: 'A09.901', name: '胃肠炎' },
+      catalogMatchStatus: 'compatible',
+      catalogMatchReason: '标准项省略急性修饰词',
+    }], {
+      buildRationale: () => '急性腹泻伴呕吐',
+    });
+
+    expect(result).toMatchObject({
+      id: undefined,
+      name: '胃肠炎',
+      code: 'A09.901',
+      originalName: '急性胃肠炎',
+      catalogMatchStatus: 'compatible',
+      suggestedMatchItem: { id: 'diag-a09' },
+    });
+  });
+
   it('preserves an upstream contextual catalog match and its visible metadata', () => {
     const item = {
       type: 'examination' as const,

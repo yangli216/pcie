@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { TreatmentRecommendation } from '@/types/consultation';
-import { buildOrderListItem, type OrderItemResolvers } from './recordConfirmedPayload';
+import type { Diagnosis, TreatmentRecommendation } from '@/types/consultation';
+import {
+  buildOrderListItem,
+  getStandardDiagnosisId,
+  type OrderItemResolvers,
+} from './recordConfirmedPayload';
 
 const resolvers: OrderItemResolvers = {
   getServiceCode: (item) => item.matchedItem?.sdSrv || '',
@@ -77,5 +81,21 @@ describe('record confirmed mutual recognition code', () => {
     } satisfies TreatmentRecommendation;
 
     expect(buildOrderListItem(item, resolvers)).not.toHaveProperty('mutualRecognitionCode');
+  });
+});
+
+describe('record confirmed diagnosis catalog guard', () => {
+  it('does not treat a stale id on a compatible diagnosis as a standard diagnosis id', () => {
+    const diagnosis = {
+      id: 'stale-ai-id',
+      code: 'A09.901',
+      name: '胃肠炎',
+      rate: '高置信',
+      rationale: '',
+      catalogMatchStatus: 'compatible',
+      suggestedMatchItem: { id: 'diag-a09', code: 'A09.901', name: '胃肠炎' },
+    } satisfies Diagnosis;
+
+    expect(getStandardDiagnosisId(diagnosis)).toBe('');
   });
 });

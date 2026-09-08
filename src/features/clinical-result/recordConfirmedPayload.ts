@@ -219,6 +219,14 @@ export function isFrontendDiagnosisId(id: string | null | undefined): boolean {
 }
 
 export function getStandardDiagnosisId(diag: Diagnosis | null | undefined): string {
+  if (
+    diag?.catalogMatchStatus === 'compatible'
+    || diag?.catalogMatchStatus === 'ambiguous'
+    || diag?.catalogMatchStatus === 'conflict'
+    || diag?.catalogMatchStatus === 'unmatched'
+  ) {
+    return '';
+  }
   const id = (diag?.id || '').trim();
   return id && !isFrontendDiagnosisId(id) ? id : '';
 }
