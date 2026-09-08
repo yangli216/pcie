@@ -142,6 +142,36 @@ describe('fetchOutpatientFollowUpContext', () => {
     });
   });
 
+  it('removes female-specific template lines from a male patient context without mutating the source record', async () => {
+    const reportResults = {
+      followUpEligible: true,
+      labReports: [],
+      examReports: [{ examName: '胸部CT', conclusion: '未见明显异常。' }],
+      ineligibleReason: null,
+    };
+    const adapter = {
+      fetchOutpatientFollowUpReportResults: vi.fn(async () => reportResults),
+    };
+    vi.mocked(getHisAdapter).mockReturnValue(adapter as any);
+    const sourceRecord = [
+      '个人史：否认吸烟史。',
+      '月经史：{}',
+      '婚育史：{}，{}怀孕，{}',
+      '家族史：否认家族遗传病史。',
+    ].join('\n');
+    const patient = {
+      patientId: 'patient-1',
+      visitId: 'visit-1',
+      gender: 'M',
+      currentOutpatientRecordText: sourceRecord,
+    } as any;
+
+    const context = await fetchOutpatientFollowUpContext(patient);
+
+    expect(context?.medicalRecordText).toBe('个人史：否认吸烟史。\n家族史：否认家族遗传病史。');
+    expect(patient.currentOutpatientRecordText).toBe(sourceRecord);
+  });
+
   it('requests report results even when current visit record text is missing', async () => {
     const reportResults = {
       followUpEligible: true,

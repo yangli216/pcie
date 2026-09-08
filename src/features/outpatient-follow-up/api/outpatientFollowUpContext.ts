@@ -3,9 +3,11 @@ import type { HisOutpatientFollowUpContext } from '@/services/his/types';
 import type { ReportFollowUpActionability } from '@/types/reportInterpretation';
 import type { AppPatient } from '@/types/appState';
 import {
+  getPatientContextGenderCode,
   getPatientContextId,
   getPatientContextVisitId,
 } from '@/utils/patientContext';
+import { normalizeOutpatientFollowUpRecordText } from '../lib/outpatientFollowUpRecord';
 
 function readPatientText(patient: AppPatient | null, keys: string[]): string {
   const sources = [
@@ -61,7 +63,11 @@ export async function fetchOutpatientFollowUpContext(
   const patientId = getPatientContextId(patient);
   const currentVisitId = getPatientContextVisitId(patient);
   const currentDiagnosis = readCurrentDiagnosis(patient);
-  const medicalRecordText = readCurrentOutpatientRecordText(patient);
+  const sourceMedicalRecordText = readCurrentOutpatientRecordText(patient);
+  const medicalRecordText = normalizeOutpatientFollowUpRecordText(
+    sourceMedicalRecordText,
+    getPatientContextGenderCode(patient),
+  );
   const adapter = getHisAdapter();
   console.log('[outpatientFollowUpContext] fetchOutpatientFollowUpContext inputs:', {
     hasAdapter: Boolean(adapter),
