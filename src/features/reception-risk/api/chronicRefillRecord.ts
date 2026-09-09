@@ -410,7 +410,7 @@ export async function generateChronicRefillRecord(
           'reviewPlan每项提供2到4个互斥选项、recommendedValue、confidence、evidence、basis和priority；推荐只用于界面提示，不代表医生已确认。',
           '每个选项提供recordText；未知/未评估/未询问选项recordText必须为空。会影响续方安全的选项（用药调整或停用、控制波动或欠佳、存在相关不适或不良反应）必须设置treatmentReviewRequired=true。',
           'priority只允许critical或general；当前用药、控制情况、相关不适和不良反应默认属于critical。',
-          'healthEducation必须针对患者的具体慢性病诊断和病情，给出具体的规律用药注意事项、自我指标监测、饮食调养和复诊条件等个性化健康处方，严禁写入通用的“注意休息”、“1周内复诊”或“必要时上级医院进一步治疗”。',
+          'healthEducation必须针对患者的具体慢性病诊断和病情，给出具体的规律用药注意事项、自我指标监测、饮食调养和复诊提醒等个性化健康处方，严禁写入通用的“注意休息”、“1周内复诊”或“必要时上级医院进一步治疗”。',
           '必须逐行输出 NDJSON；每行只包含一个完整 JSON 对象，不要输出数组外壳、markdown、代码块或解释。',
           '严格按 record_core、review_plan、recommended_medicines、record_extra、done 的顺序输出。',
           '格式为 {"event":"事件名","data":对应数据}。record_core.data包含chiefComplaint、historyOfPresentIllness、pastMedicalHistory、currentMedicationHistory；review_plan.data为完整reviewPlan；recommended_medicines.data为药品数组；record_extra.data包含healthEducation；done.data可为空对象。',

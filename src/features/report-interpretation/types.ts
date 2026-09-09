@@ -4,6 +4,7 @@ import type { HisOutpatientFollowUpReportApplication } from '@/services/his/type
 
 export interface ReportHistoryEntry {
   id: string;
+  patientId?: string;
   visitId: string;
   visitTime: number;
   deptName?: string;

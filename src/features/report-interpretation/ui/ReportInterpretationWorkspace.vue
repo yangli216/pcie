@@ -32,7 +32,7 @@ const controller = useReportInterpretationWorkspace({
   visits: toRef(props, 'visits'),
   followUpContext: computed(() => props.followUpContext || null),
   loadHistory: fetchReportedReportHistory,
-  buildInterpretation: async (report, patient) => {
+  buildInterpretation: async (report, patient, consistencyContext) => {
     const request = resolveReportInterpretationRequest({
       taskId: report.taskId,
       query: report.sourceQuery,
@@ -41,7 +41,7 @@ const controller = useReportInterpretationWorkspace({
         ? buildStructuredLabAbnormalItems(report.labItems)
         : undefined,
     }, patient);
-    return buildReportInterpretationPayload(request);
+    return buildReportInterpretationPayload({ ...request, consistencyContext });
   },
 });
 
@@ -277,6 +277,9 @@ onMounted(() => {
               <span>当前仅有报告申请摘要，暂时无法发起 AI 解读。</span>
             </div>
           </div>
+          <p v-if="controller.consistencyContext.value" class="consistency-scope" role="status">
+            {{ controller.consistencyContext.value.unavailableReason || `AI 解读将同时校验 ${controller.consistencyContext.value.date} 的 ${controller.consistencyContext.value.reports.length} 份报告。` }}
+          </p>
           <ReportSourcePreview :report="controller.selectedReport.value" />
         </div>
         <div v-else class="content-state">
@@ -290,6 +293,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.consistency-scope { color: #526275; font-size: 13px; line-height: 1.6; }
 .report-workspace { height: 100%; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); overflow: hidden; background: #eef3f8; color: #1f2937; }
 .report-timeline { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid #d8e1ec; background: #f8fafc; }
 .timeline-header, .interpretation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -6,6 +6,10 @@
 
 ---
 
+药品回写分类与五项拆方：PHIS `ClinicDoctorCoreAIModule` → `AiPrescriptionBuilder`（纯组方规则），桌面端继续发送同一条 `orderList`。
+
+同日跨报告验收：[report-cross-consistency-uat.md](docs/report-cross-consistency-uat.md)。同日跨报告校验：`features/report-interpretation/lib/reportConsistency.ts`（同日证据 Builder、提示词和输出校验）、`api/reportConsistencyHistory.ts`（外部报告关联）、`ui/ReportConsistencyPanel.vue`（冲突与核查展示）；工作台 controller 管理患者锚点及证据缓存。
+
 ## 快速导航
 
 慢病回写签约判定：PHIS `searchByIdPiMB` -> HIS Adapter 中性 `signed` -> `recordConfirmedPayload.ts`；仅明确签约的慢病复诊含药回写携带 `prescriptionAttributes.chronicLongTerm`，未签约或未知状态按普通处方处理。

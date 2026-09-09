@@ -51,4 +51,5 @@ docs/*
 !docs/inpatient-emr-next-milestone.md
 !docs/knowledge-search.md
 !docs/release-process.md
+!docs/report-cross-consistency-uat.md
 documents/*

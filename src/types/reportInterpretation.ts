@@ -1,3 +1,4 @@
+import type { ReportConsistencyContext, ReportConsistencyResult } from '@features/report-interpretation/lib/reportConsistency';
 export type ReportInterpretationTaskId = 'inspectReport' | 'checkReport';
 
 export type ReportInterpretationUrgency = 'low' | 'medium' | 'high';
@@ -74,6 +75,7 @@ export interface ReportInterpretationPatientProfile {
 }
 
 export interface ReportInterpretationResolvedRequest {
+  consistencyContext?: ReportConsistencyContext;
   requestId: string;
   taskId: ReportInterpretationTaskId;
   reportKindLabel: string;
@@ -117,6 +119,7 @@ export interface ReportInterpretationAbnormalItem {
 }
 
 export interface ReportInterpretationWindowPayload {
+  crossReportConsistency?: ReportConsistencyResult;
   requestId: string;
   taskId: ReportInterpretationTaskId;
   reportKindLabel: string;

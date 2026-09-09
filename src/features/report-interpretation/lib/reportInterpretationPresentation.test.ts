@@ -75,3 +75,11 @@ describe('report interpretation presentation', () => {
     })).toBe('C-反应蛋白为5 mg/L，未见异常升高。');
   });
 });
+
+
+it('does not label uncompleted cross-report assessment as overall normal', () => {
+  expect(resolveReportOverallStatus({ abnormalItems: [], abnormalAssessmentComplete: true, keyPoints: [],
+    crossReportConsistency: { status: 'not_assessed', date: '2026-09-09', message: '未完成', limitations: [], conflicts: [],
+      reports: [{ id: 'a', title: 'A', time: '' }, { id: 'b', title: 'B', time: '' }] },
+  }).level).toBe('unknown');
+});

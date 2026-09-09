@@ -277,7 +277,7 @@ export async function fetchReportedReportHistory(
     ...(followUpContext?.followUpEligible ? mapFollowUpContext(followUpContext) : []),
     ...historicalResults.flat(),
   ];
-  return Array.from(new Map(entries.map((entry) => [entry.id, entry])).values())
+  return Array.from(new Map(entries.map((entry) => [entry.id, { ...entry, patientId }])).values())
     .sort((left, right) => (
       parseTime(right.reportTime, right.visitTime) - parseTime(left.reportTime, left.visitTime)
     ));
