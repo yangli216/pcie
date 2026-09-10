@@ -312,6 +312,7 @@ describe('HisService high-level log privacy', () => {
 
     expect(result[0]?.name).toBe('MEDICINE-NAME-SENTINEL');
     expect(result[0]?.storeIds).toEqual(['STORE-ID-SENTINEL']);
+    expect(result[0]?.sdSrv).toBe('11');
     expect(JSON.stringify(log.mock.calls)).not.toContain('SENTINEL');
     expect(log).toHaveBeenCalledWith('[HisService] Medicine catalog summary', {
       storeCount: 1,
@@ -322,6 +323,28 @@ describe('HisService high-level log privacy', () => {
       missingNameCount: 0,
       normalizedCount: 1,
     });
+  });
+
+  it('maps PHIS Chinese patent medicines to sdSrv=12 in the live catalog', async () => {
+    const service = new HisService('http://localhost/', 'token');
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(service, 'fetchMedicineStoreIds').mockResolvedValue(['STORE-1']);
+    vi.spyOn(service, 'post').mockResolvedValue({
+      code: 200,
+      body: {
+        items: [{
+          idMedPro: 'MED-CHINESE-1',
+          naMedPro: '速效救心丸',
+          sdMed: '2',
+          fgActive: '1',
+        }],
+      },
+    });
+
+    const result = await service.fetchInstitutionMedicineCatalog('ORG-1');
+
+    expect(result[0]?.sdSrv).toBe('12');
+    expect(result[0]?.raw).toMatchObject({ sdMed: '2' });
   });
 
   it('logs pharmacy counts without role departments, stores, or raw samples', async () => {

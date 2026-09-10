@@ -28,6 +28,7 @@ import type {
   HisOutpatientFollowUpReportResults,
   HisOutpatientFollowUpReportResultsQuery,
 } from './his/types';
+import { resolvePhisMedicineServiceCode } from './his/phisMedicineServiceCode';
 
 /**
  * HIS 服务响应基础结构
@@ -953,7 +954,10 @@ export class HisService {
           storeIds: idSto ? [idSto] : [],
           idSrv: item.idMedPro?.trim() || item.idMed?.trim() || id,
           naSrv: name,
-          sdSrv: item.sdSrv?.trim() || '11',
+          sdSrv: resolvePhisMedicineServiceCode({
+            sdMed: item.sdMed,
+            sdSrv: item.sdSrv,
+          }) || '11',
           idDeptExec: item.idDeptExec?.trim() || '',
           fgCheckOrd: item.fgCheckOrd?.trim() || '1',
           fgSkintest: item.fgSkintest?.trim() || '0',

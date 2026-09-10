@@ -12,6 +12,7 @@
  */
 
 import type { Diagnosis, TreatmentRecommendation } from '@/types/consultation';
+import { resolvePhisMedicineServiceCode } from '@/services/his/phisMedicineServiceCode';
 import type { ClinicalResultChannel } from './clinicalResultContract';
 import {
   buildOutpatientRecord,
@@ -116,6 +117,15 @@ export function getDefaultOrderServiceCode(type: TreatmentRecommendation['type']
 export function getOrderServiceCode(rec: TreatmentRecommendation): string {
   const raw = getMatchedItemRaw(rec);
   const explicitCode = (rec.matchedItem?.sdSrv || readFirstString(raw, ['sdSrv'])).trim();
+  if (rec.type === 'medicine') {
+    const medicineServiceCode = resolvePhisMedicineServiceCode({
+      sdMed: readFirstString(raw, ['sdMed']),
+      sdSrv: explicitCode,
+    });
+    if (medicineServiceCode) {
+      return medicineServiceCode;
+    }
+  }
   if (explicitCode && explicitCode !== '1' && explicitCode !== '2') {
     return explicitCode;
   }
@@ -266,7 +276,7 @@ export function buildDiagList(input: BuildDiagListInput): Array<Record<string, s
  * 所有解析器返回值都允许为空字符串；提交前应由共享必要字段校验拦截缺失字段。
  */
 export interface OrderItemResolvers {
-  /** PHIS 服务分类 sdSrv：药=11 检=31 验=41 处=21 */
+  /** PHIS 服务分类 sdSrv：西药=11 中成药=12 检=31 验=41 处=21 */
   getServiceCode: (rec: TreatmentRecommendation) => string;
   /** PHIS 标准服务 ID：药品取 idMedPro，非药品取 idCli */
   getServiceId: (rec: TreatmentRecommendation) => string;
