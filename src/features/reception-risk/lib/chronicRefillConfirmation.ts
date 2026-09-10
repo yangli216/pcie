@@ -276,14 +276,6 @@ export function buildConfirmedChronicRefillNarrative(
       .filter(Boolean),
   ));
 
-  const narrativeMedicationNames = getChronicRefillNarrativeMedicationNames(candidate);
-  const mentionsHistoricalMedicine = narrativeMedicationNames.some((medicine) => (
-    fragments.some((fragment) => fragment.includes(medicine))
-  ));
-  if (!mentionsHistoricalMedicine && narrativeMedicationNames.length > 0) {
-    fragments.unshift(`近期门诊曾开具${narrativeMedicationNames.join('、')}`);
-  }
-
   const historyParts = [
     `患者既往确诊${diagnosisText}`,
     ...fragments,

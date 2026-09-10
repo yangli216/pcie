@@ -37,7 +37,14 @@
           </div>
           <div class="diagnosis-meta-row">
             <span v-if="displayRate" class="diag-rate-token" :class="rateToneClass">{{ displayRate }}</span>
+            <span
+              v-if="catalogMatchLabel"
+              class="meta-token diag-catalog-token"
+              :class="`is-${diag.catalogMatchStatus}`"
+              :title="diag.catalogMatchReason || catalogMatchLabel"
+            >{{ catalogMatchLabel }}</span>
             <span v-if="diag.code" class="meta-token">编码 {{ diag.code }}</span>
+            <span v-if="diag.diagnosisKind === 'symptom_working'" class="meta-token diag-working-token">症状性工作诊断</span>
             <span v-if="isPrimary" class="meta-token diag-role-token">主诊断</span>
             <span v-else-if="selected" class="meta-token diag-role-token">已纳入</span>
             <button
@@ -287,6 +294,13 @@ const rateToneClass = computed(() => {
 });
 
 const displayRate = computed(() => props.diag.rate || 'AI分析');
+const catalogMatchLabel = computed(() => {
+  if (props.diag.catalogMatchStatus === 'compatible') return '标准库近似项';
+  if (props.diag.catalogMatchStatus === 'ambiguous') return '需选择标准项';
+  if (props.diag.catalogMatchStatus === 'conflict') return '标准库冲突';
+  if (props.diag.catalogMatchStatus === 'unmatched') return '未匹配标准库';
+  return '';
+});
 const differentialButtonLabel = computed(() => {
   const { state, itemCount } = props.differentialStatus;
   if (state === 'loading') return '主诊核查中…';
@@ -560,6 +574,18 @@ const emit = defineEmits<{
 
 .diag-role-token {
   color: var(--voice-accent);
+}
+
+.diag-catalog-token.is-compatible,
+.diag-catalog-token.is-ambiguous {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.diag-catalog-token.is-conflict,
+.diag-catalog-token.is-unmatched {
+  color: var(--voice-danger);
+  font-weight: 700;
 }
 
 .diag-action-btn {

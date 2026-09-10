@@ -92,7 +92,7 @@ export interface ReportOverallStatus {
 }
 
 export function resolveReportOverallStatus(
-  payload: Pick<ReportInterpretationWindowPayload, 'abnormalItems' | 'abnormalAssessmentComplete' | 'keyPoints'>,
+  payload: Pick<ReportInterpretationWindowPayload, 'abnormalItems' | 'abnormalAssessmentComplete' | 'keyPoints' | 'crossReportConsistency'>,
 ): ReportOverallStatus {
   const abnormalItems = payload.abnormalItems || [];
   const hasHighRisk = abnormalItems.some((item) => item.urgency === 'high');
@@ -105,6 +105,10 @@ export function resolveReportOverallStatus(
       icon: 'lucide:triangle-alert',
     };
   }
+  if (payload.crossReportConsistency?.status === 'conflicts') {
+    return { level: 'attention', label: '跨报告待核查', title: '同日报告存在需核查的矛盾',
+      description: '请核查关联报告原始结果、可能原因和建议。', icon: 'lucide:files' };
+  }
   if (abnormalItems.length > 0) {
     return {
       level: 'attention',
@@ -113,6 +117,10 @@ export function resolveReportOverallStatus(
       description: '建议结合症状、既往结果和动态变化进一步判断。',
       icon: 'lucide:circle-alert',
     };
+  }
+  if (payload.crossReportConsistency?.status === 'not_assessed' && payload.crossReportConsistency.reports.length >= 2) {
+    return { level: 'unknown', label: '跨报告校验未完成', title: '请继续核查同日原始报告',
+      description: '单报告未识别到异常不代表跨报告一致性已验证。', icon: 'lucide:circle-help' };
   }
   if (!payload.abnormalAssessmentComplete) {
     return {

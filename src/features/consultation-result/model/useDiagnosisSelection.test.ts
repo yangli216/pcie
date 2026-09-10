@@ -50,4 +50,58 @@ describe('useDiagnosisSelection initial selection', () => {
     ]);
     expect(selection.selectedDiagnosis.value?.name).toBe('原发性高血压');
   });
+
+  it('leaves a compatible diagnosis unselected until one click confirms the standard item', () => {
+    const compatible: Diagnosis = {
+      code: 'A09.901',
+      name: '胃肠炎',
+      originalName: '急性胃肠炎',
+      rate: '高置信',
+      rationale: '',
+      catalogMatchStatus: 'compatible',
+      suggestedMatchItem: {
+        id: 'diag-a09',
+        code: 'A09.901',
+        name: '胃肠炎',
+      },
+    };
+    const diagnoses = ref([compatible]);
+    const selection = useDiagnosisSelection({ diagnoses });
+
+    selection.replaceInitialDiagnosisSelection(diagnoses.value, false);
+    expect(selection.selectedDiagnoses.value).toEqual([]);
+    expect(selection.selectedDiagnosis.value).toBeNull();
+
+    selection.toggleDiagnosis(compatible);
+    expect(compatible).toMatchObject({
+      id: 'diag-a09',
+      name: '胃肠炎',
+      catalogMatchStatus: 'confirmed',
+    });
+    expect(selection.selectedDiagnoses.value).toEqual([compatible]);
+    expect(selection.selectedDiagnosis.value).toMatchObject({
+      id: 'diag-a09',
+      catalogMatchStatus: 'confirmed',
+    });
+  });
+
+  it('does not select a conflicting catalog assessment by clicking the card', () => {
+    const conflicting: Diagnosis = {
+      id: 'stale-ai-id',
+      code: 'K52.905',
+      name: '急性胃肠炎',
+      rate: '高置信',
+      rationale: '',
+      catalogMatchStatus: 'conflict',
+    };
+    const diagnoses = ref([conflicting]);
+    const selection = useDiagnosisSelection({ diagnoses });
+
+    selection.replaceDiagnosisSelection(diagnoses.value, conflicting);
+    selection.toggleDiagnosis(conflicting);
+    selection.setPrimaryDiagnosis(conflicting);
+
+    expect(selection.selectedDiagnoses.value).toEqual([]);
+    expect(selection.selectedDiagnosis.value).toBeNull();
+  });
 });

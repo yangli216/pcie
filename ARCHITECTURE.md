@@ -1,6 +1,19 @@
 # 架构文档 (ARCHITECTURE.md)
 
-> **最后更新**: 2026-08-04
+### 同日跨报告一致性校验
+
+- 医生发起 AI 解读时，自动关联当前患者同一报告自然日的检验与检查；类型筛选不缩小关联范围。以报告时间为准，带时区时间统一按 Asia/Shanghai 归日，不用就诊日代替缺失日期。同一报告 ID 去重，正常指标也参与校验。
+- 共享 `reportConsistency.ts` 负责同患者/同日筛选、证据编号、提示词与 AI 结果校验；同一次解读请求输出跨报告冲突，不追加第二次模型调用。冲突必须引用至少两份不同报告的真实证据，原始项目、结果、单位、参考范围由源数据回填，模型不得改写。只提示有明确生理关联且明显不一致的组合；采样时点、标本、方法、单位、治疗影响或合理代偿不能直接判成报告错误，可能原因明确为待核查假设，不自动生成诊断或处方。
+- 共享 `ReportConsistencyPanel.vue` 在解读正文前部展示关联范围、冲突、关联依据、可能原因和核查建议，支持打印。无冲突仅表示本次已获取报告未发现明确矛盾；日期/患者不明、报告不足、数据缺失、超出上下文容量、AI 失败或输出不合法均显示未完成校验，不得显示一致/正常。
+- 工作台复用已加载报告；外部单报告入口在患者 ID、报告日期可识别时经 HIS Adapter 加载近 90 天就诊关联报告，只有能唯一匹配当前原报告时才合并分析，否则明确提示无法关联。该检索窗口仅用于关联已出报告，不扩大报告助手时间轴的 14 天展示范围。
+- controller 以患者/就诊锚点、请求序列及同日报告内容作为缓存与迟到结果门禁；患者切换、重新加载、报告变更使旧结果失效。沿用签名 LLM 入口和原有只读流程，不变更 HIS Bridge 入参或 PHIS 回写契约。
+
+
+## 药品回写分方
+
+PHIS `HiBdMed.sdMed` 是药品分类事实源：`1` 映射西药 `sdSrv=11`，`2` 映射中成药 `sdSrv=12`。实时目录进入 HIS Adapter 时先完成映射；SQLite 药品匹配缓存不保存 PHIS 私有分类字段，因此最终回写 Builder 必须优先读取回写前 `loadMedicinePro` 详情补全得到的 `matchedItem.raw.sdMed`，覆盖缓存恢复产生的通用药品默认值，禁止把中成药降级为西药。药品回写组方由 PHIS 后端统一执行：西药与中成药必须分别建方，不受混合开单参数影响；在药品分类、特殊处方类型和发药药房一致的组内，按传入顺序每张最多 5 条药品明细，超出自动新建处方，不合并或丢弃明细。每张拆分处方继承诊断、科室及适用的慢病长处方属性，分别保存、计费与审方，最终仍以原 `requestId` 返回一次回执。
+
+> **最后更新**: 2026-09-10
 >
 > **重要**: 此文档是项目架构的唯一真实来源。任何架构级别的代码修改都必须同步更新此文档。
 
@@ -341,11 +354,13 @@ const isRiskAnalyzing = ref(false);
 8. 患者身份与 HIS 上下文补全成功即表示接诊成功；健康风险评估属于可降级的后置能力。风险上下文必须分别传递显式既往史与 `HisPatientHistory.visits[].diagnoses` 形成的结构化历史诊断摘要：历史诊断用于识别持续性慢病风险，但不得把历史急性疾病或症状当成本次急症；不得为了风险分析把按日期排列的门诊流水重新写入 `pastMedicalHistory`。风险模型失败时保留已接诊患者和胶囊入口，单独展示风险评估失败，不得回退成“接诊处理异常”。模型仍返回结构化 `RiskItem[]`，`features/reception-risk/lib/riskPresentation.ts` 在写入接诊 session 前统一完成胶囊文案规范化：慢病只保留疾病名称与核心关注点，过长的外部传入或旧格式文案也必须收敛；`ReceptionCapsule.vue` 只负责展示规范化结果，不在模板或 CSS 中隐式截断医疗语义。
 9. `features/reception/model/useReceptionSessionController.ts` 是接诊胶囊局部状态的唯一所有者，保存 `status / risks / opportunities / executing` 等接诊阶段状态，并只通过显式 action 修改。患者姓名、性别和完整 `ageText` 必须从应用级 `currentPatient` 派生，不再维护可漂移的第二份患者展示状态；胶囊、风险面板和头像解析必须直接消费完整年龄文本，禁止先 `parseInt` 再在 UI 拼接“岁”。该 controller 是 App 生命周期内的局部 composable，不新增 Pinia store。
 10. 门诊接诊后的业务分流统一由 `features/reception/model/useOutpatientScenarioRouter.ts` 承担。候选统一建模为 `ReceptionOpportunity` 判别联合类型；复诊配药确认和语音入口的报告复诊 / 缓存恢复 / 普通录音决策都从该路由进入。`useEventListeners.ts` 只转交入口事件，`useReceptionController.ts` 只产出机会，不直接打开具体结果页。
-11. 报告回诊聚合上下文属于当前接诊 session 的 `report-follow-up` opportunity，不得写入 `PatientContext.raw`。报告回诊与慢病复诊配药互斥，当前就诊文本出现携报告、查看检验检查结果或报告解读语义时，`report-follow-up` 的分流优先级高于 `chronic-refill`。App 必须把上下文作为显式 prop 传给 `OutpatientFollowUpPage`，页面再显式传给治疗推荐 controller；患者上下文只保存患者与就诊事实，`raw` 继续只承载厂商原始字段。
+11. 报告回诊聚合上下文属于当前接诊 session 的 `report-follow-up` opportunity，不得写入 `PatientContext.raw`。报告回诊与慢病复诊配药互斥，当前就诊文本出现携报告、查看检验检查结果或报告解读语义时，`report-follow-up` 的分流优先级高于 `chronic-refill`。`features/outpatient-follow-up/lib/outpatientFollowUpRecord.ts` 在上下文形成时按权威患者性别过滤不适用的病历模板段落；明确男性时移除“月经史”“婚育史”等女性专属行，使左侧展示与 AI 方案请求消费同一份净化正文，女性或性别未知时保留原文。该规则不得回写或修改 `PatientContext` 中的 HIS 原始病历。App 必须把上下文作为显式 prop 传给 `OutpatientFollowUpPage`，页面再显式传给治疗推荐 controller；患者上下文只保存患者与就诊事实，`raw` 继续只承载厂商原始字段。
 11.1 接诊阶段的历史报告识别复用 `fetchPatientHistory()` 已经取得的近 90 天 `loadClinicMedicalRecord` 明细。PHIS Adapter 负责把厂商 `applyList[].items[]` 映射为 `HisVisitRecord.reportedApplications` 中性摘要，并保留 `visitId`；业务层仍只按近 14 个自然日筛选报告机会，只有 `sdApply = 3` 才进入 `report-interpretation` opportunity，不得因为配药历史窗口扩大而扩大报告助手的 14 天口径，也不得把检查/检验医嘱当成已出报告。进入报告工作台后，`features/report-interpretation/api` 再通过 `HisAdapter.fetchOutpatientFollowUpReportResults()` 按历史 `visitId` 获取实际报告，避免接诊阶段批量加载报告正文或调用 LLM。
 11.2 风险胶囊对报告场景只提供一个“报告助手”动作：历史报告进入报告解读工作台，本次报告回诊上下文同时存在时由工作台提供“生成后续诊疗方案”升级动作。报告解读是只读认知辅助，不直接形成诊断、处方或 PHIS 回写；报告回诊继续复用 `OutpatientFollowUpPage` 和治疗推荐回写闭环。两种 opportunity 可以同时存在于 session，但 UI 不展示两个相似入口。
-12. 慢病复诊的病历事实与推荐上下文必须分层：`chronicRefillRecord.ts` 可以把有效库存名称和规格发送给模型生成治疗方案，但 `historyOfPresentIllness` 只能使用患者诊断、历史用药和本次病情等事实。规则兜底不得拼接库存摘要；模型现病史命中库存、可续方或推荐方案语义时视为不合格，回退到事实型草稿。
+12. 慢病复诊的病历事实与推荐上下文必须分层：`chronicRefillRecord.ts` 可以把历史处方及有效库存名称和规格发送给模型生成治疗方案，但初始 `historyOfPresentIllness` 只能使用已确认慢病与本次复诊目的，历史处方药名和处方属性统一进入 `currentMedicationHistory` 与右侧药品卡。该规则取代上文“规范药名可进入现病史”的旧边界；规则兜底不得拼接历史处方或库存摘要，模型现病史命中历史药名、剂量、频次、疗程、总量、库存、可续方或推荐方案语义时视为不合格，回退到事实型草稿。
 13. 慢病复诊核查采用“单次 LLM 结果 + Composable Controller + deterministic record Builder”：模型在病历结果中同时返回最少问题、选项和推荐值，程序只做数量、结构和证据字段校验；医生在共享结果页点击选项是把推荐值升级为病历事实的唯一门禁。等待态由结果域 session controller 管理，不新增全局 store，也不恢复独立确认页。
+14. 慢病长处方采用“渠道语义 -> HIS 中性签约状态 -> 中性回写契约 -> PHIS 私有映射”的单向链路：PHIS Adapter 使用慢病专用患者查询返回签约事实并映射为中性 `signed`，共享结果页仅在 `chronic-refill`、最终 `orderList` 含药品且 `signed === true` 时，由 `recordConfirmedPayload.ts` 发送 `prescriptionAttributes.chronicLongTerm = true`；未签约、状态未知、其他渠道和无药回写省略该对象并按普通处方处理。PHIS `MedHermes.js` 在诊断保存前复用 `searchByIdPiMB` 的患者签约状态与院内慢病诊断配置校验，再把中性属性作为兼容新增的 `saveAIPresWithAttributes` 独立处方属性参数传给后端，原三参数 `saveAIPres` 保持不变；`ClinicDoctorCoreAIModule` 只对普通西药 / 中成药处方头设置 `HiOdsPresVO.slowMedicine = "1"`，明细 `orderList` 不承载 PHIS 私有标记，打印继续读取已落库处方头。
+15. 诊断目录匹配采用共享 deterministic assessment：`services/diagnosisCatalogMatch.ts` 先提取急慢性、侧别、分型和原发/继发等互斥修饰词，冲突候选在名称相似度与 ICD 排序前硬排除；再校验去除修饰词后的核心疾病是否一致，最后才用名称相似度和 ICD 类目辅助排序。评估结果区分 `exact / compatible / ambiguous / conflict / unmatched`；旧 `medicalDataService.matchDiagnosis()` 仅兼容返回 `exact`，共享结果页通过完整 assessment 展示 `compatible` 候选。`compatible` 不携带可回写标准 ID且不参与默认选择，医生点击后才升级为 `confirmed`、绑定候选标准 ID并进入正式诊断选择；手动更换标准诊断则标记为 `manual`。该规则不增加 LLM 调用，不把 AI 编码对名称语义的冲突静默改写为标准库名称。
 
 ---
 
@@ -723,13 +738,15 @@ eventListeners.unregisterAllListeners();
 
 > 普通语音问诊采用“单次结构化流 + 后台治疗分支 + 前台依赖有序”的渐进结果架构。`useVoiceIntentRecognition.ts` 使用独立版本化的 `voiceIntentRecognitionStream` Prompt，按 NDJSON 输出核心病历、病历上下文、AI 候选、诊断、诊疗路由、明确医嘱与其余病历字段；`useClinicalResultProgressiveIntentApplication.ts` 以患者 / 就诊 / `consultationRoundId` 为会话锚点，只在新轮次首次重置结果页，后续分区和 complete 仅增量应用，禁止重复整页 reset 覆盖已到达内容。`record_suggestions` 在同一次临床推理中生成，并在开放编辑前经统一正文质控和显式事实去重合并；缺失该分区时才由原稳定态 scheduler 兜底一次。`useClinicalResultGenerationSequence.ts` 只在 `voice` 渠道维护诊断请求模式、初始诊断恢复和治疗展示依赖：已选正式诊断与 `recommendation_plan` 同时就绪后，药品分支与检查 / 检验联合分支可后台并行；检查和检验共享一次实时目录上下文与一次轻量模型请求，前台由 `useTreatmentSections.ts` 合并成单个联合进度，完成后再按固定“检查、检验”顺序原子落位。普通语音调用 `ClinicalGenerationProgress.vue` 时只呈现结构化病历流、诊断恢复或生成错误，不再为治疗分支额外渲染顶部“院内目录匹配”阶段；治疗进度由 `TreatmentGenerationPlaceholder.vue` 在治疗区表达，目录引用绑定、项目详情补全与库存校验继续后台静默执行。共享结果页的其他渠道仍可保留顶部治疗反馈，但统一使用“生成诊疗方案”业务表达。明确医嘱作为医生已表达事实可先展示；`explicitTreatmentCatalogResolver.ts` 对名称明确的项目继续确定性匹配，对“B超、CT、化验”等上位表达则把本次完整对话、病历和正式诊断作为同一次目录映射请求的上下文，只允许从本次实时目录候选中返回 high / medium 置信的标准项目，并同步生成 `goal / goalGroup / goalGroupPurpose / necessity / reason`；补全结果保持未选中，原始对话表述保存在 `originalName / evidenceText`，医生勾选才完成临床确认，低置信或无唯一候选继续待匹配。`auxiliaryRecommendationPresentation.ts` 把已匹配与待匹配的明确项目分别标记为“对话明确项目”和“对话明确项目（待匹配）”；带完整补全目标的明确项目可按“对话明确 · 临床目标”细分，但不得混入 AI 自主推荐组。AI 生成项在初始正式诊断稳定前不得显示或进入回写选择，并由 `institutionAuxiliaryCatalog.ts` 同时校验本次实时目录引用和完整 `goal / goalGroup / goalGroupPurpose / necessity / reason`，任一不满足即丢弃。早到明确医嘱或旧结果缺少临床目标元数据时不生成通用目标标题和用途，但优先展示已有 `goal`，否则从真实 `evidenceText / reason` 截取简明来源说明，避免真实内容消失。流中已出现有效 `diagnoses` 分区但只有待鉴别项时不得追加诊断请求或启动治疗；仅旧结果完全缺失诊断分区时允许普通语音恢复一次。手动刷新保留上一版稳定内容，初始恢复才使用阻断型诊断进度。核心病历完成后页面允许阅读和编辑，诊断初始恢复或治疗分支未收口时一键回写继续禁用。检查 / 检验仍消费本次接诊实时目录全集，只在模型输入序列化时省略“通用 / 单项”等默认元数据并使用轻量模型降低目录推荐长尾，不裁剪任何可开立项目；`manualMatchCache.ts` 对检查 / 检验禁用跨接诊持久映射并清理旧条目，防止历史人工匹配参与新接诊，药品与非检查检验处置仍可按原作用域复用；药品仍走共享定稿流水线。`chronic-refill` 不进入该普通语音状态机，仍由慢病专用流和策略收口；报告回诊由 `OutpatientFollowUpPage` 复用独立 `features/treatment-plan`，不经过共享语音结果时序。该优化不改变 `record-confirmed` 或 PHIS Bridge 契约。
 
+> 普通语音诊断在进入共享结果页前额外经过 `features/voice-consultation/lib/ordinaryVoiceDiagnosisGuard.ts` 的纯规则门禁。`voiceIntentRecognitionStream` 的诊断分区声明 `clinicalRole`、`diagnosisKind`、`evidenceScope` 与 `currentVisitEvidenceText`：`history_only / risk_modifier` 直接退出诊断建议区，不能解释本次主诉的历史共病不再降级为待鉴别；`differential_cause` 只允许表达可解释当前主诉的病因候选。若标准库匹配后不存在病因性正式诊断，门禁可从 `current_visit / both`、high / medium、本次肯定证据充分且匹配 R 类标准编码的症状候选中最多提升一项为 `symptom_working` 正式诊断，其余 R 类症状项退出诊断建议区而不进入待鉴别。该工作诊断经 `diagnosisSuggestionPresentation.ts` 保持在正式区并由 `DiagnosisRecommendationCard.vue` 明示“症状性工作诊断”，同时把诊疗路由限制为 `diagnostic_first` 的检查 / 检验分支，不启动 AI 药品推荐；明确医嘱与急诊转诊继续保持原优先级。旧 Prompt 缺少新角色字段时，门禁仍根据历史上下文、证据语义和标准 R 编码做兼容过滤与提升。规则分别在语音抽取归一和共享结果页 voice 初始化处执行，缓存 key 升级为 V3，避免旧 V1/V2 快照恢复已退出诊断区的历史共病。症状问诊与已确认范围的慢病复诊不经过此门禁。
+
 > 检查、检验和处置推荐的执行科室属于 HIS 项目详情，不由 AI 推荐文本推断。标准项目进入共享结果页可见列表后，页面编排层立即调用 `useTreatmentHydration.hydrateMatchedMedicalItemDetails()` 后台补全；composable 按推荐项复用进行中的详情请求、跳过已加载详情并暴露读取态，选中校验复用同一请求作最终门禁。医生通过控件手动清空后以 `execDeptCleared` 为准，不得因预取、缓存恢复或再次校验自动补回。
 
 ### 核心组件列表
 
 | 组件 | 职责 | 文件 |
 |------|------|------|
-| `ChatPanel.vue` | LLM 对话界面；聊天语音按钮只编排 UI、输入回填与错误提示，录音和实时语音会话交由 `features/chat/model/useChatVoiceInput.ts` | [src/components/ChatPanel.vue](src/components/ChatPanel.vue) |
+| `ChatPanel.vue` | LLM 对话界面；助手回复宽度跟随消息区可用宽度，用户短消息保持紧凑右对齐；页面持有默认关闭的会话级联网开关，并只通过 `LLMConfigOverride.enableWebSearch` 为 `chat-stream / chat_panel` 流式请求声明联网意图；聊天语音按钮只编排 UI、输入回填与错误提示，录音和实时语音会话交由 `features/chat/model/useChatVoiceInput.ts` | [src/components/ChatPanel.vue](src/components/ChatPanel.vue) |
 | `SettingsPanel.vue` | 系统设置 shell：只保留通用设置与关于版本，负责主题、窗口置顶、区域后台地址/机构编码、连接测试、音频输入设备、语音录音目录、缓存管理和 HIS 联调日志入口；不再提供模式开关或模型/语音/知识库密钥配置。音频输入设备、录音目录和保存快照分别下沉到 settings model，通用页签与保存条为受控 UI | [src/components/SettingsPanel.vue](src/components/SettingsPanel.vue) |
 | `ConsultationPage.vue` | 完整症状问诊主链路，同时承接新的“内嵌灵活模式”；支持根据 `/assist` 上下文直接跳过症状采集进入病历详情页，继续复用现有推荐诊断、诊断鉴别、推荐用药、推荐检查与诊断路径能力；进入 `record` 阶段后不再继续内嵌维护旧结果页，而是把当前病历、诊断、治疗快照切换到独立的症状结果页包装组件，由后者复用共享结果页主体；PHIS 引用闭环状态仍由症状包装层承接；患者 / 就诊锚点变化时是硬 reset 边界，必须清空上一患者的症状、诊断、治疗方案、缓存快照和事实核查状态，并递增 AI 请求序列作废慢响应；页面 scoped 样式原样外置到 `features/symptom-consultation/ui/ConsultationPage.css`，SFC 继续保留模板、脚本和问诊状态机；AI 推荐链路采用成功后覆盖与当前诊断上下文校验，解析失败或慢请求过期时保留上一版结果；患者文本读取、既往史解析、患者草稿/诊断预填、诊断 identity / AI 请求防串线、同类诊断候选 / 替换列表更新、病历草稿 AI 请求规格与本地兜底、病历草稿主诉 / 现病史本地拼装、中医诊断证候 / 治法映射、诊断展示分组、诊断 / 治疗事实核查编排、LLM JSON 宽容解析、诊断/治疗推荐反馈目标落库 / 注册编排、完成问诊推荐采纳 / 拒绝埋点编排、医嘱文案生成、最终报告数据拼装、当前医疗 payload、智能问诊用户日志快照、PHIS 引用 key / 状态图 / 回执归一 / 引用展示判断等数据处理逐步下沉到 `features/symptom-consultation/lib|model`；western 诊断 raw 映射、western 治疗推荐 raw 映射和 PHIS 提交前治疗选择 / 库存提示 / 处理意见摘要复用 `features/clinical-result`；同类诊断卡片内联下拉开合与候选状态复用 `features/consultation-result/model/useRelatedDiagnosisDropdown.ts`，页面仅保留候选来源、诊断替换、选中同步和埋点；页面层只保留状态、副作用依赖注入和流程编排 | [src/components/ConsultationPage.vue](src/components/ConsultationPage.vue) |
 | `entities/patient/*` | 患者实体展示与后续稳定转换归属。当前 `PatientHeader.vue` 是无副作用患者头部展示组件，接收 patient/payType/avatar props 和 actions slot，复用既有 patientContext / patientAvatar 工具解析姓名、性别、年龄、过敏史和头像；不持有问诊流程状态、不调用 Tauri / HIS / toast。智能问诊和语音问诊均通过 `@entities/patient` 复用，旧 `src/components/PatientHeader.vue` 已删除 | [src/entities/patient](src/entities/patient) |
@@ -1029,7 +1046,7 @@ startAuditUploader() (startup flush + enqueue flush + 30s retry)
 
 | 服务 | 唯一运行路径 |
 |------|-------------|
-| LLM Chat | 签名 SSE/POST `/v1/ai/chat`，模型凭据由服务端持有 |
+| LLM Chat | 签名 SSE/POST `/v1/ai/chat`，模型凭据由服务端持有；客户端与服务端双重限制 `enableSearch` 只作用于 `chat-stream / chat_panel` 流式小助手请求，其他问诊与病历场景强制关闭 |
 | 批量语音转写 | 签名 POST `/v1/ai/speech/transcribe` |
 | 阿里实时语音 | 签名 WebSocket `/v1/ai/speech/realtime/ws`，失败后降级签名 POST `/v1/ai/speech/realtime` |
 | Prompt / 模板 | bootstrap + delta 覆盖，本地内置内容仅作失联兜底 |

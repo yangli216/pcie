@@ -107,7 +107,7 @@ describe('chronic refill confirmation', () => {
     expect(buildConfirmedAnswers(plan, {}).map((answer) => answer.recordText)).toEqual(['', '', '']);
   });
 
-  it('builds the HPI only from confirmed facts and historical context', () => {
+  it('builds the HPI only from confirmed facts and the refill purpose', () => {
     const result = buildConfirmedChronicRefillNarrative(candidate, {
       supplementText: '近一周晨起偶有轻微口干',
       answers: [
@@ -139,6 +139,16 @@ describe('chronic refill confirmation', () => {
       historyOfPresentIllness: '患者既往确诊高血压病，规律服用苯磺酸氨氯地平片，近期无头晕、头痛等不适，近一周晨起偶有轻微口干，今复诊配药。',
     });
     expect(result.historyOfPresentIllness).not.toMatch(/女性|\d+岁|库存|待医生核实/u);
+  });
+
+  it('does not add historical medicine names without an explicit current-visit fact', () => {
+    expect(buildConfirmedChronicRefillNarrative(candidate, {
+      answers: [],
+      supplementText: '',
+    })).toEqual({
+      chiefComplaint: '高血压病复诊配药',
+      historyOfPresentIllness: '患者既往确诊高血压病，今复诊配药。',
+    });
   });
 
   it('keeps only concise medicine names in the narrative', () => {

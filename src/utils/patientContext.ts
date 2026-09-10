@@ -285,6 +285,7 @@ export function buildPatientContext(input: BuildPatientContextInput): AppPatient
     ?? patientFallback?.receptionEnsured
     ?? patientFallback?._receptionEnsured
     ?? false;
+  const signed = input.hisInfo?.signed ?? patientFallback?.signed;
 
   const baseContext: PatientContext = {
     identity: {
@@ -320,6 +321,7 @@ export function buildPatientContext(input: BuildPatientContextInput): AppPatient
       currentVitalSigns,
     },
     receptionEnsured,
+    signed,
     source: input.source || patientFallback?.source,
     raw: {
       ...(rawFallback || {}),

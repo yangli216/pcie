@@ -874,7 +874,7 @@ export class PhisHisAdapter implements HisAdapter {
     if (!idPi) return null;
     this.lastPatientId = idPi;
 
-    const detail = await this.service.searchPatientByIdPi(idPi);
+    const detail = await this.service.searchPatientByIdPiMB(idPi);
     if (!detail) return null;
 
     const sdSex = trim(detail.sdSex);
@@ -886,6 +886,8 @@ export class PhisHisAdapter implements HisAdapter {
     const age = ageUnit === 'Y' && typeof detail.ageNum === 'number' ? detail.ageNum : undefined;
     const ageText = formatPatientAgeText(detail.ageText, ageUnit)
       || formatPatientAgeText(detail.ageNum, ageUnit);
+    const signedStatus = trim(detail.qyzt)
+      ?? (typeof detail.qyzt === 'number' ? String(detail.qyzt) : undefined);
 
     return {
       patientId: trim(detail.idPi) ?? idPi,
@@ -895,6 +897,7 @@ export class PhisHisAdapter implements HisAdapter {
       ageText: ageText || undefined,
       idNo: trim(detail.idCard),
       mobilePhone: trim(detail.mobilePhone),
+      signed: signedStatus ? signedStatus === '8' : undefined,
       raw: detail as unknown as Record<string, unknown>,
     };
   }

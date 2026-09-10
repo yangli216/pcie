@@ -1,3 +1,5 @@
+import { consistencyPrompt, normalizeReportConsistency, REPORT_CONSISTENCY_INSTRUCTION } from '@features/report-interpretation/lib/reportConsistency';
+import { loadExternalReportConsistency } from '@features/report-interpretation/api/reportConsistencyHistory';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
 import { PROMPTS } from '../prompts';
@@ -56,6 +58,7 @@ interface ReportInterpretationWindowReadyWaiter {
 }
 
 interface ReportInterpretationLLMResponse {
+  crossReportConsistency?: unknown;
   summary?: string;
   conclusion?: string;
   keyPoints?: Array<{
@@ -845,6 +848,8 @@ function buildPatientProfile(
   currentPatient: AppPatient | null | undefined,
   incomingPatient: ReportInterpretationPatientInput | null | undefined,
 ): ReportInterpretationPatientProfile | null {
+  const incomingId = readIncomingPatientText(incomingPatient, ['patientId', 'idPi']);
+  if (incomingId && incomingId !== getPatientContextId(currentPatient)) currentPatient = null;
   const hasCurrent = Boolean(getPatientContextId(currentPatient) || getPatientContextName(currentPatient));
   const hasIncoming = Boolean(
     incomingPatient && Object.values(incomingPatient).some((item) => normalizeText(item).length > 0)
@@ -971,6 +976,7 @@ function buildFallbackPayload(request: ReportInterpretationResolvedRequest): Rep
     reportMeta: insight.reportMeta,
     abnormalItems: insight.abnormalItems,
     abnormalAssessmentComplete: request.abnormalItems !== undefined,
+    crossReportConsistency: normalizeReportConsistency(undefined, request.consistencyContext),
     sourceQuery: request.query,
     summary: `${reportLabel}最值得关注的发现是：${headline}`,
     conclusion: `${insight.reportDate ? `${insight.reportDate} ` : ''}${reportLabel}提示：${sectionHighlights}。${contextInterpretation}`,
@@ -1032,6 +1038,7 @@ function sanitizeLLMResponse(
 
   return {
     ...fallback,
+    crossReportConsistency: normalizeReportConsistency(response.crossReportConsistency, request.consistencyContext),
     requestId: request.requestId,
     taskId: request.taskId,
     reportKindLabel: request.reportKindLabel,
@@ -1056,12 +1063,24 @@ function sanitizeLLMResponse(
 export async function buildReportInterpretationPayload(
   request: ReportInterpretationResolvedRequest,
 ): Promise<ReportInterpretationWindowPayload> {
+  // 工作台已提供同日证据；外部单报告入口才从 HIS 补取，超时不阻断原报告解读。
+  if (!request.consistencyContext) {
+    try {
+      const consistencyContext = await withTimeout(loadExternalReportConsistency(request), 12_000, '同日报告加载超时。');
+      request = { ...request, consistencyContext };
+    } catch {
+      request = { ...request, consistencyContext: {
+        patientId: request.patient?.patientId || '', date: '', reports: [], evidence: [], limitations: [],
+        unavailableReason: '同日报告加载失败或超时，本次未完成跨报告校验。',
+      } };
+    }
+  }
   const fallback = buildFallbackPayload(request);
   const reportInsights = analyzeReportQuery(request);
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: PROMPTS.consultation.reportInterpretation.system,
+      content: `${PROMPTS.consultation.reportInterpretation.system}\n${REPORT_CONSISTENCY_INSTRUCTION}`,
     },
     {
       role: 'user',
@@ -1071,7 +1090,7 @@ export async function buildReportInterpretationPayload(
         taskId: request.taskId,
         query: request.query,
         reportHighlights: reportInsights.reportHighlights,
-      }),
+      }) + consistencyPrompt(request.consistencyContext),
     },
   ];
 

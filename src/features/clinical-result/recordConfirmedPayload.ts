@@ -12,6 +12,8 @@
  */
 
 import type { Diagnosis, TreatmentRecommendation } from '@/types/consultation';
+import { resolvePhisMedicineServiceCode } from '@/services/his/phisMedicineServiceCode';
+import type { ClinicalResultChannel } from './clinicalResultContract';
 import {
   buildOutpatientRecord,
   type OutpatientRecord,
@@ -115,6 +117,15 @@ export function getDefaultOrderServiceCode(type: TreatmentRecommendation['type']
 export function getOrderServiceCode(rec: TreatmentRecommendation): string {
   const raw = getMatchedItemRaw(rec);
   const explicitCode = (rec.matchedItem?.sdSrv || readFirstString(raw, ['sdSrv'])).trim();
+  if (rec.type === 'medicine') {
+    const medicineServiceCode = resolvePhisMedicineServiceCode({
+      sdMed: readFirstString(raw, ['sdMed']),
+      sdSrv: explicitCode,
+    });
+    if (medicineServiceCode) {
+      return medicineServiceCode;
+    }
+  }
   if (explicitCode && explicitCode !== '1' && explicitCode !== '2') {
     return explicitCode;
   }
@@ -218,6 +229,14 @@ export function isFrontendDiagnosisId(id: string | null | undefined): boolean {
 }
 
 export function getStandardDiagnosisId(diag: Diagnosis | null | undefined): string {
+  if (
+    diag?.catalogMatchStatus === 'compatible'
+    || diag?.catalogMatchStatus === 'ambiguous'
+    || diag?.catalogMatchStatus === 'conflict'
+    || diag?.catalogMatchStatus === 'unmatched'
+  ) {
+    return '';
+  }
   const id = (diag?.id || '').trim();
   return id && !isFrontendDiagnosisId(id) ? id : '';
 }
@@ -257,7 +276,7 @@ export function buildDiagList(input: BuildDiagListInput): Array<Record<string, s
  * 所有解析器返回值都允许为空字符串；提交前应由共享必要字段校验拦截缺失字段。
  */
 export interface OrderItemResolvers {
-  /** PHIS 服务分类 sdSrv：药=11 检=31 验=41 处=21 */
+  /** PHIS 服务分类 sdSrv：西药=11 中成药=12 检=31 验=41 处=21 */
   getServiceCode: (rec: TreatmentRecommendation) => string;
   /** PHIS 标准服务 ID：药品取 idMedPro，非药品取 idCli */
   getServiceId: (rec: TreatmentRecommendation) => string;
@@ -363,6 +382,26 @@ export interface RecordConfirmedWritebackScope {
   orderTypes: RecordConfirmedWritebackOrderType[];
 }
 
+export interface RecordConfirmedPrescriptionAttributes {
+  /** 慢病复诊处方头语义；PHIS 校验后映射为 slowMedicine。 */
+  chronicLongTerm: true;
+}
+
+export interface RecordConfirmedPatientSigningContext {
+  /** 仅接受 HIS 明确返回的已签约状态；undefined 表示状态未知。 */
+  signed?: boolean;
+}
+
+export function resolveRecordConfirmedPrescriptionAttributes(
+  channel: ClinicalResultChannel,
+  orderList: Array<Record<string, string | number>>,
+  patient?: RecordConfirmedPatientSigningContext,
+): RecordConfirmedPrescriptionAttributes | undefined {
+  if (channel !== 'chronic-refill' || patient?.signed !== true) return undefined;
+  const hasMedicine = orderList.some((item) => item.sdSrv === '11' || item.sdSrv === '12');
+  return hasMedicine ? { chronicLongTerm: true } : undefined;
+}
+
 export interface BuildRecordConfirmedPayloadInput {
   consultationId: string;
   requestId?: string;
@@ -388,6 +427,8 @@ export interface BuildRecordConfirmedPayloadInput {
   treatmentPlan?: string;
   /** 部分回写范围；未传时保持历史完整回写契约。 */
   writebackScope?: RecordConfirmedWritebackScope;
+  /** 处方头级中性属性；当前仅慢病复诊实际回写药品时使用。 */
+  prescriptionAttributes?: RecordConfirmedPrescriptionAttributes;
   /** 额外字段（如 referenceStatus 等），会浅合并进 payload */
   extra?: Record<string, unknown>;
 }
@@ -415,6 +456,7 @@ export function buildRecordConfirmedPayload(
     orderList,
     treatmentPlan,
     writebackScope,
+    prescriptionAttributes,
     extra,
   } = input;
 
@@ -498,5 +540,6 @@ export function buildRecordConfirmedPayload(
     ...(recordTemplateChanges ? { recordTemplateChanges } : {}),
     ...(physicalExamVitalSigns ? { physicalExamVitalSigns } : {}),
     ...(isScopedWriteback ? { writebackScope } : {}),
+    ...(prescriptionAttributes?.chronicLongTerm === true ? { prescriptionAttributes } : {}),
   };
 }

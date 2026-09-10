@@ -1,4 +1,5 @@
 import type { Diagnosis, TreatmentRecommendation } from '@/types/consultation';
+import type { DiagnosisCatalogAssessment } from '@services/diagnosisCatalogMatch';
 import { normalizeRawTreatmentRecommendationFields } from './clinicalResultTreatmentFields';
 
 export interface ClinicalResultDiagnosisCatalogMatch {
@@ -9,11 +10,10 @@ export interface ClinicalResultDiagnosisCatalogMatch {
 
 export interface MapClinicalResultAiDiagnosesInput {
   rawDiagnoses: Diagnosis[];
-  matchDiagnosis: (
-    query: string,
+  assessDiagnosis: (
+    queryName: string,
     context?: { icdCode?: string },
-  ) => ClinicalResultDiagnosisCatalogMatch | null;
-  lookupOrder?: Array<'name' | 'code'>;
+  ) => DiagnosisCatalogAssessment<ClinicalResultDiagnosisCatalogMatch>;
   clearUnmatchedId?: boolean;
 }
 
@@ -75,19 +75,10 @@ function discardAiMedicinePackageTotal(
 }
 
 export function mapClinicalResultAiDiagnoses(input: MapClinicalResultAiDiagnosesInput): Diagnosis[] {
-  const lookupOrder = input.lookupOrder || ['name', 'code'];
-
   return input.rawDiagnoses.map((diag) => {
     const matchContext = diag.code ? { icdCode: diag.code } : undefined;
-    const matched = lookupOrder.reduce<ClinicalResultDiagnosisCatalogMatch | null>((current, field) => {
-      if (current) {
-        return current;
-      }
-      if (field === 'name') {
-        return input.matchDiagnosis(diag.name, matchContext);
-      }
-      return input.matchDiagnosis(diag.code);
-    }, null);
+    const assessment = input.assessDiagnosis(diag.name || diag.code, matchContext);
+    const matched = assessment.status === 'exact' ? assessment.matchedItem : null;
 
     if (matched) {
       return {
@@ -96,6 +87,24 @@ export function mapClinicalResultAiDiagnoses(input: MapClinicalResultAiDiagnoses
         name: matched.name,
         id: matched.id,
         originalName: diag.name,
+        catalogMatchStatus: 'exact',
+        suggestedMatchItem: null,
+        catalogMatchReason: assessment.reason,
+        catalogAlternatives: assessment.alternatives,
+      };
+    }
+
+    if (assessment.status === 'compatible' && assessment.suggestedMatchItem) {
+      return {
+        ...diag,
+        id: undefined,
+        code: assessment.suggestedMatchItem.code,
+        name: assessment.suggestedMatchItem.name,
+        originalName: diag.originalName || diag.name,
+        catalogMatchStatus: 'compatible',
+        suggestedMatchItem: assessment.suggestedMatchItem,
+        catalogMatchReason: assessment.reason,
+        catalogAlternatives: assessment.alternatives,
       };
     }
 
@@ -103,10 +112,20 @@ export function mapClinicalResultAiDiagnoses(input: MapClinicalResultAiDiagnoses
       return {
         ...diag,
         id: undefined,
+        catalogMatchStatus: assessment.status,
+        suggestedMatchItem: null,
+        catalogMatchReason: assessment.reason,
+        catalogAlternatives: assessment.alternatives,
       };
     }
 
-    return diag;
+    return {
+      ...diag,
+      catalogMatchStatus: assessment.status,
+      suggestedMatchItem: null,
+      catalogMatchReason: assessment.reason,
+      catalogAlternatives: assessment.alternatives,
+    };
   });
 }
 

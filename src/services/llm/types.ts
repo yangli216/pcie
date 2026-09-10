@@ -36,6 +36,7 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 
 export interface LLMConfigOverride {
   configProfile?: 'default' | 'fast' | 'reviewer';
+  enableWebSearch?: boolean;
   traceContext?: {
     consultationId?: string;
     scene?: string;

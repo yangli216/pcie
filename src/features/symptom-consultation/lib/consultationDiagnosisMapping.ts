@@ -1,5 +1,6 @@
 import type { Diagnosis } from '@/types/consultation';
 import { mapClinicalResultAiDiagnoses } from '@features/clinical-result';
+import type { DiagnosisCatalogAssessment } from '@services/diagnosisCatalogMatch';
 
 export interface DiagnosisCatalogMatch {
   id: string;
@@ -20,10 +21,10 @@ export interface TcmTreatmentCatalogMatch {
 export interface BuildDiagnosisRecommendationsInput {
   rawDiagnoses: Diagnosis[];
   mode: 'western' | 'tcm';
-  matchDiagnosis: (
-    query: string,
+  assessDiagnosis: (
+    queryName: string,
     context?: { icdCode?: string },
-  ) => DiagnosisCatalogMatch | null;
+  ) => DiagnosisCatalogAssessment<DiagnosisCatalogMatch>;
   matchTCMDiagnosis: (query: string) => DiagnosisCatalogMatch | null;
   matchTCMSyndrome: (query: string) => TcmSyndromeCatalogMatch | null;
   matchTCMTreatment: (query: string) => TcmTreatmentCatalogMatch | null;
@@ -35,12 +36,11 @@ function parseRatePercent(rate: string | undefined): number {
 
 function buildWesternDiagnosis(
   diagnosis: Diagnosis,
-  matchDiagnosis: BuildDiagnosisRecommendationsInput['matchDiagnosis'],
+  assessDiagnosis: BuildDiagnosisRecommendationsInput['assessDiagnosis'],
 ): Diagnosis {
   return mapClinicalResultAiDiagnoses({
     rawDiagnoses: [diagnosis],
-    matchDiagnosis,
-    lookupOrder: ['code', 'name'],
+    assessDiagnosis,
     clearUnmatchedId: true,
   })[0];
 }
@@ -102,7 +102,7 @@ export function buildDiagnosisRecommendationsFromRaw(
   const diagnoses = input.rawDiagnoses.map((diagnosis, index) => (
     input.mode === 'tcm'
       ? buildTCMDiagnosis(diagnosis, index, input)
-      : buildWesternDiagnosis(diagnosis, input.matchDiagnosis)
+      : buildWesternDiagnosis(diagnosis, input.assessDiagnosis)
   ));
 
   return diagnoses.sort((a, b) => parseRatePercent(b.rate) - parseRatePercent(a.rate));

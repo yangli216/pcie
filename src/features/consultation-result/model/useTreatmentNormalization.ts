@@ -185,13 +185,24 @@ export function useTreatmentNormalization(deps: TreatmentNormalizationDeps): Tre
   }
 
   function getFrequencyExecCount(rec: Partial<TreatmentRecommendation>): number | null {
-    const frequencyValue = (rec.frequencyKey || rec.frequency || '').trim();
-    if (!frequencyValue) return null;
+    const freqKey = (rec.frequencyKey || '').trim();
+    const freqText = (rec.frequency || '').trim();
+    if (!freqKey && !freqText) return null;
 
-    const matchedOption = frequencyOptions.value.find(
-      (option) => option.key === frequencyValue || option.text === frequencyValue,
-    );
-    return matchedOption?.execCount ?? inferExecCountFromFrequencyText(matchedOption?.text || frequencyValue);
+    const matchedOption = frequencyOptions.value.find((option) => {
+      if (freqKey && option.key === freqKey) return true;
+      if (freqText && (option.text === freqText || option.key === freqText)) return true;
+      if (freqKey && option.text === freqKey) return true;
+      return false;
+    });
+
+    if (typeof matchedOption?.execCount === 'number' && matchedOption.execCount > 0) {
+      return matchedOption.execCount;
+    }
+
+    return inferExecCountFromFrequencyText(matchedOption?.text)
+      ?? inferExecCountFromFrequencyText(freqText)
+      ?? inferExecCountFromFrequencyText(freqKey);
   }
 
   function resolveMedicineAutoTotal(rec: Partial<TreatmentRecommendation>): { totalQty: string; totalUnit: string } {

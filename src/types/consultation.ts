@@ -1,15 +1,45 @@
+export interface DiagnosisCatalogItem {
+    id: string;
+    code: string;
+    name: string;
+}
+
+export type DiagnosisCatalogMatchStatus =
+    | 'exact'
+    | 'compatible'
+    | 'ambiguous'
+    | 'conflict'
+    | 'unmatched'
+    | 'confirmed'
+    | 'manual';
+
 export interface Diagnosis {
     id?: string;
     code: string;
     name: string;
     rate: string;
     rationale: string;
+    /** 本次诊疗中的临床角色；历史项和风险项不得进入诊断建议区。 */
+    clinicalRole?: 'current_diagnosis' | 'differential_cause' | 'risk_modifier' | 'history_only';
+    /** 病因性疾病，或暂时表达本次就诊问题的症状性工作诊断。 */
+    diagnosisKind?: 'disease' | 'symptom_working';
+    /** 诊断证据作用域，用于普通语音缓存恢复时保留历史门禁结果。 */
+    evidenceScope?: 'current_visit' | 'history_only' | 'both';
+    /** 支持该诊断的本次就诊证据摘要。 */
+    currentVisitEvidenceText?: string;
     /** 正式诊断建议或仅供补充信息后判断的待鉴别方向。 */
     suggestionType?: 'formal' | 'differential';
     /** 待鉴别方向仍需补充的问诊、查体或检查信息。 */
     missingInformation?: string;
     isTCM?: boolean; // 标记是否为中医诊断
     originalName?: string; // AI 原始推荐的诊断名称
+    /** 标准诊断库语义匹配状态；compatible 必须经医生确认后才能进入选择。 */
+    catalogMatchStatus?: DiagnosisCatalogMatchStatus;
+    /** compatible 状态下展示、但尚未绑定为可回写诊断的标准库候选。 */
+    suggestedMatchItem?: DiagnosisCatalogItem | null;
+    catalogMatchReason?: string;
+    /** 仅供医生手动替换时查看的相关候选，不参与自动选择。 */
+    catalogAlternatives?: DiagnosisCatalogItem[];
     // 中医辨证论治相关字段
     syndrome?: string; // 证候(如:风寒束表证)
     syndromeCode?: string;

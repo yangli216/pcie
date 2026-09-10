@@ -1,4 +1,7 @@
+import type { AppPatient } from '@/types/appState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildReportConsistencyContext } from '@features/report-interpretation/lib/reportConsistency';
+import type { ReportHistoryEntry } from '@features/report-interpretation/types';
 import type { ConsultationUserLogSnapshot } from './consultationUserLog';
 
 const mocks = vi.hoisted(() => ({
@@ -102,5 +105,41 @@ describe('report interpretation user log', () => {
     expect(payload.abnormalItems).toEqual([]);
     expect(payload.keyPoints.some((item) => item.urgency === 'high')).toBe(false);
     expect(payload.recommendations.join('；')).not.toContain('转急诊');
+  });
+});
+
+
+describe('report consistency integration', () => {
+  const a: ReportHistoryEntry = { id: 'a', patientId: 'p1', visitId: 'v1', visitTime: 0, taskId: 'inspectReport',
+    title: '血检', reportTime: '2026-09-09', diagnosisNames: [], available: true, isFollowUpSource: false,
+    sourceQuery: '指标A 12', labItems: [{ itemName: '指标A', result: '12', unit: 'U' }] };
+  const b: ReportHistoryEntry = { ...a, id: 'b', title: '检查', taskId: 'checkReport', sourceQuery: '检查所见', examFinding: '原始所见' };
+  const request = { requestId: 'r1', taskId: 'inspectReport' as const, reportKindLabel: '检验报告',
+    query: a.sourceQuery, patient: { patientId: 'p1' }, consistencyContext: buildReportConsistencyContext(a, [a, b], 'p1') };
+  it('uses one model call and separates real cross-report evidence from current abnormalities', async () => {
+    vi.clearAllMocks();
+    mocks.chat.mockResolvedValueOnce(JSON.stringify({ crossReportConsistency: { status: 'checked', conflicts: [{
+      title: '需核查', relationship: '关联', explanation: '冲突', evidenceIds: ['e1', 'e2'], possibleCauses: ['原因待核查'], suggestions: ['复核'],
+    }] } }));
+    const { buildReportInterpretationPayload } = await import('./reportInterpretation');
+    const result = await buildReportInterpretationPayload(request);
+    expect(mocks.chat).toHaveBeenCalledTimes(1);
+    const messages = mocks.chat.mock.calls[0]![0];
+    expect(messages[1].content).toContain('原始所见');
+    expect(result.sourceQuery).toBe(a.sourceQuery);
+    expect(result.crossReportConsistency?.status).toBe('conflicts');
+    expect(result.crossReportConsistency?.conflicts[0]?.evidence[0]?.result).toBe('12');
+  });
+  it('marks model failure as not assessed rather than no conflicts', async () => {
+    mocks.chat.mockRejectedValueOnce(new Error('offline'));
+    const { buildReportInterpretationPayload } = await import('./reportInterpretation');
+    expect((await buildReportInterpretationPayload(request)).crossReportConsistency?.status).toBe('not_assessed');
+  });
+  it('does not merge a different current patient into an explicit external patient', async () => {
+    const { resolveReportInterpretationRequest } = await import('./reportInterpretation');
+    const result = resolveReportInterpretationRequest({ taskId: 'inspectReport', query: '报告', patient: { patientId: 'p2' } },
+      { patientId: 'p1', visitId: 'v1', name: '旧患者', pastMedicalHistory: '旧病史' } as AppPatient);
+    expect(result.patient?.visitId).toBeUndefined();
+    expect(result.patient?.pastMedicalHistory).toBeUndefined();
   });
 });

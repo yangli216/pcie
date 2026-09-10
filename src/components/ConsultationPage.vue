@@ -1782,7 +1782,7 @@ const fetchAIDiagnosis = async (options?: { trackSmartConsultation?: boolean }) 
       buildDiagnosisRecommendationsFromRaw({
         rawDiagnoses,
         mode: consultationMode.value === 'tcm' ? 'tcm' : 'western',
-        matchDiagnosis: (query, context) => medicalDataService.matchDiagnosis(query, context),
+        assessDiagnosis: (query, context) => medicalDataService.assessDiagnosisMatch(query, context),
         matchTCMDiagnosis: (query) => medicalDataService.matchTCMDiagnosis(query),
         matchTCMSyndrome: (query) => medicalDataService.matchTCMSyndrome(query),
         matchTCMTreatment: (query) => medicalDataService.matchTCMTreatment(query),

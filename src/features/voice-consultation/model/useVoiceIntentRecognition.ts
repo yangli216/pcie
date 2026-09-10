@@ -40,6 +40,11 @@ import {
   sanitizeVoiceExtractionTreatmentSections,
 } from './voiceIntentStream';
 import { resolveExplicitTreatmentCatalogHints } from './explicitTreatmentCatalogResolver';
+import {
+  constrainOrdinaryVoiceWorkingDiagnosisPlan,
+  guardOrdinaryVoiceDiagnosisHints,
+  promoteOrdinaryVoiceSymptomWorkingDiagnosis,
+} from '../lib/ordinaryVoiceDiagnosisGuard';
 
 /** Mock 模式下缓存的意图识别结果，避免重复调用 LLM */
 let cachedTestModeTranscript = '';
@@ -168,6 +173,31 @@ function getHintSourceType(value: unknown): 'explicit' | 'inferred' | 'uncertain
   return 'explicit';
 }
 
+function getDiagnosisEvidenceScope(
+  value: unknown,
+): DiagnosisHint['evidenceScope'] {
+  if (value === 'current_visit' || value === 'history_only' || value === 'both') {
+    return value;
+  }
+
+  return undefined;
+}
+
+function getDiagnosisClinicalRole(value: unknown): DiagnosisHint['clinicalRole'] {
+  if (value === 'current_diagnosis'
+    || value === 'differential_cause'
+    || value === 'risk_modifier'
+    || value === 'history_only') {
+    return value;
+  }
+  return undefined;
+}
+
+function getDiagnosisKind(value: unknown): DiagnosisHint['diagnosisKind'] {
+  if (value === 'disease' || value === 'symptom_working') return value;
+  return undefined;
+}
+
 function composePastMedicalHistory(recordDraft: VoiceRecordDraft): string {
   const pastMedicalHistory = getText(recordDraft.pastMedicalHistory);
   if (!pastMedicalHistory || pastMedicalHistory === '无特殊') {
@@ -186,7 +216,11 @@ function normalizeDiagnosisHints(hints: DiagnosisHint[] | undefined): DiagnosisH
       ...hint,
       name: getText(hint?.name),
       code: getText(hint?.code),
+      clinicalRole: getDiagnosisClinicalRole(hint?.clinicalRole),
+      diagnosisKind: getDiagnosisKind(hint?.diagnosisKind),
       evidenceText: getText(hint?.evidenceText),
+      evidenceScope: getDiagnosisEvidenceScope(hint?.evidenceScope),
+      currentVisitEvidenceText: getText(hint?.currentVisitEvidenceText),
       sourceType: getHintSourceType(hint?.sourceType),
       rationale: getText(hint?.rationale),
       confidence: hint?.confidence === 'high' || hint?.confidence === 'medium' || hint?.confidence === 'low'
@@ -522,6 +556,33 @@ function validateVoiceExtractionPayload(payload: unknown): string[] {
       if (typeof (item as Record<string, unknown>).name !== 'string') {
         issues.push(`diagnosisHints[${index}].name 必须是 string`);
       }
+
+      const diagnosisItem = item as Record<string, unknown>;
+      const clinicalRole = diagnosisItem.clinicalRole;
+      if (typeof clinicalRole !== 'undefined'
+        && clinicalRole !== 'current_diagnosis'
+        && clinicalRole !== 'differential_cause'
+        && clinicalRole !== 'risk_modifier'
+        && clinicalRole !== 'history_only') {
+        issues.push(`diagnosisHints[${index}].clinicalRole 必须是 current_diagnosis、differential_cause、risk_modifier 或 history_only`);
+      }
+      const diagnosisKind = diagnosisItem.diagnosisKind;
+      if (typeof diagnosisKind !== 'undefined'
+        && diagnosisKind !== 'disease'
+        && diagnosisKind !== 'symptom_working') {
+        issues.push(`diagnosisHints[${index}].diagnosisKind 必须是 disease 或 symptom_working`);
+      }
+      const evidenceScope = diagnosisItem.evidenceScope;
+      if (typeof evidenceScope !== 'undefined'
+        && evidenceScope !== 'current_visit'
+        && evidenceScope !== 'history_only'
+        && evidenceScope !== 'both') {
+        issues.push(`diagnosisHints[${index}].evidenceScope 必须是 current_visit、history_only 或 both`);
+      }
+      if (typeof diagnosisItem.currentVisitEvidenceText !== 'undefined'
+        && typeof diagnosisItem.currentVisitEvidenceText !== 'string') {
+        issues.push(`diagnosisHints[${index}].currentVisitEvidenceText 必须是 string`);
+      }
     });
   }
 
@@ -688,7 +749,13 @@ export function useVoiceIntentRecognition() {
     matchedTreatments: MatchedTreatment[];
     segregatedTreatments: TreatmentSegregationResult;
   } {
-    const matchedDiagnoses = normalizedExtraction.diagnosisHints.map((hint) => matchDiagnosisHint(hint));
+    const matchedDiagnoses = promoteOrdinaryVoiceSymptomWorkingDiagnosis(
+      normalizedExtraction.diagnosisHints.map((hint) => matchDiagnosisHint(hint)),
+      {
+        chiefComplaint: normalizedExtraction.recordDraft.chiefComplaint,
+        historyOfPresentIllness: normalizedExtraction.recordDraft.historyOfPresentIllness,
+      },
+    );
     const matchedTreatments = (
       resolvedTreatments
       || normalizedExtraction.treatmentHints.map((hint) => matchTreatmentHint(hint))
@@ -705,7 +772,10 @@ export function useVoiceIntentRecognition() {
     const personalHistory = normalizedExtraction.recordDraft.personalHistory || '';
     const menstrualHistory = normalizedExtraction.recordDraft.menstrualHistory || '';
     const familyHistory = normalizedExtraction.recordDraft.familyHistory || '';
-    const plan = normalizedExtraction.recommendationPlan;
+    const plan = constrainOrdinaryVoiceWorkingDiagnosisPlan(
+      normalizedExtraction.recommendationPlan,
+      matchedDiagnoses,
+    );
     const autoFetchTreatments = plan.mode !== 'explicit_only' && plan.mode !== 'urgent_referral';
 
     const outpatientRecord = buildOutpatientRecord({
@@ -870,6 +940,17 @@ export function useVoiceIntentRecognition() {
         normalized.recordDraft.personalHistory ||= ctxPersonal;
         normalized.recordDraft.menstrualHistory ||= ctxMenstrual;
         normalized.recordDraft.familyHistory ||= ctxFamily;
+        normalized.diagnosisHints = guardOrdinaryVoiceDiagnosisHints(
+          normalized.diagnosisHints,
+          {
+            historicalContextText: [
+              ctxPmh,
+              composePastMedicalHistory(normalized.recordDraft),
+              memoryBlock,
+              normalizedText,
+            ].filter(Boolean).join('\n'),
+          },
+        );
         return normalized;
       };
 
@@ -879,7 +960,7 @@ export function useVoiceIntentRecognition() {
       ) as typeof PROMPTS.consultation.voiceIntentRecognition;
       const baseUserPrompt = recognitionPrompt.buildUserPrompt(text);
       const outputProtocolReminder = `
-【本次输出协议】请按 record_core、history_context、record_suggestions、diagnoses、recommendation_plan、explicit_orders、record_extra、done 的顺序逐行输出 NDJSON。record_suggestions 是带 AI 来源标记的候选而非已确认事实；explicit_orders 只能包含医生明确医嘱，每项 name 必须是非空字符串，type 必须是 medicine、examination、labTest、procedure 之一的字符串，没有明确医嘱时输出空数组；recommendation_plan 必须包含 mode、recommendNow、defer、skip、reason、resumeCondition、confidence。`;
+【本次输出协议】请按 record_core、history_context、record_suggestions、diagnoses、recommendation_plan、explicit_orders、record_extra、done 的顺序逐行输出 NDJSON。record_suggestions 是带 AI 来源标记的候选而非已确认事实；diagnoses 每项必须填写 clinicalRole、diagnosisKind 和 evidenceScope，current_visit/both 还必须填写仅来自本次就诊的 currentVisitEvidenceText。history_only/risk_modifier 不得进入诊断建议，不能解释本次主诉的糖尿病、贫血等历史共病也不得作为待鉴别；没有病因性正式诊断时，可返回至多一项本次明确且可匹配标准库的症状性工作诊断。explicit_orders 只能包含医生明确医嘱，每项 name 必须是非空字符串，type 必须是 medicine、examination、labTest、procedure 之一的字符串，没有明确医嘱时输出空数组；recommendation_plan 必须包含 mode、recommendNow、defer、skip、reason、resumeCondition、confidence。`;
       const userContent = `${baseUserPrompt}${patientContextBlock}${memoryBlock ? `\n${memoryBlock}` : ''}${outputProtocolReminder}`;
       const messages: ChatMessage[] = [
         { role: 'system', content: recognitionPrompt.system },
@@ -1043,14 +1124,16 @@ export function useVoiceIntentRecognition() {
   }
 
   function matchDiagnosisHint(hint: DiagnosisHint): MatchedDiagnosis {
-    let matchedItem: MatchedDiagnosis['matchedItem'] = null;
     const matchContext = hint.code ? { icdCode: hint.code } : undefined;
-    const matched = medicalDataService.matchDiagnosis(hint.name, matchContext)
-      || (hint.code ? medicalDataService.matchDiagnosis(hint.code) : null);
-    if (matched) {
-      matchedItem = { id: matched.id, code: matched.code, name: matched.name };
-    }
-    return { ...hint, matchedItem };
+    const assessment = medicalDataService.assessDiagnosisMatch(hint.name, matchContext);
+    return {
+      ...hint,
+      matchedItem: assessment.matchedItem,
+      suggestedMatchItem: assessment.suggestedMatchItem,
+      catalogMatchStatus: assessment.status,
+      catalogMatchReason: assessment.reason,
+      catalogAlternatives: assessment.alternatives,
+    };
   }
 
   function matchTreatmentHint(hint: TreatmentHint): MatchedTreatment {

@@ -94,24 +94,15 @@ export function calculateMedicineQuantity(
     || parsedSpec?.doseUnit
     || dosageUnit;
   const days = parsePositiveNumber(rec.days);
-  const unitSaleFactor = parsePositiveNumber(readFirstString(raw, ['unitSaleFactor']))
-    || parsedSpec?.unitSaleFactor
-    || null;
-  const frequencyValue = (rec.frequencyKey || rec.frequency || '').trim();
   const execCount = options.execCount
-    ?? inferExecCountFromFrequencyText(frequencyValue);
+    ?? inferExecCountFromFrequencyText(rec.frequency)
+    ?? inferExecCountFromFrequencyText(rec.frequencyKey);
   const doseCount = resolveDoseCountPerAdministration(
     dosage,
     dosageUnit,
     unitDose,
     unitDoseUnit,
   );
-  if (!days || !unitSaleFactor || !execCount || !doseCount || doseCount <= 0) return null;
-
-  const requiredBaseUnitCount = roundQuantity(doseCount * execCount * days);
-  const packageCount = Math.ceil(requiredBaseUnitCount / unitSaleFactor);
-  if (!Number.isFinite(packageCount) || packageCount <= 0) return null;
-
   const baseUnit = parsedSpec?.baseUnit
     || readFirstString(raw, ['unitPre'])
     || '制剂单位';
@@ -119,6 +110,20 @@ export function calculateMedicineQuantity(
     || parsedSpec?.saleUnit
     || (rec.totalUnit || '').trim()
     || '包装';
+  const isSplitDispensing = Boolean(saleUnit && baseUnit && saleUnit === baseUnit);
+  const rawUnitSaleFactor = parsePositiveNumber(readFirstString(raw, ['unitSaleFactor']))
+    || parsedSpec?.unitSaleFactor
+    || null;
+  const effectiveUnitSaleFactor = isSplitDispensing ? 1 : (rawUnitSaleFactor || null);
+
+  if (!days || !effectiveUnitSaleFactor || !execCount || !doseCount || doseCount <= 0) return null;
+
+  // 对标 PHIS CalcUtils.js: 周期总执行次数 Math.ceil(execCount * days) 向上取整（至少执行 1 次）
+  const totalExecCount = Math.ceil(execCount * days);
+  const requiredBaseUnitCount = roundQuantity(doseCount * totalExecCount);
+  const packageCount = Math.ceil(requiredBaseUnitCount / effectiveUnitSaleFactor);
+  if (!Number.isFinite(packageCount) || packageCount <= 0) return null;
+
   const currentPackageCount = parsePositiveNumber(rec.totalQty);
   const comparesPackageTotal = Boolean(
     currentPackageCount
@@ -130,9 +135,9 @@ export function calculateMedicineQuantity(
     execCountPerDay: roundQuantity(execCount),
     days,
     requiredBaseUnitCount,
-    unitSaleFactor,
+    unitSaleFactor: effectiveUnitSaleFactor,
     packageCount,
-    dispensedBaseUnitCount: roundQuantity(packageCount * unitSaleFactor),
+    dispensedBaseUnitCount: roundQuantity(packageCount * effectiveUnitSaleFactor),
     baseUnit,
     saleUnit,
     currentPackageCount,
@@ -166,10 +171,11 @@ export function resolveMedicineDispensingQuantity(
     || (rec.matchedItem as { spec?: string } | undefined)?.spec
     || readFirstString(raw, ['specSale', 'spec']);
   const parsedSpec = parsePackageSpec(spec || '');
-  const frequencyValue = (rec.frequencyKey || rec.frequency || '').trim();
   const execCount = options.execCount
-    ?? inferExecCountFromFrequencyText(frequencyValue);
+    ?? inferExecCountFromFrequencyText(rec.frequency)
+    ?? inferExecCountFromFrequencyText(rec.frequencyKey);
   if (execCount !== null) return null;
+  const frequencyValue = (rec.frequency || rec.frequencyKey || '').trim();
   const saleUnit = readFirstString(raw, ['unitSale'])
     || (rec.totalUnit || '').trim()
     || parsedSpec?.saleUnit
@@ -209,9 +215,12 @@ export function buildMedicineQuantityExplanation(
     `${formatQuantity(calculation.days)}天`,
   ].join(' × ');
   const requiredText = `${formula} = ${formatQuantity(calculation.requiredBaseUnitCount)}${calculation.baseUnit}`;
-  const packageText = calculation.dispensedBaseUnitCount === calculation.requiredBaseUnitCount
-    ? `${formatQuantity(calculation.unitSaleFactor)}${calculation.baseUnit}/${calculation.saleUnit}，共${formatQuantity(calculation.packageCount)}${calculation.saleUnit}`
-    : `${formatQuantity(calculation.unitSaleFactor)}${calculation.baseUnit}/${calculation.saleUnit}，需${formatQuantity(calculation.packageCount)}${calculation.saleUnit}（实际发${formatQuantity(calculation.dispensedBaseUnitCount)}${calculation.baseUnit}）`;
+  const isSplitPackageExplanation = calculation.saleUnit === calculation.baseUnit || calculation.unitSaleFactor === 1;
+  const packageText = isSplitPackageExplanation
+    ? `共${formatQuantity(calculation.packageCount)}${calculation.saleUnit}`
+    : calculation.dispensedBaseUnitCount === calculation.requiredBaseUnitCount
+      ? `${formatQuantity(calculation.unitSaleFactor)}${calculation.baseUnit}/${calculation.saleUnit}，共${formatQuantity(calculation.packageCount)}${calculation.saleUnit}`
+      : `${formatQuantity(calculation.unitSaleFactor)}${calculation.baseUnit}/${calculation.saleUnit}，需${formatQuantity(calculation.packageCount)}${calculation.saleUnit}（实际发${formatQuantity(calculation.dispensedBaseUnitCount)}${calculation.baseUnit}）`;
   if (calculation.totalConsistent === false && calculation.currentPackageCount) {
     return `${requiredText}；${packageText}。当前填写${formatQuantity(calculation.currentPackageCount)}${calculation.saleUnit}，请医生确认。`;
   }

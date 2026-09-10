@@ -28,6 +28,7 @@ function shouldBeDifferential(diagnosis: Diagnosis): boolean {
   if (diagnosis.suggestionType === 'differential') return true;
   const rate = parseDiagnosisMatchRate(diagnosis.rate);
   if (rate !== null && rate < 60) return true;
+  if (diagnosis.diagnosisKind === 'symptom_working') return false;
   if (/待排|待鉴别|需排除|不能确诊|证据不足|信息不足|需进一步|需补充|缺乏.*证据/u.test(
     `${diagnosis.name} ${diagnosis.rationale}`,
   )) return true;

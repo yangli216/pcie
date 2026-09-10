@@ -72,6 +72,10 @@ export interface ClinicalResultMatchedItem {
 
 export interface ClinicalResultMatchedDiagnosis extends DiagnosisHint {
   matchedItem?: { id: string; code: string; name: string } | null;
+  suggestedMatchItem?: Diagnosis['suggestedMatchItem'];
+  catalogMatchStatus?: Diagnosis['catalogMatchStatus'];
+  catalogMatchReason?: string;
+  catalogAlternatives?: Diagnosis['catalogAlternatives'];
 }
 
 export interface ClinicalResultMatchedTreatment extends TreatmentHint {

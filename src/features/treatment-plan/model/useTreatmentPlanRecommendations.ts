@@ -153,7 +153,7 @@ function buildDiagnosisFromText(text: string): Diagnosis | null {
       rate: 'HIS诊断',
       rationale: '来自当前 HIS 诊断草稿',
     }],
-    matchDiagnosis: (query, context) => medicalDataService.matchDiagnosis(query, context),
+    assessDiagnosis: (query, context) => medicalDataService.assessDiagnosisMatch(query, context),
     clearUnmatchedId: true,
   });
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import Icon from '@shared/ui/Icon.vue';
+import ReportConsistencyPanel from './ReportConsistencyPanel.vue';
 import type {
   ReportInterpretationAbnormalItem,
   ReportInterpretationWindowPayload,
@@ -118,6 +119,8 @@ function directionText(item: ReportInterpretationAbnormalItem): string {
         <p>{{ historyTextForDisplay }}</p>
       </div>
     </section>
+
+    <ReportConsistencyPanel v-if="payload.crossReportConsistency" :result="payload.crossReportConsistency" />
 
     <section
       class="summary-block"

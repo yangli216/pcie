@@ -61,6 +61,19 @@ describe('diagnosisSuggestionPresentation', () => {
     expect(sections.differential.map((item) => item.name)).not.toContain('医生转入诊断');
   });
 
+  it('keeps a validated symptom working diagnosis formal even when its rationale mentions further tests', () => {
+    const sections = buildDiagnosisSuggestionSections([
+      diagnosis('胸痛', '中置信', {
+        suggestionType: 'formal',
+        diagnosisKind: 'symptom_working',
+        rationale: '当前为症状性工作诊断，需进一步检查明确病因',
+      }),
+    ]);
+
+    expect(sections.formal.map((item) => item.name)).toEqual(['胸痛']);
+    expect(sections.differential).toEqual([]);
+  });
+
   it('parses numeric and textual confidence labels', () => {
     expect(parseDiagnosisMatchRate('匹配度 87%')).toBe(87);
     expect(parseDiagnosisMatchRate('高置信度')).toBe(80);

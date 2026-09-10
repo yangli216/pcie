@@ -31,6 +31,15 @@ export function useDiagnosisSelection(options: Options) {
     return getDiagnosisKey(selectedDiagnosis.value) === getDiagnosisKey(diag);
   }
 
+  function isDiagnosisSelectable(diag: Diagnosis): boolean {
+    return !(
+      diag.catalogMatchStatus === 'compatible'
+      || diag.catalogMatchStatus === 'ambiguous'
+      || diag.catalogMatchStatus === 'conflict'
+      || diag.catalogMatchStatus === 'unmatched'
+    );
+  }
+
   function setDiagnosisSelection(keys: Iterable<string>): void {
     selectedDiagnosisKeys.value = new Set(Array.from(keys).filter(Boolean));
   }
@@ -56,17 +65,22 @@ export function useDiagnosisSelection(options: Options) {
   }
 
   function replaceDiagnosisSelection(diags: Diagnosis[], primary?: Diagnosis | null): void {
-    setDiagnosisSelection(diags.map((diag) => getDiagnosisKey(diag)));
-    syncPrimaryDiagnosis(primary || diags[0] || null);
+    const selectableDiagnoses = diags.filter(isDiagnosisSelectable);
+    const selectablePrimary = primary && isDiagnosisSelectable(primary) ? primary : null;
+    setDiagnosisSelection(selectableDiagnoses.map((diag) => getDiagnosisKey(diag)));
+    syncPrimaryDiagnosis(selectablePrimary || selectableDiagnoses[0] || null);
   }
 
   function replaceInitialDiagnosisSelection(
     diags: Diagnosis[],
     selectAllFormalDiagnoses = false,
   ): void {
-    const primary = diags.find((diag) => getStandardDiagnosisId(diag)) || diags[0] || null;
+    const selectableDiagnoses = diags.filter(isDiagnosisSelectable);
+    const primary = selectableDiagnoses.find((diag) => getStandardDiagnosisId(diag))
+      || selectableDiagnoses[0]
+      || null;
     replaceDiagnosisSelection(
-      selectAllFormalDiagnoses ? diags : (primary ? [primary] : []),
+      selectAllFormalDiagnoses ? selectableDiagnoses : (primary ? [primary] : []),
       primary,
     );
   }
@@ -82,6 +96,20 @@ export function useDiagnosisSelection(options: Options) {
     }
 
     if (!isDiagnosisSelected(diag)) {
+      if (diag.catalogMatchStatus === 'compatible') {
+        const suggested = diag.suggestedMatchItem;
+        if (!suggested?.id) {
+          return;
+        }
+        diag.id = suggested.id;
+        diag.code = suggested.code;
+        diag.name = suggested.name;
+        diag.catalogMatchStatus = 'confirmed';
+        diag.catalogMatchReason = '医生已确认标准库近似项';
+      }
+      if (!isDiagnosisSelectable(diag)) {
+        return;
+      }
       const nextKeys = new Set(selectedDiagnosisKeys.value);
       nextKeys.add(getDiagnosisKey(diag));
       setDiagnosisSelection(nextKeys);
@@ -95,6 +123,9 @@ export function useDiagnosisSelection(options: Options) {
   }
 
   function setPrimaryDiagnosis(diag: Diagnosis): void {
+    if (!isDiagnosisSelectable(diag)) {
+      return;
+    }
     if (!isDiagnosisSelected(diag)) {
       const nextKeys = new Set(selectedDiagnosisKeys.value);
       nextKeys.add(getDiagnosisKey(diag));

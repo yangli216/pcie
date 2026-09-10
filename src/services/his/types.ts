@@ -308,6 +308,8 @@ export interface HisPatientInfo {
   idNo?: string;
   mobilePhone?: string;
   insuranceType?: string;
+  /** 当前是否存在可用于慢病长处方的有效签约；未知时省略。 */
+  signed?: boolean;
   /** 厂商透传 */
   raw?: Record<string, unknown>;
 }

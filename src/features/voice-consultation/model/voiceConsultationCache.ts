@@ -51,7 +51,8 @@ export interface VoiceEditorSnapshot {
   updatedAt?: number;
 }
 
-const VOICE_CONSULTATION_CACHE_PREFIX = 'VOICE_CONSULTATION_CACHE_V1';
+// V3 起历史/风险共病退出诊断建议，并保留症状性工作诊断角色。不恢复 V1/V2，避免旧快照重新带回。
+const VOICE_CONSULTATION_CACHE_PREFIX = 'VOICE_CONSULTATION_CACHE_V3';
 
 export function resolveVoiceConsultationId(patient: AppPatient | null | undefined): string {
   return getPatientContextAnchorId(patient) || 'unknown';

@@ -5,6 +5,11 @@ export { default as VoiceResultHeader } from './ui/VoiceResultHeader.vue';
 export { default as VoiceRigidBlockBanner } from './ui/VoiceRigidBlockBanner.vue';
 export { default as VoiceSafetyReviewPanel } from './ui/VoiceSafetyReviewPanel.vue';
 export { default as VoiceSessionFeedbackBar } from './ui/VoiceSessionFeedbackBar.vue';
+export {
+  constrainOrdinaryVoiceWorkingDiagnosisPlan,
+  guardOrdinaryVoiceDiagnosisHints,
+  promoteOrdinaryVoiceSymptomWorkingDiagnosis,
+} from './lib/ordinaryVoiceDiagnosisGuard';
 export { useVoiceEditorSnapshotPersistence } from './model/useVoiceEditorSnapshotPersistence';
 export { useVoiceFeedbackActions } from './model/useVoiceFeedbackActions';
 export { useVoiceCatalogMatching } from './model/useVoiceCatalogMatching';

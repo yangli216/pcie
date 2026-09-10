@@ -40,6 +40,8 @@ export interface PatientContext {
   demographics: PatientContextDemographics;
   clinical: PatientContextClinical;
   receptionEnsured?: boolean;
+  /** HIS 明确返回的当前签约状态；未返回时保持 undefined。 */
+  signed?: boolean;
   source?: string;
   raw?: Record<string, unknown>;
 

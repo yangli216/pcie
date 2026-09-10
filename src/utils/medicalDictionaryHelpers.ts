@@ -35,39 +35,138 @@ export function parsePositiveNumber(value: unknown): number | null {
   return null;
 }
 
-export function inferExecCountFromFrequencyText(text: string): number | null {
+const CHINESE_NUMBER_MAP: Record<string, number> = {
+  '一': 1,
+  '二': 2,
+  '两': 2,
+  '三': 3,
+  '四': 4,
+  '五': 5,
+  '六': 6,
+  '七': 7,
+  '八': 8,
+  '九': 9,
+  '十': 10,
+};
+
+function parseCountFromMatch(value: string): number | null {
+  const trimmed = value.trim();
+  const num = parsePositiveNumber(trimmed);
+  if (num !== null) return num;
+  return CHINESE_NUMBER_MAP[trimmed] ?? null;
+}
+
+/**
+ * 参考 PHIS CalcUtils.js 的 calcFreqDayExec 计算频次日均执行次数
+ *
+ * PHIS 计算规则：
+ * - sdFreqCycle:
+ *   - '1' (星期): execCount / (parseInt(gapCycle) * 7)
+ *   - '3' (小时): execCount * (24 / gapCycle)
+ *   - 其他 (天): execCount / gapCycle
+ */
+export function calcFreqDayExec(freq?: { properties?: Record<string, unknown> } | null): number | null {
+  if (!freq?.properties || typeof freq.properties !== 'object') {
+    return null;
+  }
+  const properties = freq.properties;
+  const sdFreqCycle = String(properties['sdFreqCycle'] ?? '').trim();
+  const gapCycle = parsePositiveNumber(properties['gapCycle']) ?? 1;
+  const execCount = parsePositiveNumber(properties['execCount']);
+  if (execCount === null) {
+    return null;
+  }
+
+  if (sdFreqCycle === '1') {
+    return execCount / (gapCycle * 7);
+  } else if (sdFreqCycle === '3') {
+    return execCount * (24 / gapCycle);
+  } else {
+    return execCount / gapCycle;
+  }
+}
+
+export function inferExecCountFromFrequencyText(text?: string | null): number | null {
+  if (!text) return null;
   const normalizedText = text.trim().toLowerCase();
   if (!normalizedText) {
     return null;
   }
 
-  if (normalizedText === 'qd' || normalizedText.includes('每天一次') || normalizedText.includes('每日一次')) {
+  // 1. 常见西医拉丁缩写（使用词边界或非字母字符隔开，兼容 (QHS)、(TID) 等形式）
+  if (/(?:^|[^\w])(qhs|qn|qam|qpm|qm|qd)(?:[^\w]|$)/i.test(normalizedText)) {
     return 1;
   }
-  if (normalizedText === 'bid' || normalizedText.includes('每天两次') || normalizedText.includes('每日两次')) {
+  if (/(?:^|[^\w])bid(?:[^\w]|$)/i.test(normalizedText)) {
     return 2;
   }
-  if (normalizedText === 'tid' || normalizedText.includes('每天三次') || normalizedText.includes('每日三次')) {
+  if (/(?:^|[^\w])tid(?:[^\w]|$)/i.test(normalizedText)) {
     return 3;
   }
-  if (normalizedText === 'qid' || normalizedText.includes('每天四次') || normalizedText.includes('每日四次')) {
+  if (/(?:^|[^\w])qid(?:[^\w]|$)/i.test(normalizedText)) {
     return 4;
   }
-  if (normalizedText.includes('隔日一次')) {
+  if (/(?:^|[^\w])qod(?:[^\w]|$)/i.test(normalizedText)) {
     return 0.5;
   }
-
-  const timesPerDayMatch = normalizedText.match(/每[日天]\D*(\d+(?:\.\d+)?)\D*次/);
-  if (timesPerDayMatch?.[1]) {
-    return parsePositiveNumber(timesPerDayMatch[1]);
+  if (/(?:^|[^\w])qw(?:[^\w]|$)/i.test(normalizedText)) {
+    return 1 / 7;
+  }
+  if (/(?:^|[^\w])biw(?:[^\w]|$)/i.test(normalizedText)) {
+    return 2 / 7;
+  }
+  if (/(?:^|[^\w])tiw(?:[^\w]|$)/i.test(normalizedText)) {
+    return 3 / 7;
   }
 
-  const intervalMatch = normalizedText.match(/q(\d+(?:\.\d+)?)h/);
+  // 小时频次：如 q12h, q8h, q6h, q4h, 每12小时一次
+  const intervalMatch = normalizedText.match(/(?:^|[^\w])q(\d+(?:\.\d+)?)h(?:[^\w]|$)/i)
+    || normalizedText.match(/每\s*(\d+(?:\.\d+)?)\s*小时/);
   if (intervalMatch?.[1]) {
     const hours = parsePositiveNumber(intervalMatch[1]);
     if (hours) {
       return 24 / hours;
     }
+  }
+
+  // 2. 常见特定临床语义词（睡前、每晚、晨服、空腹、隔日、每周等）
+  if (
+    normalizedText.includes('睡前')
+    || normalizedText.includes('每晚')
+    || normalizedText.includes('晨服')
+    || normalizedText.includes('早晨一次')
+    || normalizedText.includes('早晨1次')
+    || normalizedText.includes('空腹一次')
+    || normalizedText.includes('空腹1次')
+  ) {
+    return 1;
+  }
+  if (normalizedText.includes('隔日一次') || normalizedText.includes('隔天一次')) {
+    return 0.5;
+  }
+  if (normalizedText.includes('每周一次') || normalizedText.includes('1周1次') || normalizedText.includes('一周一次')) {
+    return 1 / 7;
+  }
+  if (normalizedText.includes('每周两次') || normalizedText.includes('1周2次') || normalizedText.includes('一周两次')) {
+    return 2 / 7;
+  }
+  if (normalizedText.includes('每周三次') || normalizedText.includes('1周3次') || normalizedText.includes('一周三次')) {
+    return 3 / 7;
+  }
+
+  // 3. 通用“天/日”频次正则匹配（支持汉字数字与阿拉伯数字，兼容“一天”、“每天”、“每日”、“每昼夜”）
+  // 模式 A: [每|一|1][日|天]\D*([0-9]+|[一二两三四五六七八九十])\D*次
+  const timesPerDayMatchA = normalizedText.match(/(?:每|一|1)\s*[日天昼夜]\D*([1-9]\d*|[一二两三四五六七八九十])\D*次/);
+  if (timesPerDayMatchA?.[1]) {
+    const count = parseCountFromMatch(timesPerDayMatchA[1]);
+    if (count !== null) return count;
+  }
+
+  // 模式 B: ([0-9]+|[一二两三四五六七八九十])\D*次\D*(?:每|一|1)[日天昼夜]
+  const timesPerDayMatchB = normalizedText.match(/([1-9]\d*|[一二两三四五六七八九十])\D*次\D*(?:每|一|1)\s*[日天昼夜]/);
+  if (timesPerDayMatchB?.[1]) {
+    const count = parseCountFromMatch(timesPerDayMatchB[1]);
+    if (count !== null) return count;
   }
 
   return null;
@@ -91,7 +190,12 @@ export function createUsageOption(item: {
   const wb = (item.wb || '').trim();
   const mcode = (item.mcode || '').trim();
   const key = (item.key || text).trim();
-  const execCount = parsePositiveNumber(item.execCount ?? item.properties?.execCount) ?? inferExecCountFromFrequencyText(text) ?? undefined;
+  const dayExec = calcFreqDayExec(item);
+  const execCount = dayExec
+    ?? parsePositiveNumber(item.execCount)
+    ?? inferExecCountFromFrequencyText(text)
+    ?? inferExecCountFromFrequencyText(key)
+    ?? undefined;
 
   return {
     key,

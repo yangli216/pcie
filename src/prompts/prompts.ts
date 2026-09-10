@@ -174,8 +174,16 @@ export interface DiagnosisHint {
   name: string;
   /** ICD-10 编码（如模型可分析得到） */
   code?: string;
+  /** 本次诊疗中的临床角色；历史项和风险项不会进入诊断建议区。 */
+  clinicalRole?: 'current_diagnosis' | 'differential_cause' | 'risk_modifier' | 'history_only';
+  /** 病因性疾病，或暂时表达本次就诊问题的症状性工作诊断。 */
+  diagnosisKind?: 'disease' | 'symptom_working';
   /** 诊断依据片段 */
   evidenceText?: string;
+  /** 证据作用域：本次就诊、仅历史上下文，或两者兼有。 */
+  evidenceScope?: 'current_visit' | 'history_only' | 'both';
+  /** 仅摘录支持该诊断的本次主诉、现病史、查体、检查或医生当次判断。 */
+  currentVisitEvidenceText?: string;
   /** 信息来源 */
   sourceType?: HintSourceType;
   /** 诊断说明 */
@@ -389,7 +397,7 @@ export const VoiceIntentRecognitionStreamPrompt = {
 {"event":"record_core","data":{"chiefComplaint":"主要症状+持续时间","historyOfPresentIllness":"2-4句紧凑现病史","symptoms":[],"negativeSymptoms":[]}}
 {"event":"history_context","data":{"pastMedicalHistory":"","allergyHistory":"","currentMedicationHistory":"","personalHistory":"","menstrualHistory":""}}
 {"event":"record_suggestions","data":[{"field":"historyOfPresentIllness|pastMedicalHistory|personalHistory|familyHistory|physicalExam","question":"医生需核查的问题","negativeRecordText":"确认后可直接书写的规范阴性或正常表述","rationale":"相关性","priority":"critical|general"}]}
-{"event":"diagnoses","data":[{"name":"标准疾病诊断","code":"","evidenceText":"病例依据","sourceType":"explicit|inferred|uncertain","rationale":"推荐理由","confidence":"high|medium|low","suggestionType":"formal|differential","missingInformation":""}]}
+{"event":"diagnoses","data":[{"name":"标准疾病或症状名称","code":"","clinicalRole":"current_diagnosis|differential_cause|risk_modifier|history_only","diagnosisKind":"disease|symptom_working","evidenceText":"完整病例依据","evidenceScope":"current_visit|history_only|both","currentVisitEvidenceText":"仅本次就诊证据","sourceType":"explicit|inferred|uncertain","rationale":"推荐理由","confidence":"high|medium|low","suggestionType":"formal|differential","missingInformation":""}]}
 {"event":"recommendation_plan","data":{"mode":"diagnostic_first|treatment_first|parallel|explicit_only|urgent_referral","recommendNow":["medicine|exam|lab_test"],"defer":[],"skip":[],"reason":"路由依据","resumeCondition":"report_available|doctor_request|","confidence":"high|medium|low"}}
 {"event":"explicit_orders","data":[]}
 {"event":"record_extra","data":{"familyHistory":"","physicalExam":"","treatmentPlan":"","healthEducation":""}}
@@ -403,14 +411,16 @@ export const VoiceIntentRecognitionStreamPrompt = {
 5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。最多 8 项，只输出与当前病例/正式诊断相关的必要阴性问诊或正常查体表述；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
 
 诊断规则：
-6. 正式诊断最多 3 项，按匹配度排序，不凑数；第一条 formal 为主诊断。仅可能、待排除或仍需补问/查体/检查者必须为 differential 并填写 missingInformation，排在 formal 后。
-7. name 使用标准疾病诊断，不得用症状代替；保留明确解剖部位与侧别。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
+6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
+7. 仅表示既往共病、长期风险或用药背景而不能解释本次主诉的项目使用 history_only 或 risk_modifier，并且不要输出到 diagnoses；高血压、糖尿病、贫血等不得仅因历史已确诊就成为正式诊断或待鉴别。待鉴别必须是本次主诉的可能病因，不是慢病清单或风险因素清单。
+8. 每条输出诊断必须填写 evidenceScope。只有本次主诉、现病史、查体、检验检查结果或医生本次明确判断支持时，才可使用 current_visit 或 both，且 currentVisitEvidenceText 必须非空并只摘录这些本次证据。仅由 HIS 既往史、长期记忆、历史诊断或长期用药支持时不得输出；不得因历史已确诊而标为 high。
+9. 优先输出标准疾病诊断并保留明确解剖部位与侧别。若当前证据不足以形成任何病因性 formal，但本次存在明确肯定、未被否认且无自相矛盾的症状/体征，可最多输出一项标准症状名称作为 current_diagnosis+symptom_working+formal；其 code 尽量使用标准 R 类编码，confidence 仅限 high/medium。此时 recommendation_plan 使用 diagnostic_first，只推荐 exam/lab_test，不推荐 medicine。低置信、未明确、仅历史出现或否定/矛盾症状不得作为工作诊断。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
 
 医嘱与路由规则：
-8. explicit_orders 只提取医生本次明确决定开立、继续或调整的项目，sourceType=explicit。每项必须是对象，name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；禁止把 type 输出为数组或对象。没有明确医嘱时输出空数组。患者既往/自行服药只进入 currentMedicationHistory；条件性方案进入 treatmentPlan，并在 recommendation_plan 中 defer。
-9. 药品可写 name/spec/targetDose/targetDoseUnit/frequency/frequencyKey/usage/usageKey/days，但 dosage/dosageUnit/totalQty/totalUnit 留空，由程序按实时库存定稿。检查和检验写规范名称、常用 aliases、证据及目的。组合项目拆开。
-10. 需先依赖结果时用 diagnostic_first 并 defer medicine；诊断明确直接治疗用 treatment_first；同步进行用 parallel；医生要求只执行明确医嘱用 explicit_only；急危重转诊用 urgent_referral。只有高置信才用 defer/skip 抑制类型，低置信使用 parallel。
-11. 非医疗内容或转写无法理解时，仍按事件顺序输出空分区，最后 done.error=true 并给出简短 message。其余缺失字符串用空串、数组用空数组。`,
+10. explicit_orders 只提取医生本次明确决定开立、继续或调整的项目，sourceType=explicit。每项必须是对象，name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；禁止把 type 输出为数组或对象。没有明确医嘱时输出空数组。患者既往/自行服药只进入 currentMedicationHistory；条件性方案进入 treatmentPlan，并在 recommendation_plan 中 defer。
+11. 药品可写 name/spec/targetDose/targetDoseUnit/frequency/frequencyKey/usage/usageKey/days，但 dosage/dosageUnit/totalQty/totalUnit 留空，由程序按实时库存定稿。检查和检验写规范名称、常用 aliases、证据及目的。组合项目拆开。
+12. 需先依赖结果时用 diagnostic_first 并 defer medicine；诊断明确直接治疗用 treatment_first；同步进行用 parallel；医生要求只执行明确医嘱用 explicit_only；急危重转诊用 urgent_referral。只有高置信才用 defer/skip 抑制类型，低置信使用 parallel。
+13. 非医疗内容或转写无法理解时，仍按事件顺序输出空分区，最后 done.error=true 并给出简短 message。其余缺失字符串用空串、数组用空数组。`,
 
   buildUserPrompt(transcribedText: string): string {
     return `医患对话内容：\n${transcribedText}`;
@@ -459,7 +469,8 @@ export const VoiceIntentRepairPrompt = {
 6. error 必须是 boolean；如果原始输出明确表达“非医疗内容”或“无法识别”，才设置为 true。
 7. 对 diagnosisHints 和 explicitTreatmentHints 中的每一项：
    - explicitTreatmentHints 的 name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；无法确认时删除该条，不得把 type 输出为数组或对象
-   - 能保留的 evidenceText、sourceType、goal、targetDose、targetDoseUnit、frequency、frequencyKey、usage、usageKey、days 都尽量保留
+   - 诊断项能保留的 clinicalRole、diagnosisKind、evidenceText、evidenceScope、currentVisitEvidenceText、sourceType 都尽量保留；不得把历史/风险角色改写为当前诊断，也不得把仅历史依据改写成本次就诊证据
+   - 医嘱项能保留的 evidenceText、sourceType、goal、targetDose、targetDoseUnit、frequency、frequencyKey、usage、usageKey、days 都尽量保留
    - 药品 dosage、dosageUnit、totalQty、totalUnit 必须清空，后续由程序结合库存药品详情生成
    - 如果没有足够信息，不要编造，保留空字符串或空数组
 8. 只做结构修复，不改变原始结论倾向。`,
@@ -2205,8 +2216,8 @@ export const MedicalRecordCheckPrompt = {
 export const PROMPT_VERSION = {
   medicalRecordGeneration: 'v1.0',
   voiceIntentRecognition: 'v3.0',
-  voiceIntentRecognitionStream: 'v1.1',
-  voiceIntentRepair: 'v1.1',
+  voiceIntentRecognitionStream: 'v1.3',
+  voiceIntentRepair: 'v1.3',
   riskAnalysis: 'v1.0',
   diagnosisRecommendation: 'v1.0',
   diagnosisPathReasoning: 'v1.0',

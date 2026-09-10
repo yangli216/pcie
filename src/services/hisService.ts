@@ -28,6 +28,7 @@ import type {
   HisOutpatientFollowUpReportResults,
   HisOutpatientFollowUpReportResultsQuery,
 } from './his/types';
+import { resolvePhisMedicineServiceCode } from './his/phisMedicineServiceCode';
 
 /**
  * HIS 服务响应基础结构
@@ -575,6 +576,7 @@ const HIS_CATALOG_ENDPOINTS = {
   availableMedicineInventory: 'api/phis.aiAdapterService/queryInvSubList',
   medicineInventoryCheck: 'api/phis.aiAdapterService/checkInvEnough',
   patientSearchByIdPi: 'api/phis.aiAdapterService/searchByIdPi',
+  patientSearchByIdPiMB: 'api/phis.aiAdapterService/searchByIdPiMB',
   patientAllergy: 'api/phis.aiAdapterService/queryHisAllergy',
   patientVisitHistory: 'api/phis.aiAdapterService/queryVisitHistory',
   patientVisitDetail: 'api/phis.aiAdapterService/loadClinicMedicalRecord',
@@ -952,7 +954,10 @@ export class HisService {
           storeIds: idSto ? [idSto] : [],
           idSrv: item.idMedPro?.trim() || item.idMed?.trim() || id,
           naSrv: name,
-          sdSrv: item.sdSrv?.trim() || '11',
+          sdSrv: resolvePhisMedicineServiceCode({
+            sdMed: item.sdMed,
+            sdSrv: item.sdSrv,
+          }) || '11',
           idDeptExec: item.idDeptExec?.trim() || '',
           fgCheckOrd: item.fgCheckOrd?.trim() || '1',
           fgSkintest: item.fgSkintest?.trim() || '0',
@@ -1186,6 +1191,25 @@ export class HisService {
       [normalizedIdPi]
     );
     this.assertBusinessSuccess(HIS_CATALOG_ENDPOINTS.patientSearchByIdPi, response);
+
+    return response.body ?? response.data ?? null;
+  }
+
+  /**
+   * 根据 idPi 查询包含慢病签约判定的患者信息。
+   * PHIS 的 searchByIdPiMB 会按慢病开关、外部签约接口或 v_mbyth_qyxx 计算 qyzt。
+   */
+  async searchPatientByIdPiMB(idPi: string): Promise<HisPatientDetailBody | null> {
+    const normalizedIdPi = idPi.trim();
+    if (!normalizedIdPi) {
+      return null;
+    }
+
+    const response = await this.post<HisPatientDetailBody>(
+      HIS_CATALOG_ENDPOINTS.patientSearchByIdPiMB,
+      [normalizedIdPi]
+    );
+    this.assertBusinessSuccess(HIS_CATALOG_ENDPOINTS.patientSearchByIdPiMB, response);
 
     return response.body ?? response.data ?? null;
   }
