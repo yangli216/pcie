@@ -1,6 +1,6 @@
 [package]
 name = "pcie"
-version = "1.4.5"
+version = "1.4.6"
 description = "Primary Care Intelligent Expert desktop workstation for primary care clinicians"
 authors = ["PCIE Team"]
 repository = "https://github.com/yangli216/pcie"

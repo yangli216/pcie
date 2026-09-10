@@ -1,7 +1,7 @@
 {
   "name": "pcie",
   "private": true,
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "全医慧助（PCIE）— Primary Care Intelligent Expert，面向基层医疗机构的桌面端智能全科专家工作站。",
   "repository": {
     "type": "git",
