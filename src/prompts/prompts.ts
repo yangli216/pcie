@@ -1,3 +1,4 @@
+import { PHYSICAL_EXAM_GUIDANCE_PROMPT } from '../features/clinical-result/lib/physicalExamGuidance';
 /**
  * 集中管理所有 LLM Prompts
  *
@@ -408,7 +409,9 @@ export const VoiceIntentRecognitionStreamPrompt = {
 2. negativeSymptoms 只写症状名，不带“否认/无”。各病史字段只写临床正文，不写“未提及、待补充、建议询问、信息不足”等过程提示。
 3. 对话和既有档案没有明确事实时，过敏、长期用药、个人史、月经史、家族史留空；不得把未采集改写成阴性。既有档案未被本次明确修订时保留。既往史只写长期健康事实，不写门诊流水；个人史、家族史分别归类。月经史只用于女性且不得推断。
 4. physicalExam 只写明确查体与生命体征，T/P/R/BP 数值原样保留，不得臆造。healthEducation 必须针对当前病例，避免“多休息、多喝水”等空泛套话。
-5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。最多 8 项，只输出与当前病例/正式诊断相关的必要阴性问诊或正常查体表述；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
+5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。非查体最多 8 项，查体独立最多 24 个紧凑项目，只输出与当前病例/正式诊断相关的必要阴性问诊或正常查体表述；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
+
+${PHYSICAL_EXAM_GUIDANCE_PROMPT}
 
 诊断规则：
 6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
@@ -1116,7 +1119,7 @@ ${params.availableMedicineInventory ? `${params.availableMedicineInventory}
 
 ` : ''}
 **任务要求：**
-1. 推荐3-5个药品，严格按“库存同品 → 库存等效药 → 规范通用名兜底”的顺序选择
+1. 只推荐当前病情和已有依据支持的必要药品，允许少量或零药品，不为满足数量凑药；严格按“库存同品 → 库存等效药 → 规范通用名兜底”的顺序选择
 2. 库存命中药品的名称和规格必须与目录保持一致；只有无同品且无等效药时才返回规范通用名，不得使用商品名
 3. 用法用量必须规范，符合说明书和指南要求
 4. 如需抗生素，说明使用指征和注意事项

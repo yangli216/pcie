@@ -102,6 +102,13 @@ describe('assessChronicRefillCandidate', () => {
     expect(scoped?.evidenceText).not.toContain('糖尿病');
     expect(scoped?.medications).not.toContain('盐酸二甲双胍片');
     expect(scoped?.prescriptionHistoryVisits).toHaveLength(2);
+    expect(scoped?.historicalDiagnoses).toEqual(['高血压病', '2型糖尿病']);
+    expect(scopeChronicRefillCandidate(scoped!, ['高血压'])?.historicalDiagnoses)
+      .toEqual(['高血压病', '2型糖尿病']);
+    const diabetesOnly = scopeChronicRefillCandidate(candidate!, ['糖尿病']);
+    expect(diabetesOnly?.diagnoses).toEqual(['2型糖尿病']);
+    expect(diabetesOnly?.historicalDiagnoses).toEqual(['高血压病', '2型糖尿病']);
+    expect(candidate?.diagnoses).toEqual(['高血压病', '2型糖尿病']);
   });
 
   it('does not inherit an ambiguous mixed prescription when only part of that visit conditions are selected', () => {

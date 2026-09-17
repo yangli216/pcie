@@ -14,6 +14,12 @@
 
 ## 快速导航
 
+医生主动继续用药推荐：`features/consultation-result/model/useCurrentInformationMedication.ts`（局部控制器）+ `ui/CurrentInformationMedication.vue`（入口与说明）+ `features/clinical-result/currentInformationMedication.ts`（请求/响应及合并纯规则）；复用 `voiceTreatmentRecommendationGeneration.ts` 的药品分支和共享药品定稿。
+
+慢病配药既往史：`chronicRefillAssessment.ts` 的 `historicalDiagnoses` 保留范围筛选前的完整历史慢病；`chronicRefillRecord.ts` 合并 HIS 病史并通过 `historyRecordTemplates.ts` 生成首屏、流式和最终结果共用的既往史，已选诊断和处方范围独立。
+
+注意事项默认复诊时限：`features/clinical-result/precautionsFollowUp.ts`（纯规则）由 `outpatientRecord.ts`、`useClinicalResultIntentReset.ts` 和结果页生成基线共用；普通诊疗 3 天，慢病定期复查 1 个月，保留明确周期与紧急建议，回写阶段不改医生正文。
+
 慢病回写签约判定：PHIS `searchByIdPiMB` -> HIS Adapter 中性 `signed` -> `recordConfirmedPayload.ts`；仅明确签约的慢病复诊含药回写携带 `prescriptionAttributes.chronicLongTerm`，未签约或未知状态按普通处方处理。
 
 | 我要做什么 | 该读哪里 |
@@ -464,3 +470,5 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 6. **静态资源增减**
 
 > 参考 [AGENTS.md 文档更新矩阵](./AGENTS.md) 中的完整更新规则。
+
+场景查体优化：`features/clinical-result/lib/physicalExamGuidance.ts`（基础项目库、场景匹配、候选补齐/冲突规则及共享 Prompt），`lib/physicalExamMeasurements.ts`（体测正文槽位），`clinicalRecordAnnotation.ts`（AI 查体与临床证据隔离）。入口为语音映射、共享候选 controller、慢病同次流；不修改 ConsultationPage.vue。

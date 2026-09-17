@@ -4,6 +4,7 @@ export interface ClinicalResultPrecautionsScopeOptions {
   precautions: Ref<string>;
   buildScopedPrecautions: (diagnosisNames: readonly string[]) => string;
   setSystemBaseline?: (value: string) => void;
+  completeGeneratedPrecautions?: (value: string, diagnosisNames: readonly string[]) => string;
 }
 
 export interface ClinicalResultPrecautionsScopeSyncResult {
@@ -45,8 +46,8 @@ export function useClinicalResultPrecautionsScope(
     value: string = options.precautions.value,
   ): void {
     sourceScopeKey.value = buildScopeKey(diagnosisNames);
-    sourcePrecautions.value = value;
-    applySystemValue(value);
+    sourcePrecautions.value = options.completeGeneratedPrecautions?.(value, diagnosisNames) ?? value;
+    applySystemValue(sourcePrecautions.value);
   }
 
   /**
@@ -74,9 +75,10 @@ export function useClinicalResultPrecautionsScope(
 
     const selectedNames = normalizeDiagnosisNames(diagnosisNames);
     const selectedScopeKey = buildScopeKey(selectedNames);
-    const nextValue = selectedScopeKey === sourceScopeKey.value
+    const scopedValue = selectedScopeKey === sourceScopeKey.value
       ? sourcePrecautions.value
       : options.buildScopedPrecautions(selectedNames);
+    const nextValue = options.completeGeneratedPrecautions?.(scopedValue, selectedNames) ?? scopedValue;
     const updated = applySystemValue(nextValue);
 
     return {

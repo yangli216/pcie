@@ -40,10 +40,10 @@ describe('useClinicalResultIntentReset', () => {
       diagnoses: [{ name: '糖尿病' }],
     });
 
-    expect(precautions.value).toBe('按医嘱规律服药并监测血糖；出现低血糖不适时及时复诊。');
+    expect(precautions.value).toBe('建议1个月内复诊，复查相关指标。按医嘱规律服药并监测血糖；出现低血糖不适时及时复诊。');
     expect(menstrualHistory.value).toBe('周期28天，经期5天。');
     expect(setInitialRecordSnapshot).toHaveBeenCalledWith(expect.objectContaining({
-      precautions: '按医嘱规律服药并监测血糖；出现低血糖不适时及时复诊。',
+      precautions: '建议1个月内复诊，复查相关指标。按医嘱规律服药并监测血糖；出现低血糖不适时及时复诊。',
     }));
   });
 });

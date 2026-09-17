@@ -10,6 +10,7 @@ import { useClinicalRecordFactConfirmation } from './useClinicalRecordFactConfir
 function createController(
   request: () => Promise<string>,
   historyOfPresentIllness = '患者胸闷1天。',
+  isPhysicalExamModified = () => false,
 ) {
   const record: ClinicalRecordFactRecord = {
     chiefComplaint: '胸闷1天',
@@ -22,6 +23,7 @@ function createController(
   const onRecordChanged = vi.fn();
   const controller = useClinicalRecordFactConfirmation({
     getRecord: () => ({ ...record }),
+    isPhysicalExamModified,
     getDiagnoses: () => [{ name: '胸闷待查', code: '', rate: '70%', rationale: '' }],
     request: async () => request(),
     formatError: () => '分析失败',
@@ -50,7 +52,7 @@ describe('useClinicalRecordFactConfirmation', () => {
 
     await controller.generateSuggestions();
 
-    expect(controller.suggestions.value).toEqual([
+    expect(controller.suggestions.value.filter((item) => item.field !== 'physicalExam')).toEqual([
       expect.objectContaining({ priority: 'critical', status: 'pending', negativeRecordText: '否认胸痛' }),
     ]);
     expect(record.historyOfPresentIllness).toBe('患者胸闷1天。否认胸痛。');
@@ -83,10 +85,11 @@ describe('useClinicalRecordFactConfirmation', () => {
     }]);
     expect(controller.suggestions.value).toEqual([]);
     await controller.generateSuggestions();
-    expect(controller.suggestions.value).toEqual([
+    expect(controller.suggestions.value).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'physicalExam', status: 'pending' }),
-    ]);
-    expect(record.physicalExam).toBe('双肺未闻及湿啰音。');
+    ]));
+    expect(record.physicalExam).toContain('双肺未闻及湿啰音。');
+    expect(record.physicalExam).toContain('双肺呼吸音粗');
   });
 
   it('keeps general and critical priorities for visual distinction only', async () => {
@@ -107,19 +110,69 @@ describe('useClinicalRecordFactConfirmation', () => {
     }));
 
     await controller.generateSuggestions();
-    expect(controller.suggestions.value.map((item) => item.priority)).toEqual(['general', 'critical']);
+    expect(controller.suggestions.value.map((item) => item.priority)).toEqual(expect.arrayContaining(['general', 'critical']));
     expect(record.familyHistory).toBe('否认高血压家族史。');
-    expect(record.physicalExam).toBe('双肺未闻及啰音。');
+    expect(record.physicalExam).toContain('双肺未闻及啰音。');
     const dismissedId = controller.suggestions.value[0]?.id || '';
     controller.dismissSuggestion(dismissedId);
-    expect(controller.suggestions.value).toHaveLength(2);
+    expect(controller.suggestions.value.length).toBeGreaterThan(2);
     expect(controller.suggestions.value[0]?.status).toBe('dismissed');
     expect(controller.getFieldSuggestions('familyHistory')).toEqual([]);
-    expect(controller.getFieldSuggestions('physicalExam')).toEqual([
+    expect(controller.getFieldSuggestions('physicalExam')).toEqual(expect.arrayContaining([
       expect.objectContaining({ priority: 'critical', status: 'pending' }),
-    ]);
+    ]));
     controller.restoreSuggestions(controller.suggestions.value);
     expect(controller.suggestions.value[0]?.status).toBe('dismissed');
+  });
+
+  it('preserves an examination edited while the candidate request is in flight', async () => {
+    let finish!: (value: string) => void;
+    const { controller, record } = createController(() => new Promise((resolve) => { finish = resolve; }));
+    const running = controller.generateSuggestions();
+    record.physicalExam = '右下肺湿啰音，医生补充查体。';
+    finish('{"items":[{"field":"physicalExam","question":"肺部听诊？","negativeRecordText":"双肺未闻及啰音"}]}');
+    await running;
+    expect(record.physicalExam).toBe('右下肺湿啰音，医生补充查体。');
+    expect(controller.getFieldSuggestions('physicalExam')).toEqual([]);
+  });
+
+  it('does not restore a dismissed examination item from a later stream partition', async () => {
+    const { controller, record } = createController(async () => '{"items":[]}');
+    await controller.generateSuggestions();
+    const initial = controller.suggestions.value.map((item) => ({ ...item }));
+    const lungs = initial.find((item) => item.negativeRecordText === '双肺呼吸音粗')!;
+    record.physicalExam = record.physicalExam.replace('双肺呼吸音粗。', '');
+    controller.dismissSuggestion(lungs.id);
+    controller.restoreSuggestions(initial);
+    expect(record.physicalExam).not.toContain('双肺呼吸音粗');
+    expect(controller.suggestions.value.find((item) => item.id === lungs.id)?.status).toBe('dismissed');
+  });
+
+  it('does not reinsert an AI item deleted through free text editing and keeps remaining source markers', async () => {
+    let modified = false;
+    const { controller, record } = createController(async () => '{"items":[]}', '患者胸闷1天。', () => modified);
+    await controller.generateSuggestions();
+    const initial = controller.suggestions.value.map((item) => ({ ...item }));
+    record.physicalExam = record.physicalExam.replace('双肺呼吸音粗。', '');
+    modified = true;
+    controller.restoreSuggestions(initial);
+    expect(record.physicalExam).not.toContain('双肺呼吸音粗');
+    expect(controller.getFieldSuggestions('physicalExam').some((item) => item.negativeRecordText === '心律齐')).toBe(true);
+    const cached = controller.suggestions.value.map((item) => ({ ...item }));
+    controller.reset(); controller.restoreSuggestions(cached);
+    expect(record.physicalExam).not.toContain('双肺呼吸音粗');
+    expect(controller.getFieldSuggestions('physicalExam').some((item) => item.negativeRecordText === '心律齐')).toBe(true);
+  });
+
+  it('drops a late result after switching the patient session', async () => {
+    let finish!: (value: string) => void;
+    const { controller, record } = createController(() => new Promise((resolve) => { finish = resolve; }));
+    const running = controller.generateSuggestions();
+    controller.reset();
+    record.physicalExam = '新患者查体';
+    finish('{"items":[]}'); await running;
+    expect(record.physicalExam).toBe('新患者查体');
+    expect(controller.suggestions.value).toEqual([]);
   });
 
   it('upgrades a legacy reading-layer cache once without duplicating the record', () => {

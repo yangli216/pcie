@@ -9,6 +9,8 @@ import {
   assessTreatmentCatalogMatch,
   buildClinicalResultTreatmentRecommendationsFromRaw,
   buildClinicalResultTreatmentRequestSpec,
+  buildCurrentInformationMedicationPrompt,
+  parseCurrentInformationMedicationResult,
   buildInstitutionAuxiliaryCatalogContext,
   loadAvailableMedicineInventoryContext,
   mapAuxiliaryCatalogRecommendations,
@@ -16,6 +18,7 @@ import {
   type AuxiliaryCatalogRecommendationResponse,
   type ClinicalResultRecommendationType,
   type RawClinicalResultTreatmentRecommendationInput,
+  type CurrentInformationMedicationAssessment,
 } from '@features/clinical-result';
 
 export interface VoiceTreatmentGenerationInput {
@@ -26,6 +29,7 @@ export interface VoiceTreatmentGenerationInput {
   diagnosisCode: string;
   chiefComplaint: string;
   clinicalContext: string;
+  currentInformationMedication?: { symptomaticOnly: boolean };
   requestedTypes: ClinicalResultRecommendationType[];
   explicitTreatments: TreatmentRecommendation[];
   pharmacies: PharmacyOption[];
@@ -39,6 +43,7 @@ export interface VoiceTreatmentGenerationTaskResult {
   types: ClinicalResultRecommendationType[];
   items: TreatmentRecommendation[];
   error?: unknown;
+  medicationAssessment?: CurrentInformationMedicationAssessment;
 }
 
 function createBaseParams(input: VoiceTreatmentGenerationInput) {
@@ -56,7 +61,9 @@ function createBaseParams(input: VoiceTreatmentGenerationInput) {
 export async function generateVoiceTreatmentRecommendations(
   input: VoiceTreatmentGenerationInput,
 ): Promise<VoiceTreatmentGenerationTaskResult[]> {
-  const requestedSet = new Set(input.requestedTypes);
+  const requestedSet = new Set<ClinicalResultRecommendationType>(
+    input.currentInformationMedication ? ['medicine'] : input.requestedTypes,
+  );
   requestedSet.delete('procedure');
   const baseParams = createBaseParams(input);
   const runners: Array<{
@@ -69,20 +76,39 @@ export async function generateVoiceTreatmentRecommendations(
   if (requestedSet.has('medicine')) {
     runners.push({ key: 'medication', types: ['medicine'], run: async () => {
       const inventory = await loadAvailableMedicineInventoryContext({ pharmacies: input.pharmacies });
+      const medicationPrompt = input.currentInformationMedication
+        ? buildCurrentInformationMedicationPrompt(
+          PROMPTS.consultation.treatmentRecommendation,
+          input.currentInformationMedication.symptomaticOnly,
+        )
+        : PROMPTS.consultation.treatmentRecommendation;
       const spec = buildClinicalResultTreatmentRequestSpec('medication', {
         ...baseParams,
         availableMedicineInventory: inventory.promptContext,
-      }, PROMPTS.consultation.treatmentRecommendation, {
+      }, medicationPrompt, {
         consultationId: input.consultationId,
-      });
+      }, input.currentInformationMedication ? {
+        scene: 'current-information-medication',
+        operationAction: 'assess_medication_with_current_information',
+        title: '医生主动基于现有信息评估用药',
+      } : undefined);
       const response = await chat(spec.messages, undefined, undefined, undefined, spec.config);
+      const assessment = input.currentInformationMedication
+        ? parseCurrentInformationMedicationResult(
+          parseLLMJson<unknown>(response), input.currentInformationMedication.symptomaticOnly,
+        ) : undefined;
       const raw = alignMedicineRecommendationsToInventory(
-        parseLLMJson<TreatmentRecommendation[]>(response),
+        (assessment?.recommendations ?? parseLLMJson<TreatmentRecommendation[]>(response)) as TreatmentRecommendation[],
         inventory.items,
       );
       return {
         key: 'medication',
         types: ['medicine'],
+        medicationAssessment: assessment ? {
+          summary: assessment.summary,
+          disposition: assessment.disposition,
+          deferred: assessment.deferred,
+        } : undefined,
         items: buildClinicalResultTreatmentRecommendationsFromRaw({
           rawRecommendations: raw as unknown as RawClinicalResultTreatmentRecommendationInput[],
           type: 'medicine',
@@ -93,7 +119,7 @@ export async function generateVoiceTreatmentRecommendations(
     } });
   }
 
-  const auxiliaryTypes = input.requestedTypes.filter(
+  const auxiliaryTypes = [...requestedSet].filter(
     (type): type is 'exam' | 'lab_test' => type === 'exam' || type === 'lab_test',
   );
   let auxiliaryItems = [] as Awaited<ReturnType<typeof medicalDataService.fetchAvailableExamLabItems>>;

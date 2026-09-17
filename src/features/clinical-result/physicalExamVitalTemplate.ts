@@ -1,3 +1,5 @@
+import { buildPhysicalExamMeasurements } from './lib/physicalExamMeasurements';
+
 export const PHYSICAL_EXAM_VITAL_SCHEMA_VERSION = 'outpatient-record-physical-exam-vitals.v1' as const;
 
 export const DEFAULT_PHYSICAL_EXAM_VITAL_TEMPLATE =
@@ -131,10 +133,13 @@ function stripVitalNarrative(value: string): string {
 export function buildPhysicalExamWithVitalTemplate(input: {
   physicalExam?: string;
   vitals?: string;
+  measurementContext?: string;
 }): string {
   const physicalExam = normalizeSource(input.physicalExam);
   const values = extractPhysicalExamVitalValues(physicalExam, input.vitals);
-  const detail = stripVitalNarrative(physicalExam);
+  const detail = buildPhysicalExamMeasurements(
+    stripVitalNarrative(physicalExam), input.vitals || '', input.measurementContext || '',
+  );
   const vitalTemplate = formatPhysicalExamVitalTemplate(values);
   return detail ? `${vitalTemplate}${detail}` : vitalTemplate;
 }

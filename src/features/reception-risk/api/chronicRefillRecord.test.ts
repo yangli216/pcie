@@ -4,6 +4,11 @@ import { chatStream } from '@/services/llm';
 import { medicalDataService } from '@/services/medicalData';
 import { loadAvailableMedicineInventoryContext, parseLLMJson } from '@features/clinical-result';
 import { generateChronicRefillRecord } from './chronicRefillRecord';
+import { assessChronicRefillCandidate, scopeChronicRefillCandidate } from '../lib/chronicRefillAssessment';
+import { buildClinicalResultIntentRecordSnapshot } from '../../consultation-result/model/useClinicalResultIntentReset';
+import { buildRecordConfirmedPayload } from '../../clinical-result/recordConfirmedPayload';
+import type { ClinicalResultInput } from '../../clinical-result/clinicalResultContract';
+import { DEFAULT_PAST_MEDICAL_HISTORY_TEMPLATE } from '../../clinical-result/historyRecordTemplates';
 
 vi.mock('@/services/llm', () => ({
   chatStream: vi.fn(),
@@ -26,6 +31,81 @@ vi.mock('@features/clinical-result', async () => {
 });
 
 describe('generateChronicRefillRecord', () => {
+  it('uses HIS positive history and does not carry it into a different patient', async () => {
+    const candidate = assessChronicRefillCandidate({ patientId: 'patient-1', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['原发性高血压'], medications: [] },
+    ] })!;
+    const patient = buildPatientContext({ payload: {
+      patientId: 'patient-1', visitId: 'visit-1', pastMedicalHistory: '既往有糖尿病病史。',
+    } })!;
+    const result = await generateChronicRefillRecord(patient, candidate);
+    expect(result.pastMedicalHistory).toContain('{有}糖尿病史');
+    expect(result.diagnoses.map((diagnosis) => diagnosis.name)).toEqual(['原发性高血压']);
+
+    const nextPatient = buildPatientContext({ payload: { patientId: 'patient-2', visitId: 'visit-2' } })!;
+    const nextCandidate = assessChronicRefillCandidate({ patientId: 'patient-2', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['原发性高血压'], medications: [] },
+    ] })!;
+    const nextResult = await generateChronicRefillRecord(nextPatient, nextCandidate);
+    expect(nextResult.pastMedicalHistory).not.toContain('{有}糖尿病史');
+  });
+
+  it.each(['fallback', 'json', 'stream'] as const)(
+    'keeps all known chronic history while only treating selected hypertension (%s)',
+    async (mode) => {
+      const patient = buildPatientContext({ payload: {
+        patientId: 'patient-1', visitId: 'visit-current',
+        pastMedicalHistory: DEFAULT_PAST_MEDICAL_HISTORY_TEMPLATE,
+      } })!;
+      const candidate = assessChronicRefillCandidate({
+        patientId: 'patient-1',
+        visits: [
+          { visitTime: Date.now() - 86400000, diagnoses: ['原发性高血压'], medications: ['苯磺酸氨氯地平片'] },
+          { visitTime: Date.now() - 172800000, diagnoses: ['2型糖尿病'], medications: ['盐酸二甲双胍片'] },
+        ],
+      })!;
+      const scoped = scopeChronicRefillCandidate(candidate, ['高血压'])!;
+      const misleadingDraft = { pastMedicalHistory: '有高血压病史；否认糖尿病史。' };
+      if (mode === 'json') {
+        vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => onChunk('{}'));
+        vi.mocked(parseLLMJson).mockReturnValue(misleadingDraft);
+      } else if (mode === 'stream') {
+        vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+          onChunk(`${JSON.stringify({ event: 'record_core', data: misleadingDraft })}\n`);
+          onChunk('{"event":"done","data":{}}\n');
+        });
+      }
+      const partials: ClinicalResultInput[] = [];
+      const result = await generateChronicRefillRecord(patient, scoped, {
+        onPartial: (partial) => partials.push(partial),
+      });
+      expect(partials.length).toBeGreaterThan(0);
+      for (const record of [...partials, result]) {
+        const snapshot = buildClinicalResultIntentRecordSnapshot(record, true);
+        expect(snapshot.pastMedicalHistory).toContain('{有}高血压病史');
+        expect(snapshot.pastMedicalHistory).toContain('{有}糖尿病史');
+        expect(snapshot.pastMedicalHistory).toContain('2型糖尿病');
+        expect(snapshot.pastMedicalHistory).not.toMatch(/否认\}?糖尿病/u);
+        expect(record.diagnoses.map((diagnosis) => diagnosis.name)).toEqual(['原发性高血压']);
+        expect(record.chiefComplaint).not.toContain('糖尿病');
+        expect(record.historyOfPresentIllness).not.toContain('糖尿病');
+        expect(record.currentMedicationHistory).not.toContain('二甲双胍');
+        expect(record.treatments.some((item) => item.name.includes('二甲双胍'))).toBe(false);
+      }
+      const snapshot = buildClinicalResultIntentRecordSnapshot(result, true);
+      const payload = buildRecordConfirmedPayload({
+        consultationId: 'consultation-history',
+        ...snapshot,
+        outpatientRecord: snapshot,
+        diagList: [{ idDiag: 'D-HTN', naDiag: '原发性高血压', fgMain: '1' }],
+        orderList: [],
+      });
+      expect(payload.pastMedicalHistory).toContain('有糖尿病史');
+      expect(payload.pastMedicalHistory).not.toContain('否认糖尿病史');
+      expect(payload.diagList).toEqual([expect.objectContaining({ naDiag: '原发性高血压' })]);
+    },
+  );
+
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.mocked(chatStream).mockRejectedValue(new Error('use fallback'));
@@ -45,6 +125,31 @@ describe('generateChronicRefillRecord', () => {
       pharmacyCount: 1,
       staleStoreCount: 0,
     });
+  });
+
+  it('returns related examination candidates and extensions in the same chronic stream', async () => {
+    const patient = buildPatientContext({ payload: { patientId: 'patient-1', visitId: 'visit-1' } })!;
+    const candidate = assessChronicRefillCandidate({ patientId: 'patient-1', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['2型糖尿病'], medications: [] },
+    ] })!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk(JSON.stringify({ event: 'record_extra', data: { physicalExamSuggestions: [{
+        field: 'physicalExam', question: '足部感觉是否正常？', negativeRecordText: '双足浅感觉正常',
+        rationale: '糖尿病相关足部查体', priority: 'critical',
+      }] } }) + '\n');
+    });
+    const partials: ClinicalResultInput[] = [];
+    const result = await generateChronicRefillRecord(patient, candidate, { onPartial: (value) => partials.push(value) });
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(result.factSuggestions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ negativeRecordText: '双足背动脉搏动可触及', status: 'pending' }),
+      expect.objectContaining({ negativeRecordText: '双足浅感觉正常', priority: 'critical' }),
+    ]));
+    expect(result.factSuggestions?.some((item) => item.negativeRecordText.includes('扁桃体'))).toBe(false);
+    expect(result.outpatientRecord?.physicalExam).toContain('体重:{体重}kg');
+    expect(result.outpatientRecord?.physicalExam).not.toContain('浅感觉正常');
+    expect(partials.some((item) => item.factSuggestions?.some((entry) => entry.negativeRecordText === '双足浅感觉正常'))).toBe(true);
+    expect(result.recommendationPolicy?.autoFetchTreatments).toBe(false);
   });
 
   it('creates a refill-specific record and suppresses generic treatment generation', async () => {

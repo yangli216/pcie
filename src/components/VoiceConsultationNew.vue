@@ -6,6 +6,8 @@ import Icon from '@shared/ui/Icon.vue';
 import { chat } from '../services/llm';
 import { PROMPTS } from '../prompts';
 import { getHisAdapter } from '../services/his';
+import { trackBusinessOperation } from '../services/operationTracker';
+import { getPatientContextVisitId } from '../utils/patientContext';
 import { medicalDataService, type DiagnosisItem } from '../services/medicalData';
 import { useVoiceFeedback } from '@features/feedback';
 import {
@@ -33,6 +35,12 @@ import {
   assessTreatmentCatalogMatch,
   buildClinicalResultDiagnosisRequestSpec,
   buildDiagnosisScopedPrecautions,
+  buildCurrentInformationMedicationHistory,
+  mergeCurrentInformationMedicines,
+  prepareCurrentInformationMedicines,
+  type CurrentInformationMedicationAssessment,
+  completeGeneratedPrecautions,
+  stripUnverifiedPhysicalExam,
   buildClinicalRecordFactSuggestionRequest,
   buildClinicalResultRegenerationRequest,
   buildDiagnosisSuggestionSections,
@@ -134,6 +142,9 @@ import {
   useClinicalResultIntentReset,
   useClinicalResultProgressiveIntentApplication,
   useClinicalResultPrecautionsScope,
+  CurrentInformationMedication,
+  useCurrentInformationMedication,
+  type CurrentInformationMedicationRequest,
   useClinicalResultPatientContext,
   useClinicalResultWritebackPayload,
   useClinicalResultWritebackPreflight,
@@ -545,7 +556,8 @@ function mergeFactSuggestionIntoRecord(suggestion: ClinicalRecordFactSuggestion)
 
 const recordFactConfirmation = useClinicalRecordFactConfirmation({
   getRecord: getFactRecord,
-  getDiagnoses: () => formalDiagnoses.value,
+  isPhysicalExamModified: () => isRecordFieldModified('physicalExam'),
+  getDiagnoses: () => selectedDiagnoses.value,
   getNegativeSymptoms: () => props.intentResult?.negativeSymptoms || [],
   getPositiveSymptoms: () => props.intentResult?.symptoms || [],
   request: async ({ record, diagnoses, explicitFacts }) => {
@@ -597,6 +609,50 @@ function resetFactConfirmation(): void {
   resetFactSuggestionScheduler();
   resetFactConfirmationState();
 }
+
+const currentMedicationClinicalContext = computed(() => JSON.stringify({
+  ...getCurrentRegenerationRecord(),
+  physicalExam: stripUnverifiedPhysicalExam(physicalExam.value, factSuggestions.value),
+  ...buildCurrentInformationMedicationHistory(props.initialPatientData, props.intentResult),
+  selectedDiagnosisNames: selectedDiagnoses.value.map((item) => item.name),
+  currentOrders: selectedTreatments.value.map((item) => ({
+    name: item.name, type: item.type, dosage: item.dosage, frequency: item.frequency, route: item.route,
+  })),
+}));
+const currentInformationMedication = useCurrentInformationMedication({
+  getContext: () => ({
+    channel: resultChannel.value,
+    scopeKey: JSON.stringify([
+      resultChannel.value, patientAnchorId.value, getPatientContextVisitId(props.initialPatientData), props.consultationRoundId,
+      lastAppliedIntentKey.value, getDiagnosisIdentity(selectedDiagnosis.value),
+      selectedDiagnosis.value?.diagnosisKind, recommendationPolicy.value?.plan,
+      patientAge.value, patientGender.value, currentMedicationClinicalContext.value,
+    ]),
+    hasSelectedDiagnosis: Boolean(selectedDiagnosis.value),
+    symptomaticOnly: selectedDiagnosis.value?.diagnosisKind === 'symptom_working'
+      || /^R\d/iu.test(selectedDiagnosis.value?.code || ''),
+    plan: recommendationPolicy.value?.plan,
+    hasMedicines: treatments.value.some((item) => item.type === 'medicine'),
+    blocked: isResultUnavailable.value || treatmentLoading.value || diagnosisLoading.value || isWritebackBusy.value,
+    allowTreatmentRefresh: allowTreatmentRefresh.value,
+  }),
+  run: (request) => fetchAITreatment({ currentInformationMedication: request, requireAll: true, notifyOnError: false }),
+  onRequest: () => trackBusinessOperation({
+    module: 'consultation-result', action: 'request_current_information_medication',
+    operationName: 'request_current_information_medication',
+    title: '医生主动基于现有信息推荐用药', operationType: 'button_click',
+    sourceModule: `${resultChannel.value}_consultation_result`, success: true,
+  }),
+});
+const {
+  visible: showCurrentInformationMedication,
+  disabled: currentInformationMedicationDisabled,
+  pending: currentInformationMedicationPending,
+  reason: currentInformationMedicationReason,
+  assessment: currentInformationMedicationAssessment,
+  error: currentInformationMedicationError,
+  request: requestCurrentInformationMedication,
+} = currentInformationMedication;
 
 const chronicRefillReview = useChronicRefillReview({
   getHistoryOfPresentIllness: () => historyOfPresentIllness.value,
@@ -902,7 +958,11 @@ const {
 } = recordFieldState;
 const precautionsScope = useClinicalResultPrecautionsScope({
   precautions,
+  completeGeneratedPrecautions: (value, diagnosisNames) => completeGeneratedPrecautions(
+    value, diagnosisNames, resultChannel.value === 'chronic-refill',
+  ),
   buildScopedPrecautions: (diagnosisNames) => buildDiagnosisScopedPrecautions({
+    chronicFollowUp: resultChannel.value === 'chronic-refill',
     chiefComplaint: chiefComplaint.value,
     historyOfPresentIllness: historyOfPresentIllness.value,
     diagnosisNames,
@@ -1684,7 +1744,10 @@ async function handleDiagnosisRefresh(event?: Event): Promise<void> {
 }
 
 async function fetchAITreatment(
-  options: { notifyOnError?: boolean; requireAll?: boolean; deferSideEffects?: boolean } = {},
+  options: {
+    notifyOnError?: boolean; requireAll?: boolean; deferSideEffects?: boolean;
+    currentInformationMedication?: CurrentInformationMedicationRequest;
+  } = {},
 ): Promise<boolean> {
   if (treatmentLoading.value || !selectedDiagnosis.value || !allowTreatmentRefresh.value) return false;
 
@@ -1700,6 +1763,7 @@ async function fetchAITreatment(
     requestSeq === treatmentRequestSeq.value
     && requestPatientAnchorId === patientAnchorId.value
     && diagnosisIdentity === getDiagnosisIdentity(selectedDiagnosis.value)
+    && (options.currentInformationMedication?.isCurrent() ?? true)
   );
 
   treatmentLoading.value = true;
@@ -1721,7 +1785,8 @@ async function fetchAITreatment(
     diagnosisCode: requestDiagnosis.code,
     chiefComplaint: chiefComplaint.value,
   };
-  const requestedTypes = resolveRequestedTreatmentTypes();
+  const requestedTypes: ClinicalResultRecommendationType[] = options.currentInformationMedication
+    ? ['medicine'] : resolveRequestedTreatmentTypes();
   if (requestedTypes.length === 0) {
     lastTreatmentDiagnosisKey.value = diagnosisIdentity;
     treatmentLoading.value = false;
@@ -1732,7 +1797,9 @@ async function fetchAITreatment(
     treatmentGenerationState.value[type] = 'loading';
   });
   const stagedRecommendations: TreatmentRecommendation[] = [];
+  let medicationAssessment: CurrentInformationMedicationAssessment | undefined;
   const commitBranchesIncrementally = treatmentGenerationIsInitial.value
+    && !options.currentInformationMedication
     && !treatments.value.some((item) => !isDoctorOwnedTreatment(item));
 
   try {
@@ -1742,7 +1809,10 @@ async function fetchAITreatment(
     if (!isCurrentTreatmentRequest()) return false;
     await generateVoiceTreatmentRecommendations({
       ...baseParams,
-      clinicalContext: historyOfPresentIllness.value,
+      clinicalContext: options.currentInformationMedication
+        ? currentMedicationClinicalContext.value : historyOfPresentIllness.value,
+      currentInformationMedication: options.currentInformationMedication
+        ? { symptomaticOnly: options.currentInformationMedication.symptomaticOnly } : undefined,
       requestedTypes,
       explicitTreatments: treatments.value.filter((item) => item.sourceType === 'explicit'),
       pharmacies: pharmacyOptions.value,
@@ -1758,6 +1828,7 @@ async function fetchAITreatment(
           });
           return;
         }
+        medicationAssessment = task.medicationAssessment || medicationAssessment;
         const ranked = await applyRecommendationPreferenceRanking(
           task.items,
           buildTreatmentPreferenceCandidate,
@@ -1798,6 +1869,23 @@ async function fetchAITreatment(
         (requestedOrder.get(left.type as ClinicalResultRecommendationType) ?? requestedTypes.length)
         - (requestedOrder.get(right.type as ClinicalResultRecommendationType) ?? requestedTypes.length)
       ));
+    if (options.currentInformationMedication) {
+      if (!medicationAssessment) throw new Error('用药评估缺少结论');
+      // 新药在可见/缓存之前完成统一定稿；不触碰原有药品的医生编辑值。
+      const prepared = await prepareCurrentInformationMedicines(generated, {
+        finalize: finalizeMedicineRecommendations,
+        checkInventory: (item) => checkMedicineInventoryEnough(item, false),
+        isCurrent: isCurrentTreatmentRequest,
+      });
+      if (!prepared) return false;
+      treatments.value = mergeCurrentInformationMedicines(treatments.value, generated);
+      options.currentInformationMedication.receive(medicationAssessment);
+      void registerCurrentRecommendations();
+      void performTreatmentFactCheck(generated);
+      submitVoiceGeneratedUserLog();
+      persistEditorSnapshotImmediate();
+      return true;
+    }
     treatments.value = mergeGeneratedTreatmentBranches(
       treatments.value,
       requestedTypes,
@@ -1908,6 +1996,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
   const previousAutoTreatmentFetchAttemptKey = autoTreatmentFetchAttemptKey.value;
   const previousTreatmentGenerationState = { ...treatmentGenerationState.value };
   const previousFactSuggestions = factSuggestions.value.map((item) => ({ ...item }));
+  const regenerationEvidenceRecord = { ...previousRecord, physicalExam: stripUnverifiedPhysicalExam(previousRecord.physicalExam, previousFactSuggestions) };
 
   closeSupplementDialog();
   resultRegenerating.value = true;
@@ -1929,7 +2018,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
         gender: patientGender.value,
         age: patientAge.value,
       },
-      currentRecord: previousRecord,
+      currentRecord: regenerationEvidenceRecord,
       doctorSupplement,
       consultationId: resolveConsultationId(),
     });
@@ -1942,7 +2031,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
     );
     const regeneratedRecord = normalizeClinicalResultRegenerationOutput(
       parseLLMJson(response),
-      previousRecord,
+      regenerationEvidenceRecord,
     );
 
     suppressPrecautionsScopeSync.value = true;
@@ -2115,7 +2204,7 @@ function applyProgressiveIntentRecord(
   sections: readonly ClinicalResultGenerationSection[],
 ): void {
   const next = new Set(sections);
-  const snapshot = buildClinicalResultIntentRecordSnapshot(result);
+  const snapshot = buildClinicalResultIntentRecordSnapshot(result, resultChannel.value === 'chronic-refill');
   const applyTrackedField = (
     field: 'chiefComplaint' | 'historyOfPresentIllness' | 'pastMedicalHistory' | 'personalHistory' | 'familyHistory' | 'physicalExam' | 'precautions',
     value: string,
@@ -2128,7 +2217,10 @@ function applyProgressiveIntentRecord(
     else if (field === 'personalHistory') personalHistory.value = value;
     else if (field === 'familyHistory') familyHistory.value = value;
     else if (field === 'physicalExam') physicalExam.value = value;
-    else precautions.value = value;
+    else {
+      captureGeneratedPrecautions(getDiagnosisNames(aiDiagnoses.value), value);
+      syncPrecautionsToSelection();
+    }
   };
 
   if (next.has('record_core')) {
@@ -3134,7 +3226,7 @@ watch(
         resetGenerationSequence();
         autoTreatmentFetchAttemptKey.value = '';
         resetPrecautionsScope();
-        resetForIntent(result);
+        resetForIntent(result, resultChannel.value === 'chronic-refill');
         progressiveMenstrualBaseline = menstrualHistory.value;
         if (!isFemalePatient.value) menstrualHistory.value = '';
         resetDifferentialDiagnosisDirection();
@@ -3570,6 +3662,15 @@ watch(
               已切换主诊断，当前方案仍保留上一版；点击“刷新方案”获取当前诊断方案。
             </div>
 
+            <CurrentInformationMedication
+              v-if="showCurrentInformationMedication"
+              :disabled="currentInformationMedicationDisabled"
+              :pending="currentInformationMedicationPending"
+              :reason="currentInformationMedicationReason"
+              :assessment="currentInformationMedicationAssessment"
+              :error="currentInformationMedicationError"
+              @request="requestCurrentInformationMedication"
+            />
             <template v-if="treatmentPresentationRows.length > 0">
               <template v-for="section in treatmentPresentationRows" :key="section.presentationKey">
                 <TreatmentRecommendationSection
@@ -3669,7 +3770,7 @@ watch(
               </template>
             </template>
 
-            <div v-else-if="!treatmentLoading" class="empty-text">{{ displayedTreatmentEmptyText }}</div>
+            <div v-else-if="!treatmentLoading && !showCurrentInformationMedication" class="empty-text">{{ displayedTreatmentEmptyText }}</div>
           </div>
         </section>
       </div>

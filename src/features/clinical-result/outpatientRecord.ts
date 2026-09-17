@@ -6,6 +6,7 @@ import {
   resolveHistoryRecordTemplate,
 } from './historyRecordTemplates';
 import { buildPhysicalExamWithVitalTemplate } from './physicalExamVitalTemplate';
+import { completeGeneratedPrecautions } from './precautionsFollowUp';
 
 export const OUTPATIENT_RECORD_SCHEMA_VERSION = 'outpatient-record.v1' as const;
 
@@ -45,6 +46,7 @@ export interface BuildOutpatientRecordInput {
   vitals?: string;
   diagnosisNames?: readonly string[];
   patientGender?: string;
+  chronicFollowUp?: boolean;
 }
 
 export interface OutpatientRecordQualityIssue {
@@ -194,6 +196,7 @@ function buildPhysicalExam(
   return buildPhysicalExamWithVitalTemplate({
     physicalExam: isMeaningfulRecordText(provided) ? provided : '',
     vitals: input.vitals,
+    measurementContext: (input.diagnosisNames || []).join('；'),
   });
 }
 
@@ -334,7 +337,11 @@ function buildPrecautions(
       }
       round++;
     }
-    return combined.map((text, index) => `${index + 1}.${text}`).join('');
+    return completeGeneratedPrecautions(
+      combined.map((text, index) => `${index + 1}.${text}`).join(''),
+      input.diagnosisNames || [],
+      input.chronicFollowUp,
+    );
   }
 
   switch (scenario) {
@@ -345,7 +352,7 @@ function buildPrecautions(
     case 'wound_care':
       return '伤口禁止沾水，按医嘱复诊换药，必要时上级医院进一步检查治疗。';
     default:
-      return '注意休息，1周内复诊，必要时上级医院进一步检查治疗。';
+      return completeGeneratedPrecautions('', input.diagnosisNames || [], input.chronicFollowUp);
   }
 }
 
@@ -367,6 +374,7 @@ export function buildDiagnosisScopedPrecautions(
     chiefComplaint: '',
     historyOfPresentIllness: '',
     diagnosisNames,
+    chronicFollowUp: input.chronicFollowUp,
   };
 
   return buildPrecautions(scopedInput, detectOutpatientRecordScenario(scopedInput));

@@ -17,6 +17,8 @@ export interface ChronicRefillCandidate {
   diagnosis: string;
   /** Preserved clinical diagnosis names used by the record and writeback flow. */
   diagnoses: string[];
+  /** 同患者完整已知慢病，仅用于既往史，不受本次配药范围裁剪。 */
+  historicalDiagnoses?: string[];
   /** Normalized chronic groups used only for eligibility and routing. */
   diagnosisGroups: string[];
   medications: string[];
@@ -351,6 +353,7 @@ export function scopeChronicRefillCandidate(
   return {
     diagnosis: diagnoses[0],
     diagnoses,
+    historicalDiagnoses: [...(candidate.historicalDiagnoses || candidate.diagnoses)],
     diagnosisGroups,
     medications: medicationEvidence.medications,
     medicationOrders: medicationEvidence.medicationOrders,
@@ -443,6 +446,7 @@ export function assessChronicRefillCandidate(
   return {
     diagnosis,
     diagnoses: chronicDiagnoses,
+    historicalDiagnoses: [...chronicDiagnoses],
     diagnosisGroups,
     medications: chronicMedications,
     medicationOrders: medicationEvidence.medicationOrders,

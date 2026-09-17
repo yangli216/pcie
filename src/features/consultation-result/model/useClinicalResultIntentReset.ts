@@ -1,5 +1,6 @@
 import type { Ref } from 'vue';
 import type { Diagnosis, TreatmentRecommendation } from '@/types/consultation';
+import { completeGeneratedPrecautions } from '../../clinical-result/precautionsFollowUp';
 import {
   buildOutpatientRecord,
   type OutpatientRecord,
@@ -58,8 +59,10 @@ export interface ClinicalResultIntentResetOptions {
 
 export function buildClinicalResultIntentRecordSnapshot(
   input: ClinicalResultIntentRecordInput,
+  chronicFollowUp = false,
 ): ClinicalResultIntentResetRecordSnapshot {
   const outpatientRecord = buildOutpatientRecord({
+    chronicFollowUp,
     chiefComplaint: input.outpatientRecord?.chiefComplaint || input.chiefComplaint || '',
     historyOfPresentIllness: input.outpatientRecord?.historyOfPresentIllness || input.historyOfPresentIllness || '',
     pastMedicalHistory: input.outpatientRecord?.pastMedicalHistory || input.pastMedicalHistory,
@@ -75,12 +78,17 @@ export function buildClinicalResultIntentRecordSnapshot(
 
   return {
     ...outpatientRecord,
+    precautions: completeGeneratedPrecautions(
+      outpatientRecord.precautions,
+      (input.diagnoses || []).map((item) => item.name),
+      chronicFollowUp,
+    ),
     menstrualHistory: outpatientRecord.menstrualHistory || '',
   };
 }
 
 export function useClinicalResultIntentReset(options: ClinicalResultIntentResetOptions) {
-  function resetForIntent(input: ClinicalResultIntentRecordInput): void {
+  function resetForIntent(input: ClinicalResultIntentRecordInput, chronicFollowUp = false): void {
     options.suppressDiagnosisTreatmentRefetch.value = true;
 
     options.resetTreatmentEditorState();
@@ -95,7 +103,7 @@ export function useClinicalResultIntentReset(options: ClinicalResultIntentResetO
     options.treatments.value = [];
     options.resetFirstUserLogSnapshot();
 
-    const snapshot = buildClinicalResultIntentRecordSnapshot(input);
+    const snapshot = buildClinicalResultIntentRecordSnapshot(input, chronicFollowUp);
     options.setInitialRecordSnapshot(snapshot);
     options.chiefComplaint.value = snapshot.chiefComplaint;
     options.historyOfPresentIllness.value = snapshot.historyOfPresentIllness;

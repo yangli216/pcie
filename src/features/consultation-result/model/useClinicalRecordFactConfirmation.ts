@@ -1,7 +1,10 @@
 import { computed, ref } from 'vue';
+import { canAppendPhysicalExamCandidate } from '../../clinical-result/lib/physicalExamGuidance';
 import type { Diagnosis } from '@/types/consultation';
 import {
   extractExplicitClinicalRecordFacts,
+  completePhysicalExamSuggestions,
+  stripUnverifiedPhysicalExam,
   normalizeClinicalRecordFactSuggestions,
   normalizeGeneratedClinicalRecordNarrative,
   type ClinicalRecordExplicitFact,
@@ -12,6 +15,7 @@ import {
 
 export interface ClinicalRecordFactConfirmationOptions {
   getRecord: () => ClinicalRecordFactRecord;
+  isPhysicalExamModified?: () => boolean;
   getDiagnoses: () => readonly Diagnosis[];
   getNegativeSymptoms?: () => readonly string[];
   getPositiveSymptoms?: () => readonly string[];
@@ -33,32 +37,43 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
   let requestSequence = 0;
 
   const extractedFacts = computed(() => extractExplicitClinicalRecordFacts(
-    options.getRecord(),
+    { ...options.getRecord(), physicalExam: stripUnverifiedPhysicalExam(options.getRecord().physicalExam, suggestions.value) },
     options.getNegativeSymptoms?.() || [],
     options.getPositiveSymptoms?.() || [],
   ));
   const explicitFacts = computed<ClinicalRecordExplicitFact[]>(() => extractedFacts.value);
 
-  function mergePendingSuggestions(items: readonly ClinicalRecordFactSuggestion[]): void {
+  function mergePendingSuggestions(items: readonly ClinicalRecordFactSuggestion[], preserveExam = false): void {
     const merged = items.filter((item) => (
-      item.status === 'pending' && options.mergeSuggestionIntoRecord(item)
+      item.status === 'pending' && (!preserveExam || item.field !== 'physicalExam') && options.mergeSuggestionIntoRecord(item)
     ));
     if (merged.length > 0) options.onRecordChanged?.(merged);
   }
 
   async function generateSuggestions(): Promise<void> {
     const currentRequest = ++requestSequence;
+    const initialPhysicalExam = options.getRecord().physicalExam;
+    const initialDiagnoses = JSON.stringify(options.getDiagnoses().map((item) => [item.code, item.name]));
     loading.value = true;
     error.value = '';
     try {
       const response = await options.request({
-        record: options.getRecord(),
+        record: { ...options.getRecord(), physicalExam: stripUnverifiedPhysicalExam(options.getRecord().physicalExam, suggestions.value) },
         diagnoses: options.getDiagnoses(),
         explicitFacts: explicitFacts.value,
       });
-      if (currentRequest !== requestSequence) return;
-      const nextSuggestions = normalizeClinicalRecordFactSuggestions(response, explicitFacts.value);
-      mergePendingSuggestions(nextSuggestions);
+      if (currentRequest !== requestSequence
+        || initialDiagnoses !== JSON.stringify(options.getDiagnoses().map((item) => [item.code, item.name]))) return;
+      const record = options.getRecord();
+      const evidenceRecord = { ...record, physicalExam: stripUnverifiedPhysicalExam(record.physicalExam, suggestions.value) };
+      const normalized = normalizeClinicalRecordFactSuggestions(response, explicitFacts.value);
+      const proposed = completePhysicalExamSuggestions(evidenceRecord, options.getDiagnoses().map((item) => item.name), normalized);
+      const preserveExam = options.isPhysicalExamModified?.() || record.physicalExam !== initialPhysicalExam;
+      const nextSuggestions = preserveDismissals([
+        ...proposed.filter((item) => !preserveExam || item.field !== 'physicalExam'),
+        ...suggestions.value.filter((item) => preserveExam && item.field === 'physicalExam'),
+      ]);
+      mergePendingSuggestions(nextSuggestions, preserveExam);
       suggestions.value = nextSuggestions;
     } catch (cause) {
       if (currentRequest !== requestSequence) return;
@@ -85,6 +100,14 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
     ));
   }
 
+  function preserveDismissals(items: ClinicalRecordFactSuggestion[]): ClinicalRecordFactSuggestion[] {
+    const dismissed = suggestions.value.filter((item) => item.status === 'dismissed');
+    const incoming = items.map((item) => dismissed.some((old) => old.id === item.id
+      || (old.field === item.field && old.negativeRecordText === item.negativeRecordText))
+      ? { ...item, status: 'dismissed' as const } : item);
+    return [...incoming, ...dismissed.filter((old) => !incoming.some((item) => item.id === old.id))];
+  }
+
   function restoreSuggestions(value: unknown): void {
     if (!Array.isArray(value)) return;
     const validFields = new Set<ClinicalRecordFactField>([
@@ -94,7 +117,7 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
       'familyHistory',
       'physicalExam',
     ]);
-    const restored = value
+    const validated = value
       .filter((item): item is ClinicalRecordFactSuggestion => Boolean(
         item
         && typeof item === 'object'
@@ -113,7 +136,18 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
         return negativeRecordText ? { ...item, negativeRecordText } : null;
       })
       .filter((item): item is ClinicalRecordFactSuggestion => Boolean(item));
-    mergePendingSuggestions(restored);
+    const record = options.getRecord();
+    const evidence = stripUnverifiedPhysicalExam(record.physicalExam, [...suggestions.value, ...validated]);
+    const preserveExam = options.isPhysicalExamModified?.();
+    const restored = preserveDismissals([
+      ...validated.filter((item) => item.field !== 'physicalExam'
+        || (!preserveExam && (item.status === 'dismissed'
+          || canAppendPhysicalExamCandidate(item.negativeRecordText, `${evidence}；${record.historyOfPresentIllness}`)))),
+      ...[...suggestions.value, ...validated].filter((item, index, all) => preserveExam && item.field === 'physicalExam'
+        && (item.status === 'dismissed' || record.physicalExam.includes(item.negativeRecordText))
+        && all.findIndex((other) => other.id === item.id) === index),
+    ]);
+    mergePendingSuggestions(restored, preserveExam);
     suggestions.value = restored;
   }
 

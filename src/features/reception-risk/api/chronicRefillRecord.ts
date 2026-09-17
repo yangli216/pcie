@@ -10,8 +10,15 @@ import {
 } from '@/utils/patientContext';
 import {
   loadAvailableMedicineInventoryContext,
+  buildOutpatientRecord,
+  completePhysicalExamSuggestions,
+  normalizeClinicalRecordFactSuggestions,
+  PHYSICAL_EXAM_GUIDANCE_PROMPT,
+  type ClinicalRecordFactSuggestionResponse,
+  type ClinicalRecordFactSuggestion,
   formatAvailableMedicineInventoryPrompt,
   normalizeGeneratedClinicalRecordNarrative,
+  resolveHistoryRecordTemplate,
   parseLLMJson,
   type ClinicalResultGenerationStage,
   type ClinicalResultDiagnosis,
@@ -43,6 +50,7 @@ export interface ChronicRefillRecordGenerationOptions {
 }
 
 interface ChronicRefillDraft {
+  physicalExamSuggestions?: ClinicalRecordFactSuggestionResponse['items'];
   chiefComplaint?: string;
   historyOfPresentIllness?: string;
   pastMedicalHistory?: string;
@@ -54,6 +62,7 @@ interface ChronicRefillDraft {
 }
 
 interface NormalizedChronicRefillDraft {
+  physicalExamSuggestions: ClinicalRecordFactSuggestion[];
   chiefComplaint: string;
   historyOfPresentIllness: string;
   pastMedicalHistory: string;
@@ -163,6 +172,24 @@ function buildHistoricalMedicationNames(candidate: ChronicRefillCandidate): stri
   ));
 }
 
+function buildChronicPastMedicalHistory(patient: AppPatient, candidate: ChronicRefillCandidate): string {
+  const diagnoses = Array.from(new Set(
+    (candidate.historicalDiagnoses || candidate.diagnoses).map((name) => name.trim()).filter(Boolean),
+  ));
+  const patientHistory = getPatientContextPastMedicalHistory(patient);
+  const confirmedHistory = diagnoses.length > 0 ? `既往确诊${diagnoses.join('、')}。` : '';
+  const history = resolveHistoryRecordTemplate(
+    'pastMedicalHistory',
+    [patientHistory, confirmedHistory, getPatientContextAllergyHistory(patient)].filter(Boolean).join('；'),
+    patientHistory,
+  );
+  // 固定模板的宽泛槽位不能代替具体诊断名（如 2 型糖尿病、甲减）。
+  const additionalDiagnoses = diagnoses.filter((name) => !history.includes(name));
+  return additionalDiagnoses.length > 0
+    ? `${history}既往确诊${additionalDiagnoses.join('、')}。`
+    : history;
+}
+
 function fallbackDraft(
   patient: AppPatient,
   candidate: ChronicRefillCandidate,
@@ -174,9 +201,10 @@ function fallbackDraft(
     ? availableMedications.join('、')
     : (candidate.medications.length > 0 ? '当前库存未匹配到可直接续方的历史药品' : '暂无可直接沿用的历史药品');
   return {
+    physicalExamSuggestions: [],
     chiefComplaint: `${diagnosisText}复诊配药`,
     historyOfPresentIllness: `患者既往确诊${diagnosisText}。今复诊配药。`,
-    pastMedicalHistory: getPatientContextPastMedicalHistory(patient) || `既往有${diagnosisText}病史。`,
+    pastMedicalHistory: buildChronicPastMedicalHistory(patient, candidate),
     currentMedicationHistory: historicalMedicationNames.length > 0
       ? historicalMedicationNames.join('、')
       : '历史用药方案待医生核实',
@@ -204,10 +232,6 @@ function normalizeDraft(
     value.historyOfPresentIllness,
     'historyOfPresentIllness',
   ).text;
-  const pastMedicalHistory = normalizeGeneratedClinicalRecordNarrative(
-    value.pastMedicalHistory,
-    'pastMedicalHistory',
-  ).text;
   const healthEducation = normalizeGeneratedClinicalRecordNarrative(
     value.healthEducation,
     'precautions',
@@ -218,6 +242,7 @@ function normalizeDraft(
       .filter((item): item is ChronicRefillMedicineInput => Boolean(item))
     : [];
   return {
+    physicalExamSuggestions: normalizeClinicalRecordFactSuggestions({ items: value.physicalExamSuggestions }).filter((item) => item.field === 'physicalExam'),
     chiefComplaint: chiefComplaint.length >= 6
       && /复诊|续方|配药/u.test(chiefComplaint)
       && candidate.diagnoses.every((diagnosis) => chiefComplaint.includes(diagnosis))
@@ -226,7 +251,7 @@ function normalizeDraft(
     historyOfPresentIllness: isPatientFactHistory(historyOfPresentIllness, candidate)
       ? historyOfPresentIllness
       : fallback.historyOfPresentIllness,
-    pastMedicalHistory: pastMedicalHistory || fallback.pastMedicalHistory,
+    pastMedicalHistory: fallback.pastMedicalHistory,
     currentMedicationHistory: fallback.currentMedicationHistory,
     treatmentPlan: fallback.treatmentPlan,
     healthEducation: normalizeChronicRefillHealthEducation(
@@ -265,7 +290,15 @@ function buildChronicRefillClinicalResult(
   treatments: ClinicalResultInput['treatments'],
   generation?: ClinicalResultInput['generation'],
 ): ClinicalResultInput {
+  const outpatientRecord = buildOutpatientRecord({
+    chiefComplaint: draft.chiefComplaint, historyOfPresentIllness: draft.historyOfPresentIllness,
+    pastMedicalHistory: draft.pastMedicalHistory, precautions: draft.healthEducation,
+    diagnosisNames: candidate.diagnoses, chronicFollowUp: true,
+  });
+  const factSuggestions = completePhysicalExamSuggestions(outpatientRecord, candidate.diagnoses, draft.physicalExamSuggestions);
   return {
+    outpatientRecord,
+    factSuggestions,
     chiefComplaint: draft.chiefComplaint,
     historyOfPresentIllness: draft.historyOfPresentIllness,
     pastMedicalHistory: draft.pastMedicalHistory,
@@ -391,7 +424,10 @@ export async function generateChronicRefillRecord(
         role: 'system',
         content: [
           '你是基层门诊慢性病复诊配药病历助手。',
+          PHYSICAL_EXAM_GUIDANCE_PROMPT,
+          '本次查体候选仅围绕已选慢病，写入record_extra.data.physicalExamSuggestions数组，field固定physicalExam；每项包含question、negativeRecordText、rationale、priority。没有本次明确查体依据，不得把历史查体作为当前事实；候选不能作为本次推荐药品依据。',
           '慢病范围已由医生确认；主诉、现病史、诊断和推荐用药只能围绕已选慢病，不得加入患者其他慢病。',
+          '既往史不受本次配药范围限制。pastMedicalHistory 原样使用提供的患者既往史基线；其他历史慢病仅为既往事实，不得加入本次主诉、现病史、诊断、reviewPlan、健康指导或推荐药品。',
           '根据患者近90天就诊中的慢病就诊记录和配药信息生成本次可编辑病历草稿，不得编造当前症状、生命体征、检查结果或病情稳定程度。历史处方仅用于当前用药史、用药推荐与复诊核查。',
           '主诉应写明具体慢病和“复诊配药”目的。',
           '本次尚未完成当前用药、依从性、控制情况、不适和不良反应核查；historyOfPresentIllness只能写医生已确认的慢病诊断和本次复诊配药目的，不得提前写规律服药、控制平稳、无不适或监测结果。',
@@ -413,7 +449,7 @@ export async function generateChronicRefillRecord(
           'healthEducation必须针对患者的具体慢性病诊断和病情，给出具体的规律用药注意事项、自我指标监测、饮食调养和复诊提醒等个性化健康处方，严禁写入通用的“注意休息”、“1周内复诊”或“必要时上级医院进一步治疗”。',
           '必须逐行输出 NDJSON；每行只包含一个完整 JSON 对象，不要输出数组外壳、markdown、代码块或解释。',
           '严格按 record_core、review_plan、recommended_medicines、record_extra、done 的顺序输出。',
-          '格式为 {"event":"事件名","data":对应数据}。record_core.data包含chiefComplaint、historyOfPresentIllness、pastMedicalHistory、currentMedicationHistory；review_plan.data为完整reviewPlan；recommended_medicines.data为药品数组；record_extra.data包含healthEducation；done.data可为空对象。',
+          '格式为 {"event":"事件名","data":对应数据}。record_core.data包含chiefComplaint、historyOfPresentIllness、pastMedicalHistory、currentMedicationHistory；review_plan.data为完整reviewPlan；recommended_medicines.data为药品数组；record_extra.data包含healthEducation和physicalExamSuggestions；done.data可为空对象。',
         ].join('\n'),
       },
       {
@@ -421,6 +457,7 @@ export async function generateChronicRefillRecord(
         content: [
           `患者：${getPatientContextName(patient)}，${getPatientContextGenderText(patient)}，${getPatientContextAgeText(patient)}`,
           `过敏史：${getPatientContextAllergyHistory(patient) || '未记录'}`,
+          `患者既往史基线（仅用于pastMedicalHistory）：${draft.pastMedicalHistory}`,
           `医生已确认的本次慢病：${candidate.diagnoses.join('、')}`,
           `慢病分类（仅用于场景识别）：${candidate.diagnosisGroups.join('、')}`,
           `历史慢病配药：${candidate.medicationEvidenceText}`,

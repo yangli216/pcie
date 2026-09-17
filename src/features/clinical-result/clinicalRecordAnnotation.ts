@@ -1,3 +1,4 @@
+import { canAppendPhysicalExamCandidate } from './lib/physicalExamGuidance';
 import type {
   ClinicalRecordExplicitFact,
   ClinicalRecordFactSuggestion,
@@ -233,9 +234,23 @@ export function mergeClinicalRecordSuggestionIntoText(
     return recordText;
   }
 
+  if (suggestion.field === 'physicalExam' && !canAppendPhysicalExamCandidate(suggestion.negativeRecordText, recordText)) return recordText;
+
   return applyClinicalRecordSuggestionEdit(recordText, {
     kind: 'suggestion',
     text: suggestion.negativeRecordText,
     suggestion,
   }, suggestion.negativeRecordText);
+}
+
+/** Clinical inference must not consume the unverified AI examination draft. */
+export function stripUnverifiedPhysicalExam(
+  physicalExam: string,
+  suggestions: readonly ClinicalRecordFactSuggestion[],
+): string {
+  return buildClinicalRecordAnnotationSegments(physicalExam, [], suggestions.filter((item) => item.field === 'physicalExam'))
+    .filter((segment) => segment.kind !== 'suggestion')
+    .map((segment) => segment.text).join('')
+    .replace(/([，。；])(?:\s*[，。；])+/gu, '$1')
+    .replace(/^[\s，。；]+|[\s，；]+$/gu, '').trim();
 }

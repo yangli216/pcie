@@ -16,6 +16,8 @@ import {
   extractLLMJsonCandidate,
   mergeStructuredNegativeSymptoms,
   normalizeClinicalRecordFactSuggestions,
+  completePhysicalExamSuggestions,
+  PHYSICAL_EXAM_GUIDANCE_PROMPT,
   normalizeGeneratedClinicalRecordNarrative,
   type ClinicalResultGenerationSection,
   type ClinicalResultInput,
@@ -799,13 +801,19 @@ export function useVoiceIntentRecognition() {
       familyHistory: outpatientRecord.familyHistory,
       physicalExam: outpatientRecord.physicalExam,
     };
-    const factSuggestions = normalizeClinicalRecordFactSuggestions({
+    const normalizedSuggestions = normalizeClinicalRecordFactSuggestions({
       items: normalizedExtraction.recordFactSuggestions,
     }, extractExplicitClinicalRecordFacts(
       factRecord,
       normalizedExtraction.recordDraft.negativeSymptoms || [],
       normalizedExtraction.recordDraft.symptoms || [],
     ));
+
+    const factSuggestions = readySections.includes('record_suggestions') || normalizedExtraction.recordFactSuggestions.length > 0
+      ? completePhysicalExamSuggestions(factRecord,
+        matchedDiagnoses.filter((item) => item.suggestionType !== 'differential').slice(0, 1).map((item) => item.name),
+        normalizedSuggestions)
+      : normalizedSuggestions;
 
     const intentResult: VoiceIntentResult = {
       chiefComplaint: normalizedExtraction.recordDraft.chiefComplaint,
@@ -963,7 +971,8 @@ export function useVoiceIntentRecognition() {
 【本次输出协议】请按 record_core、history_context、record_suggestions、diagnoses、recommendation_plan、explicit_orders、record_extra、done 的顺序逐行输出 NDJSON。record_suggestions 是带 AI 来源标记的候选而非已确认事实；diagnoses 每项必须填写 clinicalRole、diagnosisKind 和 evidenceScope，current_visit/both 还必须填写仅来自本次就诊的 currentVisitEvidenceText。history_only/risk_modifier 不得进入诊断建议，不能解释本次主诉的糖尿病、贫血等历史共病也不得作为待鉴别；没有病因性正式诊断时，可返回至多一项本次明确且可匹配标准库的症状性工作诊断。explicit_orders 只能包含医生明确医嘱，每项 name 必须是非空字符串，type 必须是 medicine、examination、labTest、procedure 之一的字符串，没有明确医嘱时输出空数组；recommendation_plan 必须包含 mode、recommendNow、defer、skip、reason、resumeCondition、confidence。`;
       const userContent = `${baseUserPrompt}${patientContextBlock}${memoryBlock ? `\n${memoryBlock}` : ''}${outputProtocolReminder}`;
       const messages: ChatMessage[] = [
-        { role: 'system', content: recognitionPrompt.system },
+        { role: 'system', content: recognitionPrompt.system.includes(PHYSICAL_EXAM_GUIDANCE_PROMPT)
+          ? recognitionPrompt.system : `${recognitionPrompt.system}\n${PHYSICAL_EXAM_GUIDANCE_PROMPT}` },
         { role: 'user', content: userContent },
       ];
 

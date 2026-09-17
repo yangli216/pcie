@@ -419,3 +419,15 @@ export type {
   TreatmentRequiredFieldResolverOptions,
   TreatmentRequiredFieldValidationResult,
 } from './treatmentRequiredFields';
+export { completeGeneratedPrecautions } from './precautionsFollowUp';
+export {
+  buildCurrentInformationMedicationPrompt,
+  buildCurrentInformationMedicationHistory,
+  parseCurrentInformationMedicationResult,
+  mergeCurrentInformationMedicines,
+  prepareCurrentInformationMedicines,
+} from './currentInformationMedication';
+export type { CurrentInformationMedicationAssessment } from './currentInformationMedication';
+
+export { PHYSICAL_EXAM_GUIDANCE_PROMPT, completePhysicalExamSuggestions } from './lib/physicalExamGuidance';
+export { stripUnverifiedPhysicalExam } from './clinicalRecordAnnotation';
