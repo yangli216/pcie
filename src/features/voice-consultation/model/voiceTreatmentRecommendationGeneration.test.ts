@@ -51,6 +51,7 @@ describe('generateVoiceTreatmentRecommendations', () => {
       });
       const supported = { name: '可推荐药', purpose: 'symptomatic', eligibility: 'supported', basis: '当前症状', reason: '对症处理', missingEvidence: [] };
       const deferred = { ...supported, name: '暂缓药', eligibility: 'requires_evidence', missingEvidence: ['检验结果'] };
+      const phases: string[] = [];
       vi.mocked(chat).mockResolvedValue(JSON.stringify(scenario === 'malformed' ? [supported] : {
         summary: '评估结论', disposition: scenario === 'urgent' ? 'urgent_referral' : 'medication_options',
         medicines: scenario === 'empty' ? [] : [supported, deferred],
@@ -63,9 +64,11 @@ describe('generateVoiceTreatmentRecommendations', () => {
         currentInformationMedication: { symptomaticOnly: true },
         explicitTreatments: [], pharmacies: [], consultationId: 'visit-1',
         normalize: (item) => item as never,
+        onMedicationPhase: (phase) => { phases.push(phase); },
       });
       expect(chat).toHaveBeenCalledTimes(1);
       expect(chatFast).not.toHaveBeenCalled();
+      expect(phases).toEqual(['preparing', 'assessing']);
       expect((await import('@/services/medicalData')).medicalDataService.fetchAvailableExamLabItems).not.toHaveBeenCalled();
       expect(buildClinicalResultTreatmentRequestSpec).toHaveBeenCalledWith(
         'medication', expect.objectContaining({ clinicalContext: '过敏史和查体' }),

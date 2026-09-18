@@ -182,6 +182,28 @@ describe('promoteOrdinaryVoiceSymptomWorkingDiagnosis', () => {
     });
   });
 
+  it('retains confirmed vomiting as a working diagnosis when the alcohol-related cause is uncertain', () => {
+    const results = promoteOrdinaryVoiceSymptomWorkingDiagnosis([
+      matchedDiagnosis({
+        name: '呕吐',
+        currentVisitEvidenceText: '大量饮酒后上腹不适伴呕吐1天',
+        evidenceText: '大量饮酒后上腹不适伴呕吐1天',
+        matchedItem: { id: 'vomiting', name: '呕吐', code: 'R11' },
+      }),
+      matchedDiagnosis({
+        name: '急性胃炎', diagnosisKind: 'disease', clinicalRole: 'differential_cause',
+        suggestionType: 'differential',
+        matchedItem: { id: 'gastritis', name: '急性胃炎', code: 'K29.1' },
+      }),
+    ], {
+      chiefComplaint: '上腹不适伴呕吐1天',
+      historyOfPresentIllness: '大量饮酒后上腹不适，自行催吐2次。',
+    });
+    expect(results[0]).toMatchObject({ name: '呕吐', suggestionType: 'formal', diagnosisKind: 'symptom_working' });
+    expect(results[1].suggestionType).toBe('differential');
+    expect(results.some((item) => item.name === '腹痛')).toBe(false);
+  });
+
   it('does not promote a symptom whose claimed evidence is absent from the chief complaint and HPI', () => {
     const result = promoteOrdinaryVoiceSymptomWorkingDiagnosis([
       matchedDiagnosis({

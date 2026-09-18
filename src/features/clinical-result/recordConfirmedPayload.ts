@@ -20,10 +20,12 @@ import {
 } from './outpatientRecord';
 import {
   collectHistoryRecordTemplateChanges,
+  collectHistoryRecordTemplateSlotValues,
   stripHistoryRecordTemplateMarkers,
   type HistoryRecordTemplateField,
 } from './historyRecordTemplates';
 import { collectPhysicalExamVitalSigns } from './physicalExamVitalTemplate';
+import { buildRecordConfirmedEmrFieldValues } from './recordConfirmedEmrFieldValues';
 
 // ===== 通用小工具（与语音侧 readFirstString / toPositiveNumber 同源） =====
 
@@ -501,6 +503,9 @@ export function buildRecordConfirmedPayload(
   const recordTemplateChanges = fullOutpatientRecord
     ? collectHistoryRecordTemplateChanges(fullOutpatientRecord, selectedHistoryTemplateFields)
     : undefined;
+  const historyTemplateValues = fullOutpatientRecord
+    ? collectHistoryRecordTemplateSlotValues(fullOutpatientRecord, selectedHistoryTemplateFields)
+    : [];
   const physicalExamVitalSigns = fullOutpatientRecord && selectedRecordFields.has('physicalExam')
     ? collectPhysicalExamVitalSigns(fullOutpatientRecord.physicalExam)
     : undefined;
@@ -512,6 +517,29 @@ export function buildRecordConfirmedPayload(
   const resolvedPrecautions = writebackOutpatientRecord?.precautions || precautions || '';
   const includeDiagnosis = !isScopedWriteback || Boolean(writebackScope?.includeDiagnosis);
   const includeOrders = !isScopedWriteback || Boolean(writebackScope?.orderTypes.length);
+  const emrFieldValues = buildRecordConfirmedEmrFieldValues({
+    record: resultType === 'record-confirmed'
+      ? {
+          chiefComplaint: resolvedChiefComplaint,
+          historyOfPresentIllness: resolvedHistoryOfPresentIllness,
+          pastMedicalHistory: resolvedPastMedicalHistory,
+          personalHistory: writebackOutpatientRecord?.personalHistory || personalHistory || '',
+          menstrualHistory: resolvedMenstrualHistory,
+          familyHistory: resolvedWritebackFamilyHistory,
+          physicalExam: writebackOutpatientRecord?.physicalExam || physicalExam || '',
+          precautions: resolvedPrecautions,
+        }
+      : {
+          chiefComplaint,
+          historyOfPresentIllness,
+        },
+    selectedRecordFields: resultType === 'record-confirmed'
+      ? selectedRecordFields
+      : new Set<RecordConfirmedWritebackField>(['chiefComplaint', 'historyOfPresentIllness']),
+    recordTemplateChanges,
+    historyTemplateValues,
+    physicalExamVitalSigns,
+  });
   // PHIS 会直接遍历 orderList；未选医嘱时仍传空数组，并由空 orderTypes 表达“不处理”。
   const orderListPayload = includeOrders ? orderList : [];
 
@@ -537,6 +565,7 @@ export function buildRecordConfirmedPayload(
     ...(treatmentPlan && includeOrders ? { treatmentPlan } : {}),
     ...(outpatientRecordPayload ? { outpatientRecord: outpatientRecordPayload } : {}),
     ...(extra || {}),
+    emrFieldValues,
     ...(recordTemplateChanges ? { recordTemplateChanges } : {}),
     ...(physicalExamVitalSigns ? { physicalExamVitalSigns } : {}),
     ...(isScopedWriteback ? { writebackScope } : {}),

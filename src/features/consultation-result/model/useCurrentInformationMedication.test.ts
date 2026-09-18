@@ -24,7 +24,9 @@ function setup(run: (request: CurrentInformationMedicationRequest) => Promise<bo
 describe('useCurrentInformationMedication', () => {
   it('runs one explicit request, passes symptom-only scope and leaves automatic routing unchanged', async () => {
     let finish!: () => void;
+    let activeRequest!: CurrentInformationMedicationRequest;
     const run = vi.fn(async (request: CurrentInformationMedicationRequest) => {
+      activeRequest = request;
       expect(request.symptomaticOnly).toBe(true);
       await new Promise<void>((resolve) => { finish = resolve; });
       request.receive(assessment);
@@ -36,8 +38,11 @@ describe('useCurrentInformationMedication', () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(onRequest).toHaveBeenCalledTimes(1);
     expect(controller.pending.value).toBe(true);
+    expect(controller.phase.value).toBe('preparing');
+    activeRequest.reportPhase('assessing');
     finish(); await first;
     expect(controller.assessment.value).toEqual(assessment);
+    expect(controller.phase.value).toBe('completed');
     expect(state.plan?.recommendNow).toEqual(['lab_test']);
     expect(state.plan?.defer).toEqual(['medicine']);
     scope.stop();
@@ -76,10 +81,33 @@ describe('useCurrentInformationMedication', () => {
     const running = controller.request();
     state.scopeKey = 'different-context';
     expect(request.isCurrent()).toBe(false);
+    request.reportPhase('finalizing');
+    request.receive(assessment);
     finish(); await running;
     expect(controller.assessment.value).toBeNull();
     expect(controller.pending.value).toBe(false);
     expect(controller.error.value).toBe('');
+    expect(controller.phase.value).toBe('idle');
+    scope.stop();
+  });
+
+  it('publishes the clinical assessment while medicine finalization is still pending', async () => {
+    let finish!: () => void;
+    const { controller, scope } = setup(async (request) => {
+      request.reportPhase('assessing');
+      request.receive(assessment);
+      request.reportPhase('finalizing');
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return true;
+    });
+    const running = controller.request();
+    await Promise.resolve();
+    expect(controller.assessment.value).toEqual(assessment);
+    expect(controller.phase.value).toBe('finalizing');
+    expect(controller.pending.value).toBe(true);
+    finish();
+    await running;
+    expect(controller.phase.value).toBe('completed');
     scope.stop();
   });
 

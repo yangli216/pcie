@@ -43,6 +43,27 @@ describe('server-managed LLM routing', () => {
     expect(chunks).toEqual(['chunk']);
   });
 
+  it('forwards the business action and title for server-side latency logs', async () => {
+    mocks.regionalPost.mockResolvedValue({ content: 'ok' });
+
+    await chat([{ role: 'user', content: 'hello' }], undefined, undefined, undefined, {
+      traceContext: {
+        scene: 'current-information-medication',
+        sourceModule: 'voice_treatment_recommendation',
+        operationAction: 'assess_medication_with_current_information',
+        title: '医生主动基于现有信息评估用药',
+      },
+    });
+
+    expect(mocks.regionalPost).toHaveBeenCalledWith(
+      '/v1/ai/chat',
+      expect.objectContaining({
+        operationAction: 'assess_medication_with_current_information',
+        operationTitle: '医生主动基于现有信息评估用药',
+      }),
+    );
+  });
+
   it('enables web search only for the assistant streaming scene', async () => {
     mocks.createRegionalSSE.mockResolvedValue(undefined);
 

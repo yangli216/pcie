@@ -147,6 +147,7 @@ export interface OutpatientEmrPreparedWritebackPayload extends Record<string, un
   writebackScope: RecordConfirmedWritebackScope;
   orderList: Array<Record<string, string | number>>;
   treatmentPlan?: string;
+  emrFieldValues?: Record<string, string>;
 }
 
 export interface OutpatientEmrRecordConfirmedPayload
@@ -156,6 +157,7 @@ export interface OutpatientEmrRecordConfirmedPayload
   templateMetadata: OutpatientEmrTemplateMetadata;
   fieldValues: Record<string, string>;
   dictionarySelections: Record<string, OutpatientEmrDictionaryItem>;
+  emrFieldValues: Record<string, string>;
 }
 
 export interface OutpatientEmrCancelledPayload {

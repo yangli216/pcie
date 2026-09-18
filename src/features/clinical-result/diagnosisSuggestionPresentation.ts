@@ -29,6 +29,19 @@ function shouldBeDifferential(diagnosis: Diagnosis): boolean {
   const rate = parseDiagnosisMatchRate(diagnosis.rate);
   if (rate !== null && rate < 60) return true;
   if (diagnosis.diagnosisKind === 'symptom_working') return false;
+  if (/待排|待鉴别|疑似|可能|待查/u.test(diagnosis.name)) return true;
+  // A structured initial diagnosis can coexist with investigations for other causes.
+  // Explicit uncertainty about this diagnosis itself still takes precedence.
+  const targetNames = [diagnosis.name, diagnosis.originalName].filter(Boolean) as string[];
+  const clauses = (diagnosis.rationale || '').split(/[，,。；;\n]/u);
+  const targetUncertain = clauses.some((clause) => (
+    /证据不足|依据不足|不能确诊|尚不能诊断|尚不能确定|缺乏.*证据|需.*才能/u.test(clause)
+    && (targetNames.some((name) => clause.includes(name)) || /本诊断|该诊断/u.test(clause))
+  ) || targetNames.some((name) => (
+    ['需排除', '待排', '待鉴别'].some((marker) => clause.replace(/\s/gu, '').includes(`${marker}${name}`))
+  )));
+  if (targetUncertain) return true;
+  if (diagnosis.suggestionType === 'formal') return false;
   if (/待排|待鉴别|需排除|不能确诊|证据不足|信息不足|需进一步|需补充|缺乏.*证据/u.test(
     `${diagnosis.name} ${diagnosis.rationale}`,
   )) return true;

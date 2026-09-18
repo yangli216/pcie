@@ -64,6 +64,8 @@ function buildRegionalChatRequestPayload(
     traceId: trace.traceId,
     scene: traceScene,
     sourceModule: traceSourceModule,
+    operationAction: customConfig?.traceContext?.operationAction,
+    operationTitle: customConfig?.traceContext?.title,
     sessionId: trace.sessionId,
   };
 }

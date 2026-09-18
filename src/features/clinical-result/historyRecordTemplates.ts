@@ -16,6 +16,12 @@ export interface HistoryRecordTemplateChanges {
   items: HistoryRecordTemplateSlotChange[];
 }
 
+export interface HistoryRecordTemplateSlotValue {
+  field: HistoryRecordTemplateField;
+  slotKey: string;
+  value: '体健' | '否认' | '有';
+}
+
 interface HistoryRecordTemplateSlot {
   key: string;
   field: HistoryRecordTemplateField;
@@ -195,4 +201,42 @@ export function collectHistoryRecordTemplateChanges(
   return items.length > 0
     ? { schemaVersion: HISTORY_RECORD_TEMPLATE_CHANGE_SCHEMA_VERSION, items }
     : undefined;
+}
+
+export function collectHistoryRecordTemplateSlotValues(
+  record: Partial<Record<HistoryRecordTemplateField, string>>,
+  includedFields: readonly HistoryRecordTemplateField[] = [
+    'pastMedicalHistory',
+    'personalHistory',
+    'familyHistory',
+  ],
+): HistoryRecordTemplateSlotValue[] {
+  const included = new Set(includedFields);
+  const values: HistoryRecordTemplateSlotValue[] = [];
+
+  (Object.keys(record) as HistoryRecordTemplateField[]).forEach((field) => {
+    if (!included.has(field)) return;
+    const source = record[field] || '';
+    if (!isHistoryRecordTemplate(field, source)) return;
+    const normalized = stripHistoryRecordTemplateMarkers(source);
+
+    getFieldSlots(field).forEach((slot) => {
+      if (slot.defaultValue === '体健') {
+        if (source.includes(`${slot.label}{体健}`) || normalized.includes(`${slot.label}体健`)) {
+          values.push({ field, slotKey: slot.key, value: '体健' });
+        }
+        return;
+      }
+      if (source.includes(`{有}${slot.label}`) || normalized.includes(`有${slot.label}`)) {
+        values.push({ field, slotKey: slot.key, value: '有' });
+      } else if (
+        source.includes(`{否认}${slot.label}`)
+        || normalized.includes(`否认${slot.label}`)
+      ) {
+        values.push({ field, slotKey: slot.key, value: '否认' });
+      }
+    });
+  });
+
+  return values;
 }

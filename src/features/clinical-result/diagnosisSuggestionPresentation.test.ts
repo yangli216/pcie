@@ -80,4 +80,38 @@ describe('diagnosisSuggestionPresentation', () => {
     expect(parseDiagnosisMatchRate('低置信')).toBe(45);
     expect(parseDiagnosisMatchRate('AI分析')).toBeNull();
   });
+
+  it('keeps an initial gastritis diagnosis alongside investigations for other causes', () => {
+    const sections = buildDiagnosisSuggestionSections([
+      diagnosis('急性胃炎', '中置信', {
+        suggestionType: 'formal',
+        rationale: '大量饮酒后上腹不适伴呕吐，考虑急性胃炎需排除胰腺及胰腺周围病变，需进一步查体。',
+      }),
+      diagnosis('急性胰腺炎', '中置信', { suggestionType: 'differential' }),
+    ]);
+    expect(sections.formal.map((item) => item.name)).toEqual(['急性胃炎']);
+    expect(sections.differential.map((item) => item.name)).toEqual(['急性胰腺炎']);
+  });
+
+  it.each([
+    '急性胃炎本身证据不足',
+    '该诊断尚不能确定',
+    '需排除急性胃炎',
+    '急性胃炎需补充依据才能诊断',
+  ])('retains uncertainty about the target diagnosis: %s', (rationale) => {
+    const sections = buildDiagnosisSuggestionSections([
+      diagnosis('急性胃炎', '70%', { suggestionType: 'formal', rationale }),
+    ]);
+    expect(sections.formal).toEqual([]);
+  });
+
+  it('does not promote an explicit differential, a low-confidence item or a pending name', () => {
+    const sections = buildDiagnosisSuggestionSections([
+      diagnosis('急性胃炎', '70%', { suggestionType: 'differential' }),
+      diagnosis('急性胃炎', '45%', { suggestionType: 'formal' }),
+      diagnosis('急性胃炎待排', '70%', { suggestionType: 'formal' }),
+    ]);
+    expect(sections.formal).toEqual([]);
+    expect(sections.differential).toHaveLength(3);
+  });
 });

@@ -5,6 +5,7 @@ import { TreatmentRecommendationPrompt } from '@/prompts/prompts';
 import {
   buildCurrentInformationMedicationPrompt,
   buildCurrentInformationMedicationHistory,
+  buildCurrentInformationMedicationTimingLog,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,
   parseCurrentInformationMedicationResult,
@@ -19,6 +20,31 @@ const response = (medicines: unknown[], disposition = 'medication_options') => (
 });
 
 describe('current information medication assessment', () => {
+  it('builds numeric-only end-to-end timing details', () => {
+    const log = buildCurrentInformationMedicationTimingLog({
+      startedAt: 1_000,
+      assessmentStartedAt: 1_120,
+      finalizationStartedAt: 1_820,
+      completedAt: 2_100,
+      candidateCount: 3,
+      readyCount: 2,
+      deferredCount: 1,
+    });
+    expect(log).toEqual({
+      durationMs: 1_100,
+      details: {
+        preparationMs: 120,
+        aiAssessmentMs: 700,
+        finalizationMs: 280,
+        totalMs: 1_100,
+        candidateCount: 3,
+        readyCount: 2,
+        deferredCount: 1,
+      },
+    });
+    expect(Object.values(log.details).every((value) => typeof value === 'number')).toBe(true);
+  });
+
   it('preserves current allergy facts alongside unknown HIS history and includes HIS current medicines', () => {
     expect(buildCurrentInformationMedicationHistory(buildPatientContext({
       payload: { patientId: 'patient-1', allergyHistory: '未记录', currentMedicationHistory: '氨氯地平' },
@@ -32,17 +58,24 @@ describe('current information medication assessment', () => {
     const ready = { type: 'medicine', name: '药品A', selected: false } as TreatmentRecommendation;
     const incomplete = { type: 'medicine', name: '药品B', selected: false } as TreatmentRecommendation;
     const order: string[] = [];
+    const onSummary = vi.fn();
     const checkInventory = vi.fn(async () => { order.push('inventory'); return true; });
     const prepared = await prepareCurrentInformationMedicines([ready, incomplete], {
       finalize: async () => { order.push('finalize'); return [{ item: ready, ready: true }, { item: incomplete, ready: false }]; },
       checkInventory,
       isCurrent: () => true,
+      onSummary,
     });
     expect(prepared).toBe(true);
     expect(order).toEqual(['finalize', 'inventory']);
     expect(checkInventory).toHaveBeenCalledWith(ready);
     expect(checkInventory).toHaveBeenCalledTimes(1);
     expect(ready.selected).toBe(false);
+    expect(onSummary).toHaveBeenCalledWith({
+      candidateCount: 2,
+      finalizedCount: 1,
+      inventoryReadyCount: 1,
+    });
   });
 
   it('rejects a late preparation result before inventory checks or committing medicines', async () => {

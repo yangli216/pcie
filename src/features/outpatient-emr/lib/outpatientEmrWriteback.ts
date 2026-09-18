@@ -237,6 +237,10 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
         : []
     )),
   );
+  const templateBindValues = Object.fromEntries(activeFields.map((field) => [
+    field.id,
+    dictionarySelections[field.id]?.value ?? fieldValues[field.id],
+  ]));
 
   const result: OutpatientEmrRecordConfirmedPayload = {
     ...(baseWritebackPayload
@@ -292,6 +296,10 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     },
     fieldValues,
     dictionarySelections,
+    emrFieldValues: {
+      ...(baseWritebackPayload?.emrFieldValues || {}),
+      ...templateBindValues,
+    },
     ...projectedCompatibilityValues,
     ...(outpatientRecord ? { outpatientRecord } : {}),
     writebackScope,

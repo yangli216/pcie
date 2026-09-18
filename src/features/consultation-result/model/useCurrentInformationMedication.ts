@@ -2,9 +2,18 @@ import { computed, ref, watch } from 'vue';
 import type { ClinicalResultChannel, ClinicalResultRecommendationPlan } from '../../clinical-result/clinicalResultContract';
 import type { CurrentInformationMedicationAssessment } from '../../clinical-result/currentInformationMedication';
 
+export type CurrentInformationMedicationPhase =
+  | 'idle'
+  | 'preparing'
+  | 'assessing'
+  | 'finalizing'
+  | 'completed'
+  | 'failed';
+
 export interface CurrentInformationMedicationRequest {
   symptomaticOnly: boolean;
   isCurrent: () => boolean;
+  reportPhase: (phase: Extract<CurrentInformationMedicationPhase, 'preparing' | 'assessing' | 'finalizing'>) => void;
   receive: (assessment: CurrentInformationMedicationAssessment) => void;
 }
 
@@ -24,10 +33,13 @@ export function useCurrentInformationMedication(options: {
   run: (request: CurrentInformationMedicationRequest) => Promise<boolean>;
   onRequest: () => void;
 }) {
-  const pending = ref(false);
+  const phase = ref<CurrentInformationMedicationPhase>('idle');
   const error = ref('');
   const assessment = ref<CurrentInformationMedicationAssessment | null>(null);
   let sequence = 0;
+  const pending = computed(() => (
+    phase.value === 'preparing' || phase.value === 'assessing' || phase.value === 'finalizing'
+  ));
   const context = computed(options.getContext);
   const eligible = computed(() => (
     (context.value.channel === 'voice' || context.value.channel === 'symptom')
@@ -49,7 +61,7 @@ export function useCurrentInformationMedication(options: {
 
   watch(() => context.value.scopeKey, () => {
     sequence += 1;
-    pending.value = false;
+    phase.value = 'idle';
     error.value = '';
     assessment.value = null;
   }, { flush: 'sync' });
@@ -61,25 +73,33 @@ export function useCurrentInformationMedication(options: {
     const symptomaticOnly = context.value.symptomaticOnly;
     const isCurrent = () => requestSequence === sequence
       && scopeKey === context.value.scopeKey && eligible.value;
-    pending.value = true;
+    phase.value = 'preparing';
     error.value = '';
-    let nextAssessment: CurrentInformationMedicationAssessment | null = null;
+    let receivedAssessment = false;
     try {
       options.onRequest();
       const succeeded = await options.run({
         symptomaticOnly,
         isCurrent,
-        receive: (result) => { if (isCurrent()) nextAssessment = result; },
+        reportPhase: (nextPhase) => {
+          if (isCurrent()) phase.value = nextPhase;
+        },
+        receive: (result) => {
+          if (!isCurrent()) return;
+          receivedAssessment = true;
+          assessment.value = result;
+        },
       });
       if (!isCurrent()) return;
-      if (!succeeded || !nextAssessment) throw new Error('Medication assessment unavailable');
-      assessment.value = nextAssessment;
+      if (!succeeded || !receivedAssessment) throw new Error('Medication assessment unavailable');
+      phase.value = 'completed';
     } catch {
-      if (isCurrent()) error.value = '用药评估暂未完成，原方案已保留，请稍后重试。';
-    } finally {
-      if (requestSequence === sequence) pending.value = false;
+      if (isCurrent()) {
+        phase.value = 'failed';
+        error.value = '用药评估暂未完成，原方案已保留，请稍后重试。';
+      }
     }
   }
 
-  return { visible, disabled, pending, reason, assessment, error, request };
+  return { visible, disabled, pending, phase, reason, assessment, error, request };
 }

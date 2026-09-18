@@ -6,6 +6,7 @@ import type {
   VoiceOutpatientEmrStartContext,
   VoiceOutpatientEmrTemplateInput,
 } from '../types';
+import { collectOutpatientEmrStructuredEvidence } from './outpatientEmrStructuredProjection';
 
 const VOICE_OUTPATIENT_EMR_TEMPLATE_FIELDS = [
   'templateId',
@@ -134,6 +135,9 @@ export function isPreparedOutpatientEmrWritebackPayload(
   if (value.outpatientRecord !== undefined && !isStringRecord(value.outpatientRecord)) {
     return false;
   }
+  if (value.emrFieldValues !== undefined && !isStringRecord(value.emrFieldValues)) {
+    return false;
+  }
   return value.diagList === undefined || Array.isArray(value.diagList);
 }
 
@@ -206,6 +210,7 @@ export function buildVoiceOutpatientEmrRecordContext(
   const diagnoses = buildDiagnosisFacts(payload.diagList);
   const orders = buildOrderFacts(payload.orderList);
   const treatmentPlan = readText(payload.treatmentPlan);
+  const structuredEvidence = collectOutpatientEmrStructuredEvidence(payload);
 
   if (!recordText && diagnoses.length === 0 && orders.length === 0 && !treatmentPlan) {
     throw new Error('已选回写内容中没有可用于动态模板分析的病例事实。');
@@ -218,6 +223,7 @@ export function buildVoiceOutpatientEmrRecordContext(
       diagnoses,
       orders,
       ...(treatmentPlan ? { treatmentPlan } : {}),
+      ...structuredEvidence,
     },
   };
 }

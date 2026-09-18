@@ -509,6 +509,86 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     }));
   });
 
+  it('returns confirmed history positives by PHIS data-id and dictionary code', async () => {
+    const templateDefinition = JSON.stringify([{
+      ID: 'article-past-history',
+      NAME: '既往史',
+      ARTICLE: '既往史',
+      eles: [{
+        ID: '高血压病史标志',
+        NAME: '高血压病史标志',
+        TYPE: 'select',
+        READONLY: false,
+        VALUE: '0',
+        TEXT: '否认',
+        BINDINGDATA: [
+          { VALUE: '', TEXT: '' },
+          { VALUE: '0', TEXT: '否认' },
+          { VALUE: '1', TEXT: '有' },
+        ],
+      }],
+    }, {
+      ID: 'article-physical-exam',
+      NAME: '体格检查',
+      ARTICLE: '体格检查',
+      eles: [{
+        ID: '体温',
+        NAME: '体温',
+        TYPE: 'text',
+        READONLY: false,
+        VALUE: '',
+        TEXT: '',
+      }],
+    }]);
+    const analysis = useOutpatientEmrAnalysis({
+      analyzeFields: vi.fn().mockResolvedValue({ 高血压病史标志: '', 体温: '' }),
+      hashTemplate: vi.fn().mockResolvedValue('template-hash'),
+    });
+
+    await expect(analysis.start(createRequest({
+      templateHtml: `
+        <section data-id="article-past-history" data-article="既往史" data-name="既往史">
+          <span data-id="高血压病史标志" data-name="高血压病史标志" data-type="select" data-readonly="false"><span class="tag-value">否认</span></span>
+        </section>
+        <section data-id="article-physical-exam" data-article="体格检查" data-name="体格检查">
+          <span data-id="体温" data-name="体温" data-type="text" data-readonly="false"><span class="tag-value"></span></span>
+        </section>
+      `,
+      templateDefinition,
+      targetFieldIds: ['高血压病史标志', '体温'],
+      recordContext: {
+        recordText: '既往史：有高血压病史。体格检查：T:36.5℃。',
+        structuredFacts: {
+          historyTemplateChanges: {
+            schemaVersion: 'outpatient-record-template-changes.v1',
+            items: [{
+              field: 'pastMedicalHistory',
+              slotKey: 'hypertensionHistory',
+              fromValue: '否认',
+              toValue: '有',
+            }],
+          },
+          physicalExamVitalSigns: {
+            schemaVersion: 'outpatient-record-physical-exam-vitals.v1',
+            items: [{ slotKey: 'temperature', value: '36.5' }],
+          },
+        },
+      },
+    }))).resolves.toBe(true);
+
+    expect(analysis.fieldValues.value).toEqual({
+      高血压病史标志: '有',
+      体温: '36.5',
+    });
+    expect(analysis.buildConfirmedPayload()).toEqual(expect.objectContaining({
+      fieldValues: { 高血压病史标志: '有', 体温: '36.5' },
+      dictionarySelections: {
+        高血压病史标志: { value: '1', text: '有' },
+      },
+      emrFieldValues: { 高血压病史标志: '1', 体温: '36.5' },
+    }));
+  });
+
   it('rejects a reused requestId when the template snapshot changes', async () => {
     const analyzeFields = vi.fn().mockResolvedValue({
       personalHistory: '模型个人史',

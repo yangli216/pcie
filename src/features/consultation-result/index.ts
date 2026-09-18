@@ -263,4 +263,7 @@ export type {
 } from './model/useSecondarySelector';
 export { default as CurrentInformationMedication } from './ui/CurrentInformationMedication.vue';
 export { useCurrentInformationMedication } from './model/useCurrentInformationMedication';
-export type { CurrentInformationMedicationRequest } from './model/useCurrentInformationMedication';
+export type {
+  CurrentInformationMedicationPhase,
+  CurrentInformationMedicationRequest,
+} from './model/useCurrentInformationMedication';

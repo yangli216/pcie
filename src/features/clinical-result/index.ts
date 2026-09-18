@@ -119,6 +119,12 @@ export {
   formatPhysicalExamVitalTemplate,
   PHYSICAL_EXAM_VITAL_SCHEMA_VERSION,
 } from './physicalExamVitalTemplate';
+export {
+  buildRecordConfirmedEmrFieldValues,
+  HISTORY_DATA_ID_BY_SLOT,
+  PHYSICAL_EXAM_DATA_ID_BY_SLOT,
+} from './recordConfirmedEmrFieldValues';
+export type { BuildRecordConfirmedEmrFieldValuesInput } from './recordConfirmedEmrFieldValues';
 export type {
   PhysicalExamVitalSigns,
   PhysicalExamVitalSignItem,
@@ -134,6 +140,7 @@ export {
   DEFAULT_PERSONAL_HISTORY_TEMPLATE,
   HISTORY_RECORD_TEMPLATE_CHANGE_SCHEMA_VERSION,
   collectHistoryRecordTemplateChanges,
+  collectHistoryRecordTemplateSlotValues,
   getDefaultHistoryRecordTemplate,
   isHistoryRecordTemplate,
   resolveHistoryRecordTemplate,
@@ -143,6 +150,7 @@ export type {
   HistoryRecordTemplateChanges,
   HistoryRecordTemplateField,
   HistoryRecordTemplateSlotChange,
+  HistoryRecordTemplateSlotValue,
 } from './historyRecordTemplates';
 
 export {
@@ -423,6 +431,7 @@ export { completeGeneratedPrecautions } from './precautionsFollowUp';
 export {
   buildCurrentInformationMedicationPrompt,
   buildCurrentInformationMedicationHistory,
+  buildCurrentInformationMedicationTimingLog,
   parseCurrentInformationMedicationResult,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,

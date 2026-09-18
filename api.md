@@ -1314,6 +1314,9 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
     "personalHistoryText": "既往吸烟20年，已戒烟2年。"
   },
   "dictionarySelections": {},
+  "emrFieldValues": {
+    "personalHistoryText": "既往吸烟20年，已戒烟2年。"
+  },
   "outpatientRecord": {
     "schemaVersion": "outpatient-record.v1",
     "personalHistory": "既往吸烟20年，已戒烟2年。"
@@ -1330,7 +1333,7 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
 回传约束：
 
 1. `templateMetadata.fields` 只包含本次 `targetFieldIds` 范围内、与模板对 hash 绑定的字段映射快照，保留字段身份、定义章节 ID、业务章节 ID、渲染章节名、定义章节名、合法字典和固定映射；后台保存的完整解析快照可以包含模板中的其他非目标字段。最终事件不返回两份模板原文、提示词、原始 `recordContext` 或模型原文。
-2. `fieldValues` 必须逐一包含本次分析范围内全部模板字段。每个生效字典字段都必须由模型重新显式返回；漏 key 是模型输出协议错误，显式空字符串或模板外值保留为空让医生选择，禁止回退模板当前/默认选择。医生确认时字典值必须唯一命中模板项，`dictionarySelections[id].text` 必须与 `fieldValues[id]` 一致。
+2. `fieldValues` 必须逐一包含本次分析范围内全部模板字段。每个生效字典字段都必须由模型重新显式返回；漏 key 是模型输出协议错误，显式空字符串或模板外值保留为空让医生选择，禁止回退模板当前/默认选择。语音问诊续接场景中，标准结果页已确认的完整固定既往史槽位会按 PHIS 精确 `data-id` 投影，并用目标字段实际 `BINDINGDATA` 把绑定编码还原成显示文本；例如同一个阳性编码 `"1"` 在传染病史中显示“患有”，在高血压病史中显示“有”。明确的 `physicalExamVitalSigns` 同样按 `体温/脉搏/呼吸/收缩压/舒张压` 精确回填。没有结构化确认项时不得从普通正文或诊断推断确定性覆盖。医生确认时字典值必须唯一命中模板项，`dictionarySelections[id].text` 必须与 `fieldValues[id]` 一致。
 3. `outpatientRecord` 只投影已映射标准字段；未映射字段仍通过 `fieldValues` 返回。同一章节的 `section-compose` 字段按模板顺序确定性归并。`fieldValues + dictionarySelections + outpatientRecord + writebackScope` 必须来自同一个医生最终值 Map，不得为不同结果重复调用模型。
 4. `writebackScope.includeDiagnosis=false`、`writebackScope.orderTypes=[]`、`orderList=[]`；本接口不处理诊断或医嘱。HIS 收到 `record-confirmed` 后自行按模板字段 ID 回填并通过 `/api/consultation/reference-feedback` 回执。
 5. SDK Promise 与业务订阅只消费 payload 自身身份和固定结构完整的确认/取消事件，不从事件 envelope 补字段。模板快照登记、模型分析或最终校验失败均不得产生部分 `record-confirmed`。
@@ -1346,6 +1349,7 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
 | `templateMetadata` | 是 | 校验模板 ID、名称、hash，并读取每个字段的类型、字典和标准病历映射 |
 | `fieldValues` | 是 | 以模板字段 `data-id` 为 key 的最终显示文本；必须覆盖全部本次目标字段 |
 | `dictionarySelections` | 是 | 字典字段的最终 `{value,text}`；非字典字段不在此对象中 |
+| `emrFieldValues` | 是 | 可直接传给 `medEleDatabinds` 的扁平 `data-id → 绑定值`；文本字段为最终文本，字典字段为 `dictionarySelections[id].value`，语音合并时还包含医生已选标准病历字段的常用 data-id 和完整固定既往史槽位 |
 | `outpatientRecord` | 否 | 可确定映射到标准病历字段时提供的便利投影；不能替代 `fieldValues` 回填模板 |
 | `writebackScope` | 是 | 说明本次标准病历投影范围；诊断恒为 false、医嘱范围恒为空 |
 | `orderList` | 是 | 当前接口固定为空数组；HIS 不得据此清空已有医嘱 |
@@ -1358,7 +1362,7 @@ HIS 收到结果后必须按以下顺序处理：
 2. 校验 `visitId / consultationId / requestId / templateMetadata.templateId` 与当前未完成任务完全一致。
 3. 按相同算法重算当前编辑器模板对的 `templateHash`，并与 `templateMetadata.templateHash` 比较。若医生站已切换模板或模板已刷新，禁止把旧结果写入新模板。
 4. 校验 `fieldValues` 恰好覆盖本次 `targetFieldIds`。缺 key 属于协议错误，不能用当前模板默认值补齐。
-5. 非字典字段按 `fieldValues[fieldId]` 写入当前模板 `data-id=fieldId`。
+5. PHIS 可直接调用 `medEleDatabinds(result.emrFieldValues)` 完成绑定；其中字典字段已经是 `BINDINGDATA.VALUE`，文本字段是最终文本。若使用逐字段事务，则非字典字段按 `fieldValues[fieldId]` 写入当前模板 `data-id=fieldId`。
 6. 字典字段必须读取 `dictionarySelections[fieldId]`：用 `value` 回填字典编码，用 `text` 回填显示文字，并再次确认该 `{value,text}` 存在于 `templateMetadata.fields[].dictionaryItems`。`fieldValues[fieldId]` 必须等于该 `text`。
 7. `outpatientRecord` 只用于同时维护 HIS 的标准病历 DTO；模板渲染器回填仍以 `fieldValues + dictionarySelections` 为准。未映射模板字段也必须回填，不能因为 `outpatientRecord` 中不存在而丢弃。
 8. 在 HIS 自己的编辑器事务内完成全部字段写入。任一字段失败时，本次回填整体按失败处理，不得报告部分成功。
@@ -1821,8 +1825,9 @@ ws://127.0.0.1:8081/api/consultation/events/ws
 9. 没有 `writebackScope` 的历史客户端仍按完整回写契约处理，继续携带完整 `outpatientRecord`、`diagList` 与 `orderList`；PHIS 不得要求旧版本补传 scope。
 10. 固定既往史、个人史、家族史模板在桌面端编辑时使用 `{体健}` / `{否认}` / `{有}` 状态槽位；为兼容既有 PHIS，顶层病历字段和 `outpatientRecord` 中发送的是去掉花括号后的自然文本。若医生选择回写的病史字段中存在由明确上下文改为 `{有}` 的槽位，payload 额外携带 `recordTemplateChanges`；PHIS 应优先按 `field + slotKey` 精确更新对应模板值。未选字段不出现在变化清单中；没有变化时整个对象省略。旧 PHIS 可忽略此新增对象并继续读取自然文本。
 11. `physicalExam` 固定以 `T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{收缩压}/{舒张压}mmHg。` 槽位开头；对话、结构化问诊或本次 HIS 上下文有明确数值时，各槽位分别替换为带花括号的值。花括号是 PHIS 体格检查字段标记，不等同于已确认状态。选择回写体格检查且至少一个槽位已有数值时，payload 额外携带 `physicalExamVitalSigns`；未选择体格检查或仍全部为具名占位词时省略该对象。
-12. `prescriptionAttributes.chronicLongTerm = true` 只允许出现在 `chronic-refill` 慢病复诊渠道、本次 `orderList` 至少包含一项已选药品且 HIS 当前患者签约状态明确为已签约时；它是跨 HIS 的中性处方头语义，不是药品明细字段。未签约、签约状态未知、普通语音、症状问诊、独立诊疗方案以及无药回写必须省略该对象并按普通处方处理。PHIS 收到后仍须复用 `searchByIdPiMB` 的签约判定，并校验本次正式诊断是否命中院内慢病长处方诊断配置；校验通过后映射为普通西药 / 中成药处方头 `slowMedicine = "1"`，失败必须回执失败，不得保存成普通处方。后续打印以落库的处方头标志选择慢病长处方版式。
-13. 药品回写的分类事实源是 PHIS `HiBdMed.sdMed`：`sdMed=1` 必须映射为西药 `sdSrv=11`，`sdMed=2` 必须映射为中成药 `sdSrv=12`。桌面端在实时目录映射和最终 payload 构造两处执行同一规则；最终构造必须优先使用回写前药品详情补全返回的 `sdMed`，不得因本地匹配缓存缺少 PHIS 私有字段而把中成药回退成 `11`。PHIS 后端再按 `sdSrv` 统一组方：西药与中成药必须分别建方，不受混合开单参数影响；在药品分类、特殊处方类型和发药药房一致的组内，按传入顺序每张最多 5 条药品明细，超出自动新建处方，不合并或丢弃明细。每张拆分处方继承诊断、科室及适用的慢病长处方属性，分别保存、计费与审方，最终仍以原 `requestId` 返回一次回执。
+12. `emrFieldValues` 始终是扁平的 `{ [data-id]: 绑定值 }`，只展开本次 `writebackScope.recordFields` 已选病历字段。标准正文同时覆盖 PHIS 当前兼容 data-id，例如主诉覆盖 `主诉/主诉文本`、现病史覆盖 `门诊现病史文本/现病史文本/现病史`；选择既往史、个人史或家族史时，在保留兼容文本字段的同时完整展开相应固定结构槽位，`平素体健` 写 `平素: "1"`，阳性写 `"1"`，阴性写 `"0"`。结构名称按当前 PHIS 模板精确映射，例如吸烟史写 `吸烟史标志`，家族重大遗传病史写 `家族病史标志`。传染病阳性的显示文本虽为“患有”，直接绑定值仍为 `"1"`。体格检查在保留 `体格检查` 正文的同时展开明确生命体征文本值。PHIS 可直接调用 `medEleDatabinds(data.emrFieldValues)`，无需再次解析正文、`recordTemplateChanges` 或 `physicalExamVitalSigns`。未选择字段不会出现在对象中，不得在 PHIS 侧补空值。
+13. `prescriptionAttributes.chronicLongTerm = true` 只允许出现在 `chronic-refill` 慢病复诊渠道、本次 `orderList` 至少包含一项已选药品且 HIS 当前患者签约状态明确为已签约时；它是跨 HIS 的中性处方头语义，不是药品明细字段。未签约、签约状态未知、普通语音、症状问诊、独立诊疗方案以及无药回写必须省略该对象并按普通处方处理。PHIS 收到后仍须复用 `searchByIdPiMB` 的签约判定，并校验本次正式诊断是否命中院内慢病长处方诊断配置；校验通过后映射为普通西药 / 中成药处方头 `slowMedicine = "1"`，失败必须回执失败，不得保存成普通处方。后续打印以落库的处方头标志选择慢病长处方版式。
+14. 药品回写的分类事实源是 PHIS `HiBdMed.sdMed`：`sdMed=1` 必须映射为西药 `sdSrv=11`，`sdMed=2` 必须映射为中成药 `sdSrv=12`。桌面端在实时目录映射和最终 payload 构造两处执行同一规则；最终构造必须优先使用回写前药品详情补全返回的 `sdMed`，不得因本地匹配缓存缺少 PHIS 私有字段而把中成药回退成 `11`。PHIS 后端再按 `sdSrv` 统一组方：西药与中成药必须分别建方，不受混合开单参数影响；在药品分类、特殊处方类型和发药药房一致的组内，按传入顺序每张最多 5 条药品明细，超出自动新建处方，不合并或丢弃明细。每张拆分处方继承诊断、科室及适用的慢病长处方属性，分别保存、计费与审方，最终仍以原 `requestId` 返回一次回执。
 
 慢病复诊含药回写时额外出现：
 
@@ -1875,6 +1880,34 @@ ws://127.0.0.1:8081/api/consultation/events/ws
 | `items[].value` | String | 本次明确获取的数值，不含单位；具名占位词不进入 items |
 | `items[].unit` | String | 体温为 `℃`，脉搏/呼吸为 `次/分`，血压为 `mmHg` |
 | `items[].marker` | String | 与 `physicalExam` 正文对应的独立标记，例如 `{120}`；PHIS 定位应优先使用 `slotKey` |
+
+**PHIS 直接绑定示例：**
+
+```js
+$env.doctorStationEventBus.$on("updateDraftEMR", (data) => {
+  const emrdata = data?.emrFieldValues || {};
+  me.vue.$refs?.EMR?.medEleDatabinds?.(emrdata);
+});
+```
+
+例如高血压阳性并采集到血压时，`emrFieldValues` 会包含：
+
+```json
+{
+  "既往史文本": "平素体健；有高血压病史……",
+  "平素": "1",
+  "肝炎史标志": "0",
+  "结核史标志": "0",
+  "高血压病史标志": "1",
+  "糖尿病史标志": "0",
+  "体格检查": "T:{36.6}℃ P:{76}次/分 R:{18}次/分 Bp:{128}/{82}mmHg……",
+  "体温": "36.6",
+  "脉搏": "76",
+  "呼吸": "18",
+  "收缩压": "128",
+  "舒张压": "82"
+}
+```
 
 **diagList 字段：**
 

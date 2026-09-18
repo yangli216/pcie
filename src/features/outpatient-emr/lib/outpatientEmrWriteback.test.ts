@@ -99,7 +99,7 @@ describe('outpatient EMR model output normalization', () => {
       baselineDictionaryValue: '0',
       dictionaryItems: [
         { value: '0', text: '否认' },
-        { value: '1', text: '有' },
+        { value: '1', text: '患有' },
       ],
       recordField: 'pastMedicalHistory',
       mappingSource: 'deterministic-article',
@@ -139,7 +139,7 @@ describe('outpatient EMR model output normalization', () => {
       肝炎史标志: '1',
       月经规则标志: '2',
     }, constrainedFields)).toEqual({
-      肝炎史标志: '有',
+      肝炎史标志: '患有',
       月经规则标志: '月经不规则',
     });
   });
@@ -215,6 +215,10 @@ describe('outpatient EMR writeback payload', () => {
         familyHistory: '模板家族史',
       },
       dictionarySelections: {},
+      emrFieldValues: {
+        personalHistory: '医生确认个人史',
+        familyHistory: '模板家族史',
+      },
       outpatientRecord: {
         schemaVersion: 'outpatient-record.v1',
         personalHistory: '医生确认个人史',
@@ -295,6 +299,10 @@ describe('outpatient EMR writeback payload', () => {
         amount: 1,
       }],
       treatmentPlan: '用药：复方氨酚烷胺胶囊。',
+      emrFieldValues: {
+        个人史文本: '语音确认个人史',
+        高血压病史标志: '1',
+      },
       recordTemplateChanges: { stale: true },
       writebackScope: {
         recordFields: ['personalHistory'],
@@ -318,6 +326,12 @@ describe('outpatient EMR writeback payload', () => {
     expect(payload.requestId).toBe('REQ-001');
     expect(payload.referenceMessage).toBe('等待 HIS 完成动态模板及已选诊疗内容回写并回执');
     expect(payload.fieldValues).toEqual({
+      personalHistory: '模板确认个人史',
+      familyHistory: '模板确认家族史',
+    });
+    expect(payload.emrFieldValues).toEqual({
+      个人史文本: '语音确认个人史',
+      高血压病史标志: '1',
       personalHistory: '模板确认个人史',
       familyHistory: '模板确认家族史',
     });
@@ -365,7 +379,7 @@ describe('outpatient EMR writeback payload', () => {
         baselineDictionaryValue: '0',
         dictionaryItems: [
           { value: '0', text: '否认' },
-          { value: '1', text: '有' },
+          { value: '1', text: '患有' },
         ],
         recordField: 'pastMedicalHistory',
         mappingSource: 'deterministic-article',
@@ -407,6 +421,10 @@ describe('outpatient EMR writeback payload', () => {
     expect(payload.writebackScope.recordFields).toEqual(['pastMedicalHistory']);
     expect(payload.dictionarySelections).toEqual({
       肝炎史标志: { value: '0', text: '否认' },
+    });
+    expect(payload.emrFieldValues).toEqual({
+      肝炎史标志: '0',
+      高血压病史补充: '高血压 5 年，规律服药',
     });
   });
 

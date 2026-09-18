@@ -36,6 +36,8 @@ import {
   buildClinicalResultDiagnosisRequestSpec,
   buildDiagnosisScopedPrecautions,
   buildCurrentInformationMedicationHistory,
+  buildCurrentInformationMedicationTimingLog,
+  loadAvailableMedicineInventoryContext,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,
   type CurrentInformationMedicationAssessment,
@@ -648,6 +650,7 @@ const {
   visible: showCurrentInformationMedication,
   disabled: currentInformationMedicationDisabled,
   pending: currentInformationMedicationPending,
+  phase: currentInformationMedicationPhase,
   reason: currentInformationMedicationReason,
   assessment: currentInformationMedicationAssessment,
   error: currentInformationMedicationError,
@@ -1765,6 +1768,49 @@ async function fetchAITreatment(
     && diagnosisIdentity === getDiagnosisIdentity(selectedDiagnosis.value)
     && (options.currentInformationMedication?.isCurrent() ?? true)
   );
+  const currentMedicationTiming = options.currentInformationMedication ? {
+    startedAt: Date.now(),
+    assessmentStartedAt: 0,
+    finalizationStartedAt: 0,
+    candidateCount: 0,
+    readyCount: 0,
+    deferredCount: 0,
+    logged: false,
+  } : null;
+  const reportCurrentMedicationPhase = (
+    phase: 'preparing' | 'assessing' | 'finalizing',
+  ) => {
+    if (!options.currentInformationMedication || !currentMedicationTiming || !isCurrentTreatmentRequest()) return;
+    const now = Date.now();
+    if (phase === 'assessing' && !currentMedicationTiming.assessmentStartedAt) {
+      currentMedicationTiming.assessmentStartedAt = now;
+    }
+    if (phase === 'finalizing' && !currentMedicationTiming.finalizationStartedAt) {
+      currentMedicationTiming.finalizationStartedAt = now;
+    }
+    options.currentInformationMedication.reportPhase(phase);
+  };
+  const logCurrentMedicationTiming = (success: boolean) => {
+    if (!currentMedicationTiming || currentMedicationTiming.logged) return;
+    currentMedicationTiming.logged = true;
+    const completedAt = Date.now();
+    const timingLog = buildCurrentInformationMedicationTimingLog({
+      ...currentMedicationTiming,
+      completedAt,
+    });
+    trackBusinessOperation({
+      module: 'consultation-result',
+      action: 'complete_current_information_medication',
+      operationName: 'complete_current_information_medication',
+      title: '基于现有信息推荐用药端到端耗时',
+      operationType: 'api_call',
+      sourceModule: `${resultChannel.value}_consultation_result`,
+      scene: 'current-information-medication',
+      success,
+      durationMs: timingLog.durationMs,
+      details: timingLog.details,
+    });
+  };
 
   treatmentLoading.value = true;
   beginTreatmentGeneration(diagnosisIdentity);
@@ -1803,8 +1849,11 @@ async function fetchAITreatment(
     && !treatments.value.some((item) => !isDoctorOwnedTreatment(item));
 
   try {
+    reportCurrentMedicationPhase('preparing');
     if (requestedTypes.includes('medicine')) {
-      await fetchPharmacyOptions();
+      await fetchPharmacyOptions({
+        finalizeExistingMedicines: !options.currentInformationMedication,
+      });
     }
     if (!isCurrentTreatmentRequest()) return false;
     await generateVoiceTreatmentRecommendations({
@@ -1818,6 +1867,8 @@ async function fetchAITreatment(
       pharmacies: pharmacyOptions.value,
       consultationId: resolveConsultationId(),
       normalize: normalizeTreatmentRecommendation,
+      onMedicationPhase: options.currentInformationMedication
+        ? reportCurrentMedicationPhase : undefined,
       onTaskResult: async (task) => {
         if (!isCurrentTreatmentRequest()) return;
         if (task.error) {
@@ -1829,6 +1880,12 @@ async function fetchAITreatment(
           return;
         }
         medicationAssessment = task.medicationAssessment || medicationAssessment;
+        if (options.currentInformationMedication && task.medicationAssessment) {
+          currentMedicationTiming!.candidateCount = task.items.length;
+          currentMedicationTiming!.deferredCount = task.medicationAssessment.deferred.length;
+          options.currentInformationMedication.receive(task.medicationAssessment);
+          reportCurrentMedicationPhase('finalizing');
+        }
         const ranked = await applyRecommendationPreferenceRanking(
           task.items,
           buildTreatmentPreferenceCandidate,
@@ -1876,14 +1933,20 @@ async function fetchAITreatment(
         finalize: finalizeMedicineRecommendations,
         checkInventory: (item) => checkMedicineInventoryEnough(item, false),
         isCurrent: isCurrentTreatmentRequest,
+        onSummary: (summary) => {
+          if (currentMedicationTiming) {
+            currentMedicationTiming.candidateCount = summary.candidateCount;
+            currentMedicationTiming.readyCount = summary.inventoryReadyCount;
+          }
+        },
       });
       if (!prepared) return false;
       treatments.value = mergeCurrentInformationMedicines(treatments.value, generated);
-      options.currentInformationMedication.receive(medicationAssessment);
       void registerCurrentRecommendations();
       void performTreatmentFactCheck(generated);
       submitVoiceGeneratedUserLog();
       persistEditorSnapshotImmediate();
+      logCurrentMedicationTiming(true);
       return true;
     }
     treatments.value = mergeGeneratedTreatmentBranches(
@@ -1944,6 +2007,7 @@ async function fetchAITreatment(
         fallback: '请稍后重试。',
       }), 'error');
     }
+    logCurrentMedicationTiming(false);
     return false;
   } finally {
     if (requestSeq === treatmentRequestSeq.value) {
@@ -2625,8 +2689,13 @@ async function fetchRouteOptions(): Promise<void> {
   await loadRouteDict();
 }
 
-async function fetchPharmacyOptions(): Promise<void> {
-  await loadPharmacyDict();
+let preparedMedicineCatalogStoreKey = '';
+let medicineCatalogPreparation: { key: string; promise: Promise<void> } | null = null;
+
+async function fetchPharmacyOptions(options: { finalizeExistingMedicines?: boolean } = {}): Promise<void> {
+  if (pharmacyOptions.value.length === 0) {
+    await loadPharmacyDict();
+  }
   // 语音侧专属副作用：拿到药房列表后预热药品目录与匹配项详情
   const his = getHisAdapter();
   if (!his) {
@@ -2641,14 +2710,53 @@ async function fetchPharmacyOptions(): Promise<void> {
     return;
   }
   try {
-    await medicalDataService.ensureMedicineCatalogForStoreIds(activeStoreIds, his);
-    await finalizeMedicineRecommendations(treatments.value, {
-      checkInventory: treatments.value.some((item) => item.type === 'medicine' && item.selected),
-    });
+    const storeKey = [...activeStoreIds].sort().join('|');
+    if (preparedMedicineCatalogStoreKey !== storeKey) {
+      if (!medicineCatalogPreparation || medicineCatalogPreparation.key !== storeKey) {
+        const promise = medicalDataService.ensureMedicineCatalogForStoreIds(activeStoreIds, his)
+          .then(() => { preparedMedicineCatalogStoreKey = storeKey; })
+          .finally(() => {
+            if (medicineCatalogPreparation?.promise === promise) medicineCatalogPreparation = null;
+          });
+        medicineCatalogPreparation = { key: storeKey, promise };
+      }
+      await medicineCatalogPreparation.promise;
+    }
+    if (options.finalizeExistingMedicines !== false) {
+      await finalizeMedicineRecommendations(treatments.value, {
+        checkInventory: treatments.value.some((item) => item.type === 'medicine' && item.selected),
+      });
+    }
   } catch (error) {
     console.error('[VoiceConsultationNew] ensureMedicineCatalogForStoreIds failed', error);
   }
 }
+
+let currentInformationInventoryPrewarm: Promise<void> | null = null;
+
+function prewarmCurrentInformationMedicationInventory(): Promise<void> {
+  if (!showCurrentInformationMedication.value || currentInformationMedicationPending.value) {
+    return Promise.resolve();
+  }
+  if (!currentInformationInventoryPrewarm) {
+    currentInformationInventoryPrewarm = (async () => {
+      await fetchPharmacyOptions({ finalizeExistingMedicines: false });
+      if (!showCurrentInformationMedication.value) return;
+      await loadAvailableMedicineInventoryContext({ pharmacies: pharmacyOptions.value });
+    })().catch((error) => {
+      console.warn('[VoiceConsultationNew] Current-information medication inventory prewarm failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      currentInformationInventoryPrewarm = null;
+    });
+  }
+  return currentInformationInventoryPrewarm;
+}
+
+watch(showCurrentInformationMedication, (visible) => {
+  if (visible) void prewarmCurrentInformationMedicationInventory();
+}, { flush: 'post' });
 
 function syncTreatmentExecDeptSelections(): void {
   syncSharedTreatmentExecDeptSelections(treatments.value, execDeptOptions.value);
@@ -2727,7 +2835,8 @@ function openInsuranceQuickSelector(rec: TreatmentRecommendation, event?: Event)
 }
 
 onMounted(() => {
-  void Promise.all([fetchFrequencyOptions(), fetchRouteOptions(), fetchPharmacyOptions(), fetchExecDeptOptions()]);
+  void Promise.all([fetchFrequencyOptions(), fetchRouteOptions(), fetchPharmacyOptions(), fetchExecDeptOptions()])
+    .then(() => prewarmCurrentInformationMedicationInventory());
 });
 
 onUnmounted(() => {
@@ -3666,6 +3775,7 @@ watch(
               v-if="showCurrentInformationMedication"
               :disabled="currentInformationMedicationDisabled"
               :pending="currentInformationMedicationPending"
+              :phase="currentInformationMedicationPhase"
               :reason="currentInformationMedicationReason"
               :assessment="currentInformationMedicationAssessment"
               :error="currentInformationMedicationError"

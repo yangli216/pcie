@@ -14,6 +14,46 @@ export interface CurrentInformationMedicationResult extends CurrentInformationMe
   recommendations: RawClinicalResultTreatmentRecommendationInput[];
 }
 
+export interface CurrentInformationMedicationTimingInput {
+  startedAt: number;
+  completedAt: number;
+  assessmentStartedAt?: number;
+  finalizationStartedAt?: number;
+  candidateCount: number;
+  readyCount: number;
+  deferredCount: number;
+}
+
+function elapsed(startedAt: number, completedAt: number): number {
+  return Math.max(0, Math.round(completedAt - startedAt));
+}
+
+export function buildCurrentInformationMedicationTimingLog(
+  input: CurrentInformationMedicationTimingInput,
+): { durationMs: number; details: Record<string, number | undefined> } {
+  const durationMs = elapsed(input.startedAt, input.completedAt);
+  const assessmentStartedAt = input.assessmentStartedAt && input.assessmentStartedAt >= input.startedAt
+    ? input.assessmentStartedAt : undefined;
+  const finalizationStartedAt = input.finalizationStartedAt && assessmentStartedAt
+    && input.finalizationStartedAt >= assessmentStartedAt
+    ? input.finalizationStartedAt : undefined;
+  return {
+    durationMs,
+    details: {
+      preparationMs: assessmentStartedAt
+        ? elapsed(input.startedAt, assessmentStartedAt) : durationMs,
+      aiAssessmentMs: assessmentStartedAt
+        ? elapsed(assessmentStartedAt, finalizationStartedAt || input.completedAt) : undefined,
+      finalizationMs: finalizationStartedAt
+        ? elapsed(finalizationStartedAt, input.completedAt) : undefined,
+      totalMs: durationMs,
+      candidateCount: Math.max(0, Math.round(input.candidateCount)),
+      readyCount: Math.max(0, Math.round(input.readyCount)),
+      deferredCount: Math.max(0, Math.round(input.deferredCount)),
+    },
+  };
+}
+
 export function buildCurrentInformationMedicationHistory(
   patient: AppPatient | null | undefined,
   encounter: { allergyHistory?: string; currentMedicationHistory?: string } | null | undefined,
@@ -137,14 +177,25 @@ export async function prepareCurrentInformationMedicines(
     finalize: (items: TreatmentRecommendation[]) => Promise<Array<{ item: TreatmentRecommendation; ready: boolean }>>;
     checkInventory: (item: TreatmentRecommendation) => Promise<boolean>;
     isCurrent: () => boolean;
+    onSummary?: (summary: {
+      candidateCount: number;
+      finalizedCount: number;
+      inventoryReadyCount: number;
+    }) => void;
   },
 ): Promise<boolean> {
   const finalized = await dependencies.finalize(items);
   if (!dependencies.isCurrent()) return false;
   // The shared finalizer checks inventory only for selected medicines. This action
   // intentionally leaves them unselected, so validate ready candidates explicitly.
-  await Promise.all(finalized.filter((result) => result.ready)
+  const readyItems = finalized.filter((result) => result.ready);
+  const inventoryResults = await Promise.all(readyItems
     .map((result) => dependencies.checkInventory(result.item)));
   items.forEach((item) => { item.selected = false; });
+  dependencies.onSummary?.({
+    candidateCount: items.length,
+    finalizedCount: readyItems.length,
+    inventoryReadyCount: inventoryResults.filter(Boolean).length,
+  });
   return dependencies.isCurrent();
 }

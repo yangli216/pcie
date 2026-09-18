@@ -14,6 +14,7 @@ import { mergeClinicalRecordSuggestionIntoText } from './clinicalRecordAnnotatio
 import type { ClinicalRecordFactSuggestion } from './clinicalRecordFactConfirmation';
 import {
   collectHistoryRecordTemplateChanges,
+  collectHistoryRecordTemplateSlotValues,
   resolveHistoryRecordTemplate,
   stripHistoryRecordTemplateMarkers,
 } from './historyRecordTemplates';
@@ -75,6 +76,24 @@ describe('outpatientRecord', () => {
         toValue: '有',
       })],
     });
+    expect(collectHistoryRecordTemplateSlotValues({ pastMedicalHistory: pastHistory })).toEqual([
+      { field: 'pastMedicalHistory', slotKey: 'healthStatus', value: '体健' },
+      { field: 'pastMedicalHistory', slotKey: 'hepatitisHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'tuberculosisHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'malariaHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'otherInfectiousDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'hypertensionHistory', value: '有' },
+      { field: 'pastMedicalHistory', slotKey: 'diabetesHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'heartDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'cerebrovascularDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'lungDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'kidneyDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'otherMajorDiseaseHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'surgeryHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'traumaHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'transfusionHistory', value: '否认' },
+      { field: 'pastMedicalHistory', slotKey: 'foodDrugAllergyHistory', value: '否认' },
+    ]);
   });
 
   it('keeps grouped negative history slots negative while honoring a later explicit positive', () => {
@@ -338,6 +357,12 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
     expect(payload).not.toHaveProperty('pastMedicalHistory');
     expect(payload).not.toHaveProperty('familyHistory');
     expect(payload).not.toHaveProperty('precautions');
+    expect(payload.emrFieldValues).toEqual({
+      门诊现病史文本: '受凉后出现咳嗽。',
+      现病史文本: '受凉后出现咳嗽。',
+      现病史: '受凉后出现咳嗽。',
+      个人史文本: '否认吸烟史。',
+    });
     expect(payload).not.toHaveProperty('diagList');
     expect(payload.orderList).toEqual([]);
     expect(payload).not.toHaveProperty('treatmentPlan');
@@ -451,6 +476,62 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
         replacementMarker: '{有}高血压病史',
       })],
     });
+    expect(payload.emrFieldValues).toEqual(expect.objectContaining({
+      既往史文本: expect.stringContaining('有高血压病史'),
+      平素: '1',
+      肝炎史标志: '0',
+      结核史标志: '0',
+      疟疾史标志: '0',
+      其他传染病史标志: '0',
+      高血压病史标志: '1',
+      糖尿病史标志: '0',
+      心脏病史标志: '0',
+      脑血管病史标志: '0',
+      肺部疾病史标志: '0',
+      肾脏疾病史标志: '0',
+      其它疾病史标志: '0',
+      手术史标志: '0',
+      外伤史标志: '0',
+      输血史标志: '0',
+      过敏史标志: '0',
+    }));
+    expect(payload.emrFieldValues).not.toHaveProperty('吸烟史标志');
+    expect(payload.emrFieldValues).not.toHaveProperty('家族病史标志');
+  });
+
+  it('expands selected structured personal and family history to their PHIS data-id codes', () => {
+    const personalHistory = resolveHistoryRecordTemplate('personalHistory', '患者有吸烟史。');
+    const familyHistory = resolveHistoryRecordTemplate('familyHistory', '有家族肿瘤病史。');
+    const payload = buildRecordConfirmedPayload({
+      consultationId: 'consultation-structured-personal-family-history',
+      chiefComplaint: '咳嗽3天',
+      historyOfPresentIllness: '患者咳嗽3天。',
+      pastMedicalHistory: '平素体健。',
+      outpatientRecord: { personalHistory, familyHistory },
+      diagList: [],
+      orderList: [],
+      writebackScope: {
+        recordFields: ['personalHistory', 'familyHistory'],
+        includeDiagnosis: false,
+        orderTypes: [],
+      },
+    });
+
+    expect(payload.emrFieldValues).toEqual(expect.objectContaining({
+      外地久居史标志: '0',
+      疫水疫源接触史标志: '0',
+      区居住史: '0',
+      有毒物质接触标志: '0',
+      吸毒史标志: '0',
+      吸烟史标志: '1',
+      饮酒史标志: '0',
+      药物嗜好史: '0',
+      冶游史标志: '0',
+      家族病史标志: '0',
+      家族肿瘤病史标志: '1',
+      家族传染病史标志: '0',
+      家族精神病史标志: '0',
+    }));
   });
 
   it('writes independently marked vital signs only when physical examination is selected', () => {
@@ -501,7 +582,16 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
         { slotKey: 'diastolicBloodPressure', value: '82', unit: 'mmHg', marker: '{82}' },
       ],
     });
+    expect(selectedPayload.emrFieldValues).toEqual({
+      体格检查: 'T:{36.6}℃ P:{76}次/分 R:{18}次/分 Bp:{128}/{82}mmHg。神志清。',
+      体温: '36.6',
+      脉搏: '76',
+      呼吸: '18',
+      收缩压: '128',
+      舒张压: '82',
+    });
     expect(unselectedPayload).not.toHaveProperty('physicalExamVitalSigns');
+    expect(unselectedPayload.emrFieldValues).not.toHaveProperty('体温');
   });
 
   it('carries the neutral chronic long-term prescription attribute only when requested', () => {

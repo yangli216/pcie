@@ -35,6 +35,7 @@ export interface VoiceTreatmentGenerationInput {
   pharmacies: PharmacyOption[];
   consultationId: string;
   normalize: (item: Partial<TreatmentRecommendation>) => TreatmentRecommendation;
+  onMedicationPhase?: (phase: 'preparing' | 'assessing') => void | Promise<void>;
   onTaskResult?: (result: VoiceTreatmentGenerationTaskResult) => void | Promise<void>;
 }
 
@@ -75,7 +76,9 @@ export async function generateVoiceTreatmentRecommendations(
 
   if (requestedSet.has('medicine')) {
     runners.push({ key: 'medication', types: ['medicine'], run: async () => {
+      await input.onMedicationPhase?.('preparing');
       const inventory = await loadAvailableMedicineInventoryContext({ pharmacies: input.pharmacies });
+      await input.onMedicationPhase?.('assessing');
       const medicationPrompt = input.currentInformationMedication
         ? buildCurrentInformationMedicationPrompt(
           PROMPTS.consultation.treatmentRecommendation,

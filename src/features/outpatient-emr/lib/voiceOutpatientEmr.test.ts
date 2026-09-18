@@ -140,4 +140,46 @@ describe('voice outpatient EMR prepared result', () => {
       orderCount: 1,
     });
   });
+
+  it('preserves confirmed history positives and collected vital signs as structured evidence', () => {
+    const context = buildVoiceOutpatientEmrRecordContext({
+      ...preparedPayload,
+      recordTemplateChanges: {
+        schemaVersion: 'outpatient-record-template-changes.v1',
+        items: [{
+          field: 'pastMedicalHistory',
+          slotKey: 'hypertensionHistory',
+          fromValue: '否认',
+          toValue: '有',
+          templateMarker: '{否认}高血压病史',
+          replacementMarker: '{有}高血压病史',
+        }],
+      },
+      physicalExamVitalSigns: {
+        schemaVersion: 'outpatient-record-physical-exam-vitals.v1',
+        items: [{
+          slotKey: 'temperature',
+          value: '36.5',
+          unit: '℃',
+          marker: '{36.5}',
+        }],
+      },
+    });
+
+    expect(context.structuredFacts).toEqual(expect.objectContaining({
+      historyTemplateChanges: {
+        schemaVersion: 'outpatient-record-template-changes.v1',
+        items: [{
+          field: 'pastMedicalHistory',
+          slotKey: 'hypertensionHistory',
+          fromValue: '否认',
+          toValue: '有',
+        }],
+      },
+      physicalExamVitalSigns: {
+        schemaVersion: 'outpatient-record-physical-exam-vitals.v1',
+        items: [{ slotKey: 'temperature', value: '36.5' }],
+      },
+    }));
+  });
 });

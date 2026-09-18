@@ -414,10 +414,10 @@ export const VoiceIntentRecognitionStreamPrompt = {
 ${PHYSICAL_EXAM_GUIDANCE_PROMPT}
 
 诊断规则：
-6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
+6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。正式建议是当前证据支持、供医生确认的临床初步诊断，不要求先排除全部其他疾病；能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
 7. 仅表示既往共病、长期风险或用药背景而不能解释本次主诉的项目使用 history_only 或 risk_modifier，并且不要输出到 diagnoses；高血压、糖尿病、贫血等不得仅因历史已确诊就成为正式诊断或待鉴别。待鉴别必须是本次主诉的可能病因，不是慢病清单或风险因素清单。
 8. 每条输出诊断必须填写 evidenceScope。只有本次主诉、现病史、查体、检验检查结果或医生本次明确判断支持时，才可使用 current_visit 或 both，且 currentVisitEvidenceText 必须非空并只摘录这些本次证据。仅由 HIS 既往史、长期记忆、历史诊断或长期用药支持时不得输出；不得因历史已确诊而标为 high。
-9. 优先输出标准疾病诊断并保留明确解剖部位与侧别。若当前证据不足以形成任何病因性 formal，但本次存在明确肯定、未被否认且无自相矛盾的症状/体征，可最多输出一项标准症状名称作为 current_diagnosis+symptom_working+formal；其 code 尽量使用标准 R 类编码，confidence 仅限 high/medium。此时 recommendation_plan 使用 diagnostic_first，只推荐 exam/lab_test，不推荐 medicine。低置信、未明确、仅历史出现或否定/矛盾症状不得作为工作诊断。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
+9. 优先输出标准疾病诊断并保留明确解剖部位与侧别。若当前证据不足以形成任何病因性 formal，但本次存在明确肯定、未被否认且无自相矛盾的症状/体征，应在同一 diagnoses 分区输出一项最能代表本次就诊的标准症状名称作为 current_diagnosis+symptom_working+formal；其 code 尽量使用标准 R 类编码，confidence 仅限 high/medium。此时 recommendation_plan 使用 diagnostic_first，只推荐 exam/lab_test，不推荐 medicine。低置信、未明确、仅历史出现或否定/矛盾症状不得作为工作诊断，没有合适症状允许空结果。例：大量饮酒后上腹不适伴明确呕吐，可提出有依据的急性胃炎初步建议并另列胰腺炎等鉴别；若胃炎自身依据不足，则同次输出明确呕吐的症状性工作诊断，不得把上腹不适改成腹痛，不能凭空生成胆囊结石伴慢性胆囊炎。需要排除其他疾病不等于当前初步诊断不能成立。AI 补充查体候选不能充当诊断依据。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
 
 医嘱与路由规则：
 10. explicit_orders 只提取医生本次明确决定开立、继续或调整的项目，sourceType=explicit。每项必须是对象，name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；禁止把 type 输出为数组或对象。没有明确医嘱时输出空数组。患者既往/自行服药只进入 currentMedicationHistory；条件性方案进入 treatmentPlan，并在 recommendation_plan 中 defer。
@@ -736,7 +736,7 @@ export const DiagnosisRecommendationPrompt = {
 
 **临床思维要求：**
 - 基于主诉分析最可能的疾病（马蹄声原则：听到马蹄声，首先想到马，而非斑马）
-- 正式诊断建议最多返回 3 条可以直接成立的诊断；若存在并存诊断，可返回多条，且第一条必须是主诊断
+- 正式诊断建议是有当前证据支持、供医生确认的临床初步诊断，不要求排除全部其他疾病；理由中的其他病因鉴别与目标诊断自身证据不足须区分。最多返回 3 条可以直接成立的诊断；若存在并存诊断，可返回多条，且第一条必须是主诊断
 - 病例只支持 1-2 条正式诊断时不得凑足 3 条
 - 仍需补问、查体或检查才能成立的疾病可以作为 suggestionType=differential 返回，但不得伪装成正式诊断
 - 符合率应真实（60-90%区间，不要都很高）

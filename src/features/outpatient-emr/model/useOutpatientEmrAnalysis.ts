@@ -17,6 +17,7 @@ import {
 } from '../lib/outpatientEmrWriteback';
 import { findInvalidOutpatientEmrDictionaryValue } from '../lib/outpatientEmrDictionary';
 import { isSameOutpatientEmrAnalysisRequestSnapshot } from '../lib/outpatientEmrRequestIdentity';
+import { resolveOutpatientEmrStructuredFieldValues } from '../lib/outpatientEmrStructuredProjection';
 import type {
   OutpatientEmrAnalysisRequest,
   OutpatientEmrAnalysisStatus,
@@ -263,9 +264,15 @@ export function useOutpatientEmrAnalysis(
           );
         }
       });
+      const structuredValues = resolveOutpatientEmrStructuredFieldValues({
+        recordContext: nextRequest.recordContext,
+        fields: parsedTemplate.targetFields,
+      });
       parsedTemplate.targetFields.forEach((field) => {
         if (!editedFieldIds.has(field.id)) {
-          mergedValues[field.id] = generatedValues[field.id];
+          mergedValues[field.id] = Object.prototype.hasOwnProperty.call(structuredValues, field.id)
+            ? structuredValues[field.id]
+            : generatedValues[field.id];
         }
       });
       fieldValues.value = mergedValues;

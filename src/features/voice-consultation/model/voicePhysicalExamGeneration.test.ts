@@ -13,6 +13,8 @@ describe('voice physical examination same-stream integration', () => {
   it.each(['', '右肺呼吸音粗，可闻及湿啰音。'])('keeps explicit examination separate from AI candidates: %s', async (physicalExam) => {
     vi.mocked(chatStream).mockImplementation(async (messages, onChunk) => {
       expect(messages[0].content).toContain('双肺呼吸音粗');
+      expect(messages[1].content).toContain('应在同一 diagnoses 分区返回一项症状性工作诊断');
+      expect(messages[1].content).toContain('无符合条件症状时允许空结果');
       const events = [
         { event: 'record_core', data: { chiefComplaint: '咳嗽2天', historyOfPresentIllness: '咳嗽2天', symptoms: ['咳嗽'], negativeSymptoms: [] } },
         { event: 'history_context', data: {} },
