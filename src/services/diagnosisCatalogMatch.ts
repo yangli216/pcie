@@ -38,6 +38,7 @@ interface DiagnosisSemantics {
   normalizedName: string;
   coreName: string;
   modifiers: Partial<Record<ModifierGroup, string>>;
+  characters: ReadonlySet<string>;
 }
 
 interface RankedCandidate<T extends DiagnosisCatalogCandidate> {
@@ -90,7 +91,25 @@ function parseSemantics(name: string): DiagnosisSemantics {
     normalizedName,
     coreName,
     modifiers,
+    characters: new Set(normalizedName.split('')),
   };
+}
+
+// Weak keys allow replaced catalogs to be collected; in-place name edits also invalidate.
+const preparedNames = new WeakMap<DiagnosisCatalogCandidate, {
+  name: string;
+  normalizedName: string;
+  semantics?: DiagnosisSemantics;
+}>();
+const nameCollator = new Intl.Collator('zh-CN');
+
+function prepareName(item: DiagnosisCatalogCandidate) {
+  let prepared = preparedNames.get(item);
+  if (!prepared || prepared.name !== item.name) {
+    prepared = { name: item.name, normalizedName: normalizeName(item.name) };
+    preparedNames.set(item, prepared);
+  }
+  return prepared;
 }
 
 function compareModifiers(
@@ -117,15 +136,20 @@ function compareModifiers(
   return { conflicts, targetAddsModifiers, sourceDropsModifiers };
 }
 
-function similarity(left: string, right: string): number {
+function similarity(
+  left: string,
+  right: string,
+  leftCharacters?: ReadonlySet<string>,
+  rightCharacters?: ReadonlySet<string>,
+): number {
   if (!left || !right) return 0;
   if (left === right) return 1;
   if (left.includes(right) || right.includes(left)) {
     return Math.min(left.length, right.length) / Math.max(left.length, right.length);
   }
 
-  const leftSet = new Set(left.split(''));
-  const rightSet = new Set(right.split(''));
+  const leftSet = leftCharacters || new Set(left.split(''));
+  const rightSet = rightCharacters || new Set(right.split(''));
   let intersection = 0;
   for (const char of leftSet) {
     if (rightSet.has(char)) intersection += 1;
@@ -151,17 +175,18 @@ function buildRankedCandidate<T extends DiagnosisCatalogCandidate>(
   source: DiagnosisSemantics,
   icdCode: string | undefined,
 ): RankedCandidate<T> {
-  const semantics = parseSemantics(item.name);
+  const prepared = prepareName(item);
+  const semantics = prepared.semantics ||= parseSemantics(item.name);
   const modifierComparison = compareModifiers(source, semantics);
   const keywordScore = Math.max(
     0,
-    ...(item.keywords || []).map((keyword) => similarity(source.normalizedName, normalizeName(keyword))),
+    ...(item.keywords || []).map((keyword) => similarity(source.normalizedName, normalizeName(keyword), source.characters)),
   );
   return {
     item,
     semantics,
     nameScore: Math.max(
-      similarity(source.normalizedName, semantics.normalizedName),
+      similarity(source.normalizedName, semantics.normalizedName, source.characters, semantics.characters),
       keywordScore,
     ),
     icdScore: getIcdScore(icdCode, item.code),
@@ -174,7 +199,18 @@ function rankCandidates<T extends DiagnosisCatalogCandidate>(
   right: RankedCandidate<T>,
 ): number {
   return (right.nameScore + right.icdScore) - (left.nameScore + left.icdScore)
-    || left.item.name.localeCompare(right.item.name, 'zh-CN');
+    || nameCollator.compare(left.item.name, right.item.name);
+}
+
+// Stable insertion preserves the old sort's catalog-order tie break, with O(5) storage.
+function retainBest<T extends DiagnosisCatalogCandidate>(
+  best: RankedCandidate<T>[],
+  candidate: RankedCandidate<T>,
+): void {
+  const index = best.findIndex((entry) => rankCandidates(candidate, entry) < 0);
+  if (index >= 0) best.splice(index, 0, candidate);
+  else if (best.length < 5) best.push(candidate);
+  if (best.length > 5) best.pop();
 }
 
 export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>(
@@ -212,43 +248,54 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
         };
   }
 
-  const source = parseSemantics(queryName);
-  const ranked = input.catalog
-    .map((item) => buildRankedCandidate(item, source, input.icdCode))
-    .sort(rankCandidates);
-  const exactName = ranked.find((candidate) => (
-    candidate.semantics.normalizedName === normalizedQuery
-    && candidate.conflicts.length === 0
-  ));
+  // Exact normalized names have identical semantics and name score. Only compare
+  // their ICD affinity and original names; never score/sort unrelated catalog rows.
+  let exactName: T | undefined;
+  let exactIcdScore = -1;
+  for (const item of input.catalog) {
+    if (prepareName(item).normalizedName !== normalizedQuery) continue;
+    const icdScore = getIcdScore(input.icdCode, item.code);
+    if (!exactName || icdScore > exactIcdScore
+      || (icdScore === exactIcdScore && nameCollator.compare(item.name, exactName.name) < 0)) {
+      exactName = item;
+      exactIcdScore = icdScore;
+    }
+  }
   if (exactName) {
     return {
       status: 'exact',
-      matchedItem: exactName.item,
+      matchedItem: exactName,
       suggestedMatchItem: null,
       alternatives: [],
       reason: '诊断名称精确命中标准库',
     };
   }
 
-  const compatible = ranked.filter((candidate) => (
-    candidate.semantics.coreName === source.coreName
-    && candidate.conflicts.length === 0
-    && candidate.targetAddsModifiers.length === 0
-    && candidate.sourceDropsModifiers.length > 0
-  ));
+  const source = parseSemantics(queryName);
+  const compatible: RankedCandidate<T>[] = [];
+  const alternatives: RankedCandidate<T>[] = [];
+  const related: RankedCandidate<T>[] = [];
+  const nonConflictingRelated: RankedCandidate<T>[] = [];
+  for (const item of input.catalog) {
+    const candidate = buildRankedCandidate(item, source, input.icdCode);
+    const sameCore = candidate.semantics.coreName === source.coreName;
+    if (sameCore && candidate.conflicts.length === 0
+      && candidate.targetAddsModifiers.length === 0 && candidate.sourceDropsModifiers.length > 0) {
+      retainBest(compatible, candidate);
+    } else if (candidate.conflicts.length === 0 && candidate.nameScore >= 0.5) {
+      retainBest(alternatives, candidate);
+    }
+    if (candidate.nameScore >= 0.45 || sameCore) {
+      retainBest(related, candidate);
+      if (candidate.conflicts.length === 0) retainBest(nonConflictingRelated, candidate);
+    }
+  }
   if (compatible.length === 1) {
     return {
       status: 'compatible',
       matchedItem: null,
       suggestedMatchItem: compatible[0].item,
-      alternatives: ranked
-        .filter((candidate) => (
-          candidate !== compatible[0]
-          && candidate.conflicts.length === 0
-          && candidate.nameScore >= 0.5
-        ))
-        .slice(0, 5)
-        .map((candidate) => candidate.item),
+      alternatives: alternatives.map((candidate) => candidate.item),
       reason: '标准项省略了 AI 诊断中的临床修饰词，需医生确认',
     };
   }
@@ -262,11 +309,6 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
     };
   }
 
-  const related = ranked.filter((candidate) => (
-    candidate.nameScore >= 0.45
-    || candidate.semantics.coreName === source.coreName
-  ));
-  const nonConflictingRelated = related.filter((candidate) => candidate.conflicts.length === 0);
   if (nonConflictingRelated.length > 0) {
     return {
       status: 'ambiguous',

@@ -84,3 +84,57 @@ describe('assessDiagnosisCatalogMatch', () => {
     expect(result.suggestedMatchItem).toBeNull();
   });
 });
+
+describe('diagnosis catalog performance regressions', () => {
+  it('finds exact names in a 34,846-row catalog without reading fuzzy keywords', () => {
+    const catalog = Array.from({ length: 34_846 }, (_, index) => ({
+      id: String(index), code: `Z${index}`, name: `目录条目${index}`,
+      get keywords(): string[] { throw new Error('Exact matches must not score fuzzy keywords'); },
+    }));
+    catalog[catalog.length - 1].name = '急性上呼吸道感染';
+    const result = assessDiagnosisCatalogMatch({ queryName: ' 急性 上呼吸道感染 ', catalog });
+    expect(result.matchedItem).toBe(catalog[catalog.length - 1]);
+    expect(result.status).toBe('exact');
+  });
+
+  it('preserves ICD affinity and stable catalog order for duplicate exact names', () => {
+    const catalog = [item('胃肠炎', 'K52.1'), item('胃肠炎', 'A09.1'), item('胃肠炎', 'A09.2')];
+    expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', icdCode: 'A09.9', catalog }).matchedItem).toBe(catalog[1]);
+    expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', catalog }).matchedItem).toBe(catalog[0]);
+    expect(assessDiagnosisCatalogMatch({ queryName: ' a09.2 ', catalog }).matchedItem).toBe(catalog[2]);
+  });
+
+  it('keeps only the best five compatible candidates, including late ICD matches', () => {
+    const catalog = Array.from({ length: 12 }, (_, index) => item('胃肠炎', `K52.${index}`));
+    catalog.push(item('胃肠炎', 'A09.1'));
+    const result = assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', icdCode: 'A09.9', catalog });
+    expect(result.status).toBe('ambiguous');
+    expect(result.alternatives).toEqual([catalog[12], ...catalog.slice(0, 4)]);
+  });
+
+  it('preserves keyword scoring, Chinese tie order and conflict exclusion', () => {
+    const catalog = ['丙', '乙', '丁', '甲', '戊', '己', '庚'].map((name, i) => ({
+      ...item(name, `A09.${i}`), keywords: ['急性胃肠炎'],
+    }));
+    const conflict = { ...item('慢性胃肠炎', 'A09.9'), keywords: ['急性胃肠炎'] };
+    const result = assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog: [...catalog, conflict] });
+    expect(result.status).toBe('ambiguous');
+    expect(result.alternatives).toEqual([...catalog].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).slice(0, 5));
+  });
+
+  it('refreshes prepared semantics after name edits and reads current code/keywords', () => {
+    const candidate = { ...item('胃肠炎', 'A09.1'), keywords: [] as string[] };
+    const catalog = [candidate];
+    expect(assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog }).status).toBe('compatible');
+    candidate.name = '慢性胃肠炎';
+    expect(assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog }).status).toBe('conflict');
+    candidate.name = '急性胃肠炎';
+    expect(assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog }).matchedItem).toBe(candidate);
+    candidate.name = '其他疾病';
+    candidate.keywords.push('急性胃肠炎');
+    candidate.code = 'K52.9';
+    expect(assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog }).alternatives).toEqual([candidate]);
+    expect(assessDiagnosisCatalogMatch({ queryName: 'K52.9', catalog }).matchedItem).toBe(candidate);
+    expect(assessDiagnosisCatalogMatch({ queryName: '急性胃肠炎', catalog: [] }).status).toBe('unmatched');
+  });
+});

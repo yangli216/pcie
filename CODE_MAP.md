@@ -14,6 +14,10 @@
 
 ## 快速导航
 
+药品目录准备重试：`features/consultation-result/model/medicineCatalogPreparation.ts` 只合并同作用域的进行中请求；`VoiceConsultationNew.vue` 每次准备均进入该 controller，完成缓存仍由 `medicalData.ts` 的当日目录缓存负责，页面不缓存失败或空结果。
+
+语音诊断性能：`services/diagnosisCatalogMatch.ts` 负责精确匹配优先、目录名称解析复用和分组 top-5；`features/voice-consultation/model/useVoiceIntentRecognition.ts` 持有单请求目录评估缓存，跨分区及 complete 复用，目录替换后失效，临床上下文门禁继续实时执行。
+
 医生主动继续用药推荐：`features/consultation-result/model/useCurrentInformationMedication.ts`（局部门禁、请求身份与阶段状态）+ `ui/CurrentInformationMedication.vue`（入口、阶段反馈与只读结论）+ `features/clinical-result/currentInformationMedication.ts`（请求/响应、定稿摘要及合并纯规则）；`VoiceConsultationNew.vue` 负责入口可见时的药房库存预热、端到端耗时采集及定稿后的药品合并，复用 `voiceTreatmentRecommendationGeneration.ts` 的药品分支和共享药品定稿。
 
 慢病配药既往史：`chronicRefillAssessment.ts` 的 `historicalDiagnoses` 保留范围筛选前的完整历史慢病；`chronicRefillRecord.ts` 合并 HIS 病史并通过 `historyRecordTemplates.ts` 生成首屏、流式和最终结果共用的既往史，已选诊断和处方范围独立。

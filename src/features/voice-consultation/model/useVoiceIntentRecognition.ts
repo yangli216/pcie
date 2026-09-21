@@ -745,6 +745,8 @@ export function useVoiceIntentRecognition() {
     resolvedTreatments?: MatchedTreatment[],
     patientGender?: string,
     vitalSourceText?: string,
+    assessDiagnosis: typeof medicalDataService.assessDiagnosisMatch = (name, context) =>
+      medicalDataService.assessDiagnosisMatch(name, context),
   ): {
     intentResult: VoiceIntentResult;
     matchedDiagnoses: MatchedDiagnosis[];
@@ -752,7 +754,7 @@ export function useVoiceIntentRecognition() {
     segregatedTreatments: TreatmentSegregationResult;
   } {
     const matchedDiagnoses = promoteOrdinaryVoiceSymptomWorkingDiagnosis(
-      normalizedExtraction.diagnosisHints.map((hint) => matchDiagnosisHint(hint)),
+      normalizedExtraction.diagnosisHints.map((hint) => matchDiagnosisHint(hint, assessDiagnosis)),
       {
         chiefComplaint: normalizedExtraction.recordDraft.chiefComplaint,
         historyOfPresentIllness: normalizedExtraction.recordDraft.historyOfPresentIllness,
@@ -987,6 +989,24 @@ export function useVoiceIntentRecognition() {
         },
       };
       let streamAccumulator = createVoiceIntentStreamAccumulator();
+      // Cache only catalog assessments, not context-sensitive clinical decisions.
+      // The request owns this map; catalog reload/clear replaces the array.
+      let diagnosisCatalog: ReturnType<typeof medicalDataService.getAllDiagnoses> | undefined;
+      const diagnosisAssessments = new Map<string, ReturnType<typeof medicalDataService.assessDiagnosisMatch>>();
+      const assessDiagnosis: typeof medicalDataService.assessDiagnosisMatch = (name, context) => {
+        const currentCatalog = medicalDataService.getAllDiagnoses();
+        if (diagnosisCatalog !== currentCatalog) {
+          diagnosisAssessments.clear();
+          diagnosisCatalog = currentCatalog;
+        }
+        const key = JSON.stringify([name, context?.icdCode || '']);
+        let assessment = diagnosisAssessments.get(key);
+        if (!assessment) {
+          assessment = medicalDataService.assessDiagnosisMatch(name, context);
+          diagnosisAssessments.set(key, assessment);
+        }
+        return assessment;
+      };
       let streamParser = createVoiceIntentStreamParser((event) => {
         applyVoiceIntentStreamEvent(streamAccumulator, event);
         if (!options?.onProgress || event.event === 'done') return;
@@ -998,6 +1018,7 @@ export function useVoiceIntentRecognition() {
           undefined,
           patientCtx?.gender || undefined,
           vitalSourceText,
+          assessDiagnosis,
         );
         options.onProgress({
           result: partial.intentResult,
@@ -1084,6 +1105,7 @@ export function useVoiceIntentRecognition() {
         resolvedTreatments,
         patientCtx?.gender || undefined,
         vitalSourceText,
+        assessDiagnosis,
       );
       const {
         intentResult,
@@ -1132,16 +1154,19 @@ export function useVoiceIntentRecognition() {
     }
   }
 
-  function matchDiagnosisHint(hint: DiagnosisHint): MatchedDiagnosis {
+  function matchDiagnosisHint(
+    hint: DiagnosisHint,
+    assessDiagnosis: typeof medicalDataService.assessDiagnosisMatch,
+  ): MatchedDiagnosis {
     const matchContext = hint.code ? { icdCode: hint.code } : undefined;
-    const assessment = medicalDataService.assessDiagnosisMatch(hint.name, matchContext);
+    const assessment = assessDiagnosis(hint.name, matchContext);
     return {
       ...hint,
       matchedItem: assessment.matchedItem,
       suggestedMatchItem: assessment.suggestedMatchItem,
       catalogMatchStatus: assessment.status,
       catalogMatchReason: assessment.reason,
-      catalogAlternatives: assessment.alternatives,
+      catalogAlternatives: [...assessment.alternatives],
     };
   }
 

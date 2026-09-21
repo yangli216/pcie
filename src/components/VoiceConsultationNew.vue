@@ -146,6 +146,7 @@ import {
   useClinicalResultPrecautionsScope,
   CurrentInformationMedication,
   useCurrentInformationMedication,
+  createMedicineCatalogPreparation,
   type CurrentInformationMedicationRequest,
   useClinicalResultPatientContext,
   useClinicalResultWritebackPayload,
@@ -2689,8 +2690,9 @@ async function fetchRouteOptions(): Promise<void> {
   await loadRouteDict();
 }
 
-let preparedMedicineCatalogStoreKey = '';
-let medicineCatalogPreparation: { key: string; promise: Promise<void> } | null = null;
+const prepareMedicineCatalog = createMedicineCatalogPreparation(
+  (storeIds, adapter) => medicalDataService.ensureMedicineCatalogForStoreIds(storeIds, adapter),
+);
 
 async function fetchPharmacyOptions(options: { finalizeExistingMedicines?: boolean } = {}): Promise<void> {
   if (pharmacyOptions.value.length === 0) {
@@ -2710,18 +2712,7 @@ async function fetchPharmacyOptions(options: { finalizeExistingMedicines?: boole
     return;
   }
   try {
-    const storeKey = [...activeStoreIds].sort().join('|');
-    if (preparedMedicineCatalogStoreKey !== storeKey) {
-      if (!medicineCatalogPreparation || medicineCatalogPreparation.key !== storeKey) {
-        const promise = medicalDataService.ensureMedicineCatalogForStoreIds(activeStoreIds, his)
-          .then(() => { preparedMedicineCatalogStoreKey = storeKey; })
-          .finally(() => {
-            if (medicineCatalogPreparation?.promise === promise) medicineCatalogPreparation = null;
-          });
-        medicineCatalogPreparation = { key: storeKey, promise };
-      }
-      await medicineCatalogPreparation.promise;
-    }
+    await prepareMedicineCatalog(activeStoreIds, his);
     if (options.finalizeExistingMedicines !== false) {
       await finalizeMedicineRecommendations(treatments.value, {
         checkInventory: treatments.value.some((item) => item.type === 'medicine' && item.selected),

@@ -964,6 +964,10 @@ src/styles/
 
 ## 服务 (Services)
 
+共享结果页药品目录准备由 `features/consultation-result/model/medicineCatalogPreparation.ts` 合并同厂商、机构、租户、药房的进行中请求；完成后立即释放，不在页面记忆“已准备”状态。每次后续操作重新进入 `medicalDataService.ensureMedicineCatalogForStoreIds`，由服务层当日 SQLite 缓存决定是否访问 HIS；网络失败、空结果和目录清理后均可再次准备。库存预热与五分钟库存缓存独立保留，药品定稿和回写门禁不变。
+
+诊断目录匹配性能约束：`diagnosisCatalogMatch.ts` 先按规范名称精确匹配（同名项仍按 ICD 亲和度、中文名称和原目录顺序决胜），未命中才做语义评分；按目录对象弱引用复用名称解析与字符集，名称变更自动失效。模糊匹配仅维护各分组最多 5 项的有序候选，不再全库排序；急慢性、侧别、分型、原发/继发及解剖范围门禁保持不变。`useVoiceIntentRecognition.ts` 在单次 `processTranscript` 内按名称与 ICD 缓存标准库评估，目录数组替换时失效，partial 与 complete 共用；病史过滤、症状工作诊断提升、推荐路由与元数据仍按最新分区重建，不缓存临床决策或跨患者结果。
+
 服务封装外部系统通信和数据处理。
 
 | 服务 | 职责 | 文件 |
