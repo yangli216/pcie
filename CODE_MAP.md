@@ -14,6 +14,8 @@
 
 ## 快速导航
 
+普通语音治疗并行：`features/voice-consultation/model/voiceTreatmentRecommendationGeneration.ts` 在药品与检查 / 检验各分支内部准备目录，检查目录慢响应不阻塞药品结果；并发时序、目录空 / 失败及整体收口回归见同名 `.test.ts`。
+
 药品目录准备重试：`features/consultation-result/model/medicineCatalogPreparation.ts` 只合并同作用域的进行中请求；`VoiceConsultationNew.vue` 每次准备均进入该 controller，完成缓存仍由 `medicalData.ts` 的当日目录缓存负责，页面不缓存失败或空结果。
 
 语音诊断性能：`services/diagnosisCatalogMatch.ts` 负责精确匹配优先、目录名称解析复用和分组 top-5；`features/voice-consultation/model/useVoiceIntentRecognition.ts` 持有单请求目录评估缓存，跨分区及 complete 复用，目录替换后失效，临床上下文门禁继续实时执行。

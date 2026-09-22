@@ -122,71 +122,79 @@ export async function generateVoiceTreatmentRecommendations(
     } });
   }
 
-  const auxiliaryTypes = [...requestedSet].filter(
-    (type): type is 'exam' | 'lab_test' => type === 'exam' || type === 'lab_test',
-  );
-  let auxiliaryItems = [] as Awaited<ReturnType<typeof medicalDataService.fetchAvailableExamLabItems>>;
-  let auxiliaryCatalogError: unknown;
-  if (auxiliaryTypes.length > 0) {
-    try {
-      auxiliaryItems = await medicalDataService.fetchAvailableExamLabItems();
-    } catch (error) {
-      auxiliaryCatalogError = error;
-      console.warn('[VoiceTreatment] Failed to query available exam/lab items from PHIS', error);
+  const generateAuxiliaryRecommendations = async () => {
+    const auxiliaryRunners: typeof runners = [];
+    const auxiliaryTypes = [...requestedSet].filter(
+      (type): type is 'exam' | 'lab_test' => type === 'exam' || type === 'lab_test',
+    );
+    let auxiliaryItems = [] as Awaited<ReturnType<typeof medicalDataService.fetchAvailableExamLabItems>>;
+    let auxiliaryCatalogError: unknown;
+    if (auxiliaryTypes.length > 0) {
+      try {
+        auxiliaryItems = await medicalDataService.fetchAvailableExamLabItems();
+      } catch (error) {
+        auxiliaryCatalogError = error;
+        console.warn('[VoiceTreatment] Failed to query available exam/lab items from PHIS', error);
+      }
     }
-  }
-  const auxiliaryCatalog = buildInstitutionAuxiliaryCatalogContext(
-    auxiliaryItems,
-    auxiliaryTypes,
-    {
-      includeRestricted: explicitlyRequestsRestrictedMedicalItem([
-        input.chiefComplaint,
-        input.clinicalContext,
-        ...input.explicitTreatments.map((item) => item.name),
-      ].join(' ')),
-    },
-  );
-  const availableAuxiliaryTypes = auxiliaryTypes.filter((type) => (
-    type === 'exam' ? auxiliaryCatalog.counts.exam > 0 : auxiliaryCatalog.counts.labTest > 0
-  ));
-  auxiliaryTypes
-    .filter((type) => !availableAuxiliaryTypes.includes(type))
-    .forEach((type) => immediateResults.push({
-      key: 'auxiliary',
-      types: [type],
-      items: [],
-      error: auxiliaryCatalogError || new Error(type === 'exam' ? '当前机构检查目录为空' : '当前机构检验目录为空'),
-    }));
-
-  if (availableAuxiliaryTypes.length > 0) {
-    runners.push({ key: 'auxiliary', types: availableAuxiliaryTypes, run: async () => {
-      const spec = buildClinicalResultTreatmentRequestSpec('exam', {
-        ...baseParams,
-        availableExamLabCatalog: auxiliaryCatalog.promptContext,
-        requestedTypes: availableAuxiliaryTypes,
-        explicitItemNames: input.explicitTreatments
-          .filter((item) => availableAuxiliaryTypes.includes(item.type as 'exam' | 'lab_test'))
-          .map((item) => item.name),
-      }, PROMPTS.consultation.auxiliaryCatalogRecommendation, {
-        consultationId: input.consultationId,
-      }, {
-        scene: 'voice-consultation-treatment-auxiliary-catalog',
-        operationAction: 'generate_auxiliary_catalog_recommendation',
-        title: '语音问诊生成院内目录检验检查推荐',
-      });
-      const response = await chatFast(spec.messages, undefined, undefined, undefined, spec.config);
-      return {
+    const auxiliaryCatalog = buildInstitutionAuxiliaryCatalogContext(
+      auxiliaryItems,
+      auxiliaryTypes,
+      {
+        includeRestricted: explicitlyRequestsRestrictedMedicalItem([
+          input.chiefComplaint,
+          input.clinicalContext,
+          ...input.explicitTreatments.map((item) => item.name),
+        ].join(' ')),
+      },
+    );
+    const availableAuxiliaryTypes = auxiliaryTypes.filter((type) => (
+      type === 'exam' ? auxiliaryCatalog.counts.exam > 0 : auxiliaryCatalog.counts.labTest > 0
+    ));
+    auxiliaryTypes
+      .filter((type) => !availableAuxiliaryTypes.includes(type))
+      .forEach((type) => immediateResults.push({
         key: 'auxiliary',
-        types: availableAuxiliaryTypes,
-        items: mapAuxiliaryCatalogRecommendations(
-          parseLLMJson<AuxiliaryCatalogRecommendationResponse>(response),
-          auxiliaryCatalog,
-          availableAuxiliaryTypes,
-          input.normalize,
-        ),
-      };
-    } });
-  }
+        types: [type],
+        items: [],
+        error: auxiliaryCatalogError || new Error(type === 'exam' ? '当前机构检查目录为空' : '当前机构检验目录为空'),
+      }));
+
+    if (availableAuxiliaryTypes.length > 0) {
+      auxiliaryRunners.push({ key: 'auxiliary', types: availableAuxiliaryTypes, run: async () => {
+        const spec = buildClinicalResultTreatmentRequestSpec('exam', {
+          ...baseParams,
+          availableExamLabCatalog: auxiliaryCatalog.promptContext,
+          requestedTypes: availableAuxiliaryTypes,
+          explicitItemNames: input.explicitTreatments
+            .filter((item) => availableAuxiliaryTypes.includes(item.type as 'exam' | 'lab_test'))
+            .map((item) => item.name),
+        }, PROMPTS.consultation.auxiliaryCatalogRecommendation, {
+          consultationId: input.consultationId,
+        }, {
+          scene: 'voice-consultation-treatment-auxiliary-catalog',
+          operationAction: 'generate_auxiliary_catalog_recommendation',
+          title: '语音问诊生成院内目录检验检查推荐',
+        });
+        const response = await chatFast(spec.messages, undefined, undefined, undefined, spec.config);
+        return {
+          key: 'auxiliary',
+          types: availableAuxiliaryTypes,
+          items: mapAuxiliaryCatalogRecommendations(
+            parseLLMJson<AuxiliaryCatalogRecommendationResponse>(response),
+            auxiliaryCatalog,
+            availableAuxiliaryTypes,
+            input.normalize,
+          ),
+        };
+      } });
+    }
+
+    for (const result of immediateResults) {
+      await input.onTaskResult?.(result);
+    }
+    return Promise.all(auxiliaryRunners.map(runTask));
+  };
 
   if (requestedSet.has('procedure')) {
     runners.push({ key: 'procedure', types: ['procedure'], run: async () => {
@@ -207,11 +215,14 @@ export async function generateVoiceTreatmentRecommendations(
     } });
   }
 
-  for (const result of immediateResults) {
-    await input.onTaskResult?.(result);
-  }
+  // Include directory preparation in each branch so auxiliary latency cannot delay medicine.
+  const [asyncResults, auxiliaryResults] = await Promise.all([
+    Promise.all(runners.map(runTask)),
+    generateAuxiliaryRecommendations(),
+  ]);
+  return [...immediateResults, ...asyncResults, ...auxiliaryResults];
 
-  const asyncResults = await Promise.all(runners.map(async (runner) => {
+  async function runTask(runner: (typeof runners)[number]): Promise<VoiceTreatmentGenerationTaskResult> {
     let result: VoiceTreatmentGenerationTaskResult;
     try {
       result = await runner.run();
@@ -225,6 +236,5 @@ export async function generateVoiceTreatmentRecommendations(
     }
     await input.onTaskResult?.(result);
     return result;
-  }));
-  return [...immediateResults, ...asyncResults];
+  }
 }
