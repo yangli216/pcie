@@ -57,6 +57,7 @@ function buildRegionalChatRequestPayload(
 
   return {
     configProfile: customConfig?.configProfile || 'default',
+    ...(customConfig?.temperature === undefined ? {} : { temperature: customConfig.temperature }),
     consultationId: customConfig?.traceContext?.consultationId,
     messages: payloadMessages,
     stream,

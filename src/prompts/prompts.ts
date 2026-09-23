@@ -1,4 +1,4 @@
-import { PHYSICAL_EXAM_GUIDANCE_PROMPT } from '../features/clinical-result/lib/physicalExamGuidance';
+import { VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT } from '../features/clinical-result/lib/physicalExamGuidance';
 /**
  * 集中管理所有 LLM Prompts
  *
@@ -119,6 +119,7 @@ export interface VoiceRecordDraft {
   currentMedicationHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory?: string;
   physicalExam?: string;
   symptoms: string[];
@@ -234,6 +235,7 @@ export interface VoiceExtractionResult {
   personalHistory?: string;
   /** 女性月经史 */
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   /** 家族史 */
   familyHistory?: string;
   /** 对话中明确提及的查体与生命体征（兼容旧结构） */
@@ -253,7 +255,7 @@ export const VoiceIntentRecognitionPrompt = {
 
 为了让客户端分区渐进展示，你必须严格按下列顺序输出 NDJSON：每行只能包含一个完整 JSON 对象，不要输出 JSON 数组外壳、markdown、代码块或解释文字。
 {"event":"record_core","data":{"chiefComplaint":"主诉，尽量写成主要症状+持续时间","historyOfPresentIllness":"按临床书写逻辑整理的现病史","symptoms":[],"negativeSymptoms":[]}}
-{"event":"history_context","data":{"pastMedicalHistory":"既往史","allergyHistory":"过敏史","currentMedicationHistory":"长期或当前用药史","personalHistory":"个人史","menstrualHistory":"女性月经史，仅有明确内容时填写"}}
+{"event":"history_context","data":{"pastMedicalHistory":"既往史","allergyHistory":"过敏史","currentMedicationHistory":"长期或当前用药史","personalHistory":"个人史","menstrualHistory":"女性月经史，仅有明确内容时填写","maritalReproductiveHistory":"女性婚育史，仅有明确内容时填写"}}
 {"event":"explicit_orders","data":[]}
 {"event":"diagnoses","data":[]}
 {"event":"recommendation_plan","data":{"mode":"parallel","recommendNow":["medicine","exam","lab_test"],"defer":[],"skip":[],"reason":"路由依据","resumeCondition":"","confidence":"high"}}
@@ -270,6 +272,7 @@ export const VoiceIntentRecognitionPrompt = {
     "currentMedicationHistory": "长期或当前用药史，只写对话已明确内容，未提及则留空",
     "personalHistory": "个人史，只写对话已明确内容，未提及则留空",
     "menstrualHistory": "女性月经史，只写对话或患者既有病历中的明确内容，非女性或无依据时留空",
+    "maritalReproductiveHistory": "女性婚育史，只写明确婚育状况、当前妊娠和生育事实，无依据留空",
     "familyHistory": "家族史，只写对话已明确内容，未提及则留空",
     "physicalExam": "查体与生命体征，只写对话明确内容；体温、脉搏/心率、呼吸、血压必须保留数值，未提及则留空",
     "symptoms": ["症状1", "症状2"],
@@ -346,13 +349,14 @@ export const VoiceIntentRecognitionPrompt = {
 3. chiefComplaint 尽量写成“主要症状 + 持续时间”；不要把诊断写进主诉。
 4. historyOfPresentIllness 必须按“起病时间/诱因 -> 核心症状 -> 伴随症状与重要阴性 -> 已做处理/关键查体或检查”整理成 2-4 句紧凑表述；不要重复医生问话、缴费复诊流程、泛化宣教、明显重复的阴性信息。
 5. negativeSymptoms 只填写阴性症状名称本身，例如“咳痰”“胸痛”；不要携带“否认”“无”“未见”“不伴”等否定前缀。
-6. pastMedicalHistory、allergyHistory、currentMedicationHistory、personalHistory、menstrualHistory、familyHistory、physicalExam 要分别整理；若对话与患者既有病历均未提供明确内容，必须写空字符串。不得用“无特殊”“否认”等默认阴性表述代替未采集的信息。physicalExam 中对话明确提及的体温、脉搏/心率、呼吸频率、血压数值必须原样保留，客户端会将其映射到 T/P/R/BP 固定槽位；不得臆造未测量数值。
+6. pastMedicalHistory、allergyHistory、currentMedicationHistory、personalHistory、menstrualHistory、maritalReproductiveHistory、familyHistory、physicalExam 要分别整理；若对话与患者既有病历均未提供明确内容，必须写空字符串。不得用“无特殊”“否认”等默认阴性表述代替未采集的信息。physicalExam 中对话明确提及的体温、脉搏/心率、呼吸频率、血压数值必须原样保留，客户端会将其映射到 T/P/R/BP 固定槽位；不得臆造未测量数值。
 6.1 pastMedicalHistory 只记录与本次就诊可能相关的既往慢性病、手术史、外伤史、输血史等长期健康信息，不要把家族成员的疾病写入既往史。与本次主诉/现病史无明显关联的既往疾病不要写入，避免干扰医生判断。
 6.2 pastMedicalHistory 不要写入历次门诊就诊流水（如"2026-05-13 诊断急性上呼吸道感染"），门诊就诊记录属于就诊历史而非既往史。既往史应提炼为疾病名称+病程（如"高血压3年""2年前阑尾切除术"），而非按就诊日期逐条罗列。
 6.3 personalHistory 记录吸烟、饮酒、职业或环境暴露、疫水疫源接触等患者本人的生活与暴露事实；若对话未提及，必须留空，不得自动补“否认吸烟饮酒史”。
 6.4 familyHistory 记录直系亲属（父母、兄弟姐妹、子女）的遗传性、过敏性或慢性疾病；如"父亲有皮肤过敏史""母亲有高血压"。若对话未提及家族成员健康状况，必须留空。不要把患者本人的既往史、过敏史混入家族史。
 6.5 menstrualHistory 仅适用于女性患者，记录初潮年龄、周期、经期、经量、痛经、末次月经或绝经等明确事实；优先采用本次对话明确内容，本次对话未修订时可保留输入患者病历中的既有月经史。不得根据年龄或性别推断，不得自动补“月经规律”。
-6.6 recordDraft 各字段只能写临床事实正文；没有有效内容时写空字符串，禁止写“待医生补充完善、待医生核实、建议询问、信息不足、未提供相关信息”等工作流提示。
+6.6 maritalReproductiveHistory 为独立女性婚育史，记录明确婚育状况、当前妊娠状态和孕产事实。本次对话优先，未修订时保留既有婚育史；不得根据年龄、月经、已婚或历史孕产次数推断当前已孕/未孕或已婚已育。非女性或无依据时留空，不混入月经史或个人史。
+6.7 recordDraft 各字段只能写临床事实正文；没有有效内容时写空字符串，禁止写“待医生补充完善、待医生核实、建议询问、信息不足、未提供相关信息”等工作流提示。
 7. diagnosisHints 允许在病例事实基础上做合理补全，推断项必须把 sourceType 标记为 inferred，对话明确提到的内容标记为 explicit；信息不足但仍给出谨慎提示时标记为 uncertain。
 7.1 diagnosisHints 中 suggestionType=formal 的正式诊断最多 3 条，并按置信度从高到低排列；病例只支持 1-2 条时不得凑数。
 7.2 如果只是鉴别诊断、待排除方向或信息不足下的谨慎提示，必须标记 suggestionType=differential，并填写 missingInformation；这类项目与正式诊断分区展示，不参与回写。
@@ -396,10 +400,10 @@ export const VoiceIntentRecognitionStreamPrompt = {
 
 严格逐行输出以下 NDJSON 事件；每行一个完整 JSON 对象，不要输出数组外壳、Markdown、代码块或解释，顺序不得改变：
 {"event":"record_core","data":{"chiefComplaint":"主要症状+持续时间","historyOfPresentIllness":"2-4句紧凑现病史","symptoms":[],"negativeSymptoms":[]}}
-{"event":"history_context","data":{"pastMedicalHistory":"","allergyHistory":"","currentMedicationHistory":"","personalHistory":"","menstrualHistory":""}}
-{"event":"record_suggestions","data":[{"field":"historyOfPresentIllness|pastMedicalHistory|personalHistory|familyHistory|physicalExam","question":"医生需核查的问题","negativeRecordText":"确认后可直接书写的规范阴性或正常表述","rationale":"相关性","priority":"critical|general"}]}
+{"event":"history_context","data":{"pastMedicalHistory":"","allergyHistory":"","currentMedicationHistory":"","personalHistory":"","menstrualHistory":"","maritalReproductiveHistory":""}}
 {"event":"diagnoses","data":[{"name":"标准疾病或症状名称","code":"","clinicalRole":"current_diagnosis|differential_cause|risk_modifier|history_only","diagnosisKind":"disease|symptom_working","evidenceText":"完整病例依据","evidenceScope":"current_visit|history_only|both","currentVisitEvidenceText":"仅本次就诊证据","sourceType":"explicit|inferred|uncertain","rationale":"推荐理由","confidence":"high|medium|low","suggestionType":"formal|differential","missingInformation":""}]}
 {"event":"recommendation_plan","data":{"mode":"diagnostic_first|treatment_first|parallel|explicit_only|urgent_referral","recommendNow":["medicine|exam|lab_test"],"defer":[],"skip":[],"reason":"路由依据","resumeCondition":"report_available|doctor_request|","confidence":"high|medium|low"}}
+{"event":"record_suggestions","data":[{"field":"historyOfPresentIllness|pastMedicalHistory|personalHistory|familyHistory|physicalExam","question":"医生需核查的问题","negativeRecordText":"确认后可直接书写的规范阴性或正常表述","rationale":"相关性","priority":"critical|general"}]}
 {"event":"explicit_orders","data":[]}
 {"event":"record_extra","data":{"familyHistory":"","physicalExam":"","treatmentPlan":"","healthEducation":""}}
 {"event":"done","data":{"error":false,"message":""}}
@@ -407,11 +411,11 @@ export const VoiceIntentRecognitionStreamPrompt = {
 病历规则：
 1. 先理解完整病例再组织字段。主诉不写诊断；现病史按起病/诱因、核心症状、伴随与重要阴性、已处理或关键检查组织，删除问答过程、缴费流程和重复内容。
 2. negativeSymptoms 只写症状名，不带“否认/无”。各病史字段只写临床正文，不写“未提及、待补充、建议询问、信息不足”等过程提示。
-3. 对话和既有档案没有明确事实时，过敏、长期用药、个人史、月经史、家族史留空；不得把未采集改写成阴性。既有档案未被本次明确修订时保留。既往史只写长期健康事实，不写门诊流水；个人史、家族史分别归类。月经史只用于女性且不得推断。
+3. 对话和既有档案没有明确事实时，过敏、长期用药、个人史、月经史、家族史留空；不得把未采集改写成阴性。既有档案未被本次明确修订时保留。既往史只写长期健康事实，不写门诊流水；个人史、家族史分别归类。月经史和 maritalReproductiveHistory（婚育史）只用于女性且不得推断；婚育史只写明确婚育状况、当前妊娠和生育事实，两字段独立。
 4. physicalExam 只写明确查体与生命体征，T/P/R/BP 数值原样保留，不得臆造。healthEducation 必须针对当前病例，避免“多休息、多喝水”等空泛套话。
-5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。非查体最多 8 项，查体独立最多 24 个紧凑项目，只输出与当前病例/正式诊断相关的必要阴性问诊或正常查体表述；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
+5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。非查体最多 8 项，只输出与当前病例/正式诊断相关的必要阴性问诊；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
 
-${PHYSICAL_EXAM_GUIDANCE_PROMPT}
+${VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT}
 
 诊断规则：
 6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。正式建议是当前证据支持、供医生确认的临床初步诊断，不要求先排除全部其他疾病；能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
@@ -422,7 +426,7 @@ ${PHYSICAL_EXAM_GUIDANCE_PROMPT}
 医嘱与路由规则：
 10. explicit_orders 只提取医生本次明确决定开立、继续或调整的项目，sourceType=explicit。每项必须是对象，name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；禁止把 type 输出为数组或对象。没有明确医嘱时输出空数组。患者既往/自行服药只进入 currentMedicationHistory；条件性方案进入 treatmentPlan，并在 recommendation_plan 中 defer。
 11. 药品可写 name/spec/targetDose/targetDoseUnit/frequency/frequencyKey/usage/usageKey/days，但 dosage/dosageUnit/totalQty/totalUnit 留空，由程序按实时库存定稿。检查和检验写规范名称、常用 aliases、证据及目的。组合项目拆开。
-12. 需先依赖结果时用 diagnostic_first 并 defer medicine；诊断明确直接治疗用 treatment_first；同步进行用 parallel；医生要求只执行明确医嘱用 explicit_only；急危重转诊用 urgent_referral。只有高置信才用 defer/skip 抑制类型，低置信使用 parallel。
+12. 需先依赖结果时用 diagnostic_first 并 defer medicine；诊断明确直接治疗用 treatment_first；同步进行用 parallel；医生要求只执行明确医嘱用 explicit_only；急危重转诊用 urgent_referral。confidence 只表示把握程度，低置信不得自动改成 parallel 或扩大推荐集合。recommendNow、defer、skip 必须互斥；diagnostic_first 必须暂缓 medicine，允许无自动推荐。
 13. 非医疗内容或转写无法理解时，仍按事件顺序输出空分区，最后 done.error=true 并给出简短 message。其余缺失字符串用空串、数组用空数组。`,
 
   buildUserPrompt(transcribedText: string): string {
@@ -431,7 +435,8 @@ ${PHYSICAL_EXAM_GUIDANCE_PROMPT}
 };
 
 export const VoiceIntentRepairPrompt = {
-  system: `你是一名医疗结构化结果修复助手。你的任务不是重新理解病例，也不是新增诊断或处方，而是在尽量保持原始语义不变的前提下，把一段“接近正确但格式不合法或缺少关键结构”的模型输出修复为合法 JSON。
+  system: `月经史 menstrualHistory 与婚育史 maritalReproductiveHistory 独立保留明确事实；无依据留空，不根据年龄、月经或历史孕产次数推断当前妊娠或婚育状况。
+你是一名医疗结构化结果修复助手。你的任务不是重新理解病例，也不是新增诊断或处方，而是在尽量保持原始语义不变的前提下，把一段“接近正确但格式不合法或缺少关键结构”的模型输出修复为合法 JSON。
 
 修复规则：
 1. 只输出纯 JSON，不要包含 markdown、解释文字或额外前后缀。
@@ -448,6 +453,7 @@ export const VoiceIntentRepairPrompt = {
     "currentMedicationHistory": "",
     "personalHistory": "",
     "menstrualHistory": "",
+    "maritalReproductiveHistory": "",
     "familyHistory": "",
     "physicalExam": "",
     "symptoms": [],
@@ -2219,8 +2225,8 @@ export const MedicalRecordCheckPrompt = {
 export const PROMPT_VERSION = {
   medicalRecordGeneration: 'v1.0',
   voiceIntentRecognition: 'v3.0',
-  voiceIntentRecognitionStream: 'v1.3',
-  voiceIntentRepair: 'v1.3',
+  voiceIntentRecognitionStream: 'v1.7',
+  voiceIntentRepair: 'v1.4',
   riskAnalysis: 'v1.0',
   diagnosisRecommendation: 'v1.0',
   diagnosisPathReasoning: 'v1.0',

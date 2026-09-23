@@ -1,4 +1,8 @@
 import { computed, ref } from 'vue';
+import {
+  normalizeChronicRefillHistoryOfPresentIllness,
+  normalizeChronicRefillReviewRecordText,
+} from '@features/clinical-result/lib/chronicRefillReviewRecordText';
 import type { TreatmentRecommendation } from '@/types/consultation';
 import type {
   ChronicRefillReviewOption,
@@ -30,6 +34,7 @@ export function updateChronicRefillReviewRecordText(
 export interface ChronicRefillReviewOptions {
   getHistoryOfPresentIllness: () => string;
   setHistoryOfPresentIllness: (value: string) => void;
+  isHistoryOfPresentIllnessModified?: () => boolean;
   getTreatments: () => TreatmentRecommendation[];
   notify?: (message: string, type?: string) => void;
 }
@@ -53,26 +58,36 @@ export function useChronicRefillReview(options: ChronicRefillReviewOptions) {
 
   function select(itemId: string, option: ChronicRefillReviewOption): void {
     const item = plan.value?.items.find((candidate) => candidate.id === itemId);
-    if (!item || !item.options.some((candidate) => candidate.value === option.value)) return;
+    const selectedOption = item?.options.find((candidate) => candidate.value === option.value);
+    if (!item || !selectedOption) return;
 
-    let nextHistory = options.getHistoryOfPresentIllness();
+    const medicationNames = options.getTreatments()
+      .filter((treatment) => treatment.type === 'medicine')
+      .map((treatment) => treatment.name);
+    const nextRecordText = normalizeChronicRefillReviewRecordText(selectedOption.recordText, medicationNames);
+
+    const currentHistory = options.getHistoryOfPresentIllness();
+    // 仅清理自动生成/旧快照中的处方尾巴；医生已编辑正文保持原样。
+    let nextHistory = options.isHistoryOfPresentIllnessModified?.()
+      ? currentHistory
+      : normalizeChronicRefillHistoryOfPresentIllness(currentHistory);
     const knownTexts = new Set([
       appliedRecordTexts.value[itemId] || '',
       ...item.options.map((candidate) => candidate.recordText),
     ]);
     knownTexts.forEach((recordText) => {
-      if (!recordText || recordText === option.recordText) return;
+      if (!recordText || recordText === nextRecordText) return;
       nextHistory = updateChronicRefillReviewRecordText(nextHistory, recordText, '');
     });
     options.setHistoryOfPresentIllness(updateChronicRefillReviewRecordText(
       nextHistory,
       '',
-      option.recordText,
+      nextRecordText,
     ));
-    selections.value = { ...selections.value, [itemId]: option.value };
-    appliedRecordTexts.value = { ...appliedRecordTexts.value, [itemId]: option.recordText };
+    selections.value = { ...selections.value, [itemId]: selectedOption.value };
+    appliedRecordTexts.value = { ...appliedRecordTexts.value, [itemId]: nextRecordText };
 
-    if (option.treatmentReviewRequired) {
+    if (selectedOption.treatmentReviewRequired) {
       const selectedMedicines = options.getTreatments().filter((treatment) => (
         treatment.type === 'medicine' && treatment.selected
       ));

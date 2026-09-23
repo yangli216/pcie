@@ -43,6 +43,20 @@ describe('server-managed LLM routing', () => {
     expect(chunks).toEqual(['chunk']);
   });
 
+  it('preserves explicit zero temperature for voice streaming and fallback without changing default calls', async () => {
+    mocks.createRegionalSSE.mockResolvedValue(undefined);
+    mocks.regionalPost.mockResolvedValue({ content: 'ok' });
+    const messages = [{ role: 'user' as const, content: 'sample' }];
+    await chatStream(messages, vi.fn(), undefined, undefined, undefined, { temperature: 0 });
+    await chat(messages, undefined, undefined, undefined, { temperature: 0 });
+    expect(mocks.createRegionalSSE.mock.calls[0][1].temperature).toBe(0);
+    expect(mocks.regionalPost.mock.calls[0][1].temperature).toBe(0);
+    await chatStream(messages, vi.fn());
+    await chat(messages);
+    expect(mocks.createRegionalSSE.mock.calls[1][1]).not.toHaveProperty('temperature');
+    expect(mocks.regionalPost.mock.calls[1][1]).not.toHaveProperty('temperature');
+  });
+
   it('forwards the business action and title for server-side latency logs', async () => {
     mocks.regionalPost.mockResolvedValue({ content: 'ok' });
 

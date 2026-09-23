@@ -1,4 +1,5 @@
 import type { ChronicRefillCandidate } from './chronicRefillAssessment';
+import { normalizeChronicRefillReviewRecordText } from '@features/clinical-result/lib/chronicRefillReviewRecordText';
 import type {
   ChronicRefillReviewConfidence,
   ChronicRefillReviewEvidence,
@@ -33,10 +34,12 @@ type RawConfirmationOption = Partial<ChronicRefillConfirmationOption>;
 type RawConfirmationItem = Partial<Omit<ChronicRefillConfirmationItem, 'options'>> & {
   options?: RawConfirmationOption[];
 };
+type RawConfirmationPatch = Pick<RawConfirmationItem, 'id' | 'question' | 'description' | 'basis' | 'priority'>;
 
 export interface RawChronicRefillConfirmationPlan {
   summary?: string;
   items?: RawConfirmationItem[];
+  patches?: RawConfirmationPatch[];
 }
 
 const UNKNOWN_VALUE_PATTERN = /(?:unknown|unconfirmed|待确认|暂未|未询问|不清楚)/iu;
@@ -117,6 +120,24 @@ export function normalizeChronicRefillSupplementRecordText(
   return text ? simplifyKnownMedicationDetails(text, candidate) : '';
 }
 
+function normalizeChronicRefillReviewDescription(
+  value: unknown,
+  candidate: ChronicRefillCandidate,
+): string {
+  let text = cleanText(value);
+  if (!text) return '';
+  text = simplifyKnownMedicationDetails(text, candidate)
+    .replace(/(?:规格|剂量|频次|疗程|总量)\s*[:：]?\s*[^、，,；;。]+/giu, '')
+    .replace(/(?:口服|注射|静滴|外用)\s*[^、，,；;。]+/giu, '')
+    .replace(/每(?:次|日|天|晚|周)\s*[^、，,；;。]+/giu, '')
+    .replace(/共?\s*\d+(?:\.\d+)?\s*(?:天|盒|瓶|片|粒|支|袋|丸|单位)/giu, '')
+    .replace(/[（(][^）)]*[）)]/gu, '')
+    .replace(/[，,；;：:]\s*(?=[，,；;。]|$)/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return text;
+}
+
 function normalizeConfidence(value: unknown): ChronicRefillConfirmationConfidence {
   return value === 'high' || value === 'medium' || value === 'low' ? value : 'low';
 }
@@ -144,7 +165,7 @@ function createGenericFallbackPlan(candidate: ChronicRefillCandidate): ChronicRe
           : '未取得可确认的近期处方，请按本次问诊选择',
         options: medicationText
           ? [
-            { value: 'continued', label: '仍按近期方案服用', recordText: `规律服用${medicationText}` },
+            { value: 'continued', label: '仍按近期方案服用', recordText: '仍按近期方案服药' },
             { value: 'partial', label: '部分药品已调整', recordText: '近期用药方案已有调整', treatmentReviewRequired: true },
             { value: 'stopped', label: '已经停用', recordText: '近期已停用原用药方案', treatmentReviewRequired: true },
             { value: 'unknown', label: '暂未确认', recordText: '' },
@@ -198,6 +219,30 @@ export function normalizeChronicRefillConfirmationPlan(
   raw: RawChronicRefillConfirmationPlan | null | undefined,
   candidate: ChronicRefillCandidate,
 ): ChronicRefillConfirmationPlan {
+  const fallback = createGenericFallbackPlan(candidate);
+  if (Array.isArray(raw?.patches)) {
+    const patchById = new Map(raw.patches.flatMap((patch) => {
+      const id = cleanText(patch.id);
+      return id ? [[id, patch] as const] : [];
+    }));
+    return {
+      summary: cleanText(raw.summary) || fallback.summary,
+      items: fallback.items.map((item) => {
+        const patch = patchById.get(item.id);
+        if (!patch) return item;
+        return {
+          ...item,
+          question: cleanText(patch.question) || item.question,
+          description: normalizeChronicRefillReviewDescription(patch.description, candidate)
+            || item.description,
+          basis: normalizeChronicRefillReviewDescription(patch.basis, candidate)
+            || item.basis,
+          priority: patch.priority === 'general' ? 'general' : item.priority,
+        };
+      }),
+    };
+  }
+
   const normalizedItems = (raw?.items || []).slice(0, 5).flatMap((rawItem, index) => {
     const question = cleanText(rawItem.question);
     const options = (rawItem.options || []).slice(0, 4).flatMap((option, optionIndex) => {
@@ -207,7 +252,10 @@ export function normalizeChronicRefillConfirmationPlan(
       return [{
         value,
         label,
-        recordText: cleanRecordText(option.recordText),
+        recordText: normalizeChronicRefillReviewRecordText(
+          cleanRecordText(option.recordText),
+          candidate.medications,
+        ),
         treatmentReviewRequired: option.treatmentReviewRequired === true,
       }];
     });
@@ -220,18 +268,19 @@ export function normalizeChronicRefillConfirmationPlan(
     return [{
       id: cleanText(rawItem.id) || `confirmation-${index + 1}`,
       question,
-      description: cleanText(rawItem.description),
+      description: normalizeChronicRefillReviewDescription(rawItem.description, candidate),
       options,
       recommendedValue,
       confidence: normalizeConfidence(rawItem.confidence),
       evidence: normalizeEvidence(rawItem.evidence),
-      basis: cleanText(rawItem.basis) || '模型根据当前复诊上下文生成',
+      basis: normalizeChronicRefillReviewDescription(rawItem.basis, candidate)
+        || '模型根据当前复诊上下文生成',
       priority: rawItem.priority === 'general' ? 'general' : 'critical',
     } satisfies ChronicRefillConfirmationItem];
   });
 
   if (normalizedItems.length < 3) {
-    return createGenericFallbackPlan(candidate);
+    return fallback;
   }
 
   return {

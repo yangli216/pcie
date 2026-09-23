@@ -56,6 +56,7 @@ export interface ConsultationUserLogSnapshot {
   pastMedicalHistory: string;
   personalHistory: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory: string;
   physicalExam: string;
   precautions: string;
@@ -109,6 +110,7 @@ interface BuildSnapshotInput {
   pastMedicalHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory?: string;
   physicalExam?: string;
   precautions?: string;
@@ -197,6 +199,7 @@ export function buildConsultationUserLogSnapshot(input: BuildSnapshotInput): Con
     pastMedicalHistory: text(input.pastMedicalHistory),
     personalHistory: text(input.personalHistory),
     menstrualHistory: text(input.menstrualHistory),
+    maritalReproductiveHistory: text(input.maritalReproductiveHistory),
     familyHistory: text(input.familyHistory),
     physicalExam: text(input.physicalExam),
     precautions: text(input.precautions),
@@ -307,6 +310,7 @@ export function computeChangeSummary(
   if (first.personalHistory.trim() !== final.personalHistory.trim()
     || extra?.personalHistoryChanged) recordFieldChanges++;
   if ((first.menstrualHistory || '').trim() !== (final.menstrualHistory || '').trim()) recordFieldChanges++;
+  if ((first.maritalReproductiveHistory || '').trim() !== (final.maritalReproductiveHistory || '').trim()) recordFieldChanges++;
   if (first.familyHistory.trim() !== final.familyHistory.trim()
     || extra?.familyHistoryChanged) recordFieldChanges++;
   if (first.physicalExam.trim() !== final.physicalExam.trim()

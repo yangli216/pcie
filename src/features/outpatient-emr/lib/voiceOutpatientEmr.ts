@@ -23,6 +23,7 @@ const RECORD_FIELD_LABELS: Record<string, string> = {
   pastMedicalHistory: '既往史',
   personalHistory: '个人史',
   menstrualHistory: '月经史',
+  maritalReproductiveHistory: '婚育史',
   familyHistory: '家族史',
   physicalExam: '体格检查',
   precautions: '注意事项',

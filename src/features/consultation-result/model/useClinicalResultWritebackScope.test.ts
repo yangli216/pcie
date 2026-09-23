@@ -19,6 +19,7 @@ function createFixture() {
     pastMedicalHistory: '平素体健。',
     personalHistory: '',
     menstrualHistory: '',
+    maritalReproductiveHistory: '',
     familyHistory: '否认家族遗传病史。',
     physicalExam: '双肺呼吸音清。',
     precautions: '注意休息。',

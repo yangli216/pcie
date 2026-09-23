@@ -8,10 +8,13 @@ const mocks = vi.hoisted(() => ({
   persistCache: vi.fn(),
   clearCache: vi.fn(),
   invoke: vi.fn(),
+  timing: { mark: vi.fn(), span: vi.fn(), finish: vi.fn() },
   getPatientContextPersonalHistory: vi.fn(() => '吸烟20年。'),
   getPatientContextFamilyHistory: vi.fn(() => '父亲有高血压病史。'),
   getPatientContextMenstrualHistory: vi.fn(() => '周期28天。'),
+  getPatientContextMaritalReproductiveHistory: vi.fn(() => '已婚已育；未孕。'),
   getPatientContextGenderText: vi.fn(() => '女性'),
+  getPatientContextAgeText: vi.fn(() => '8岁'),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
@@ -21,16 +24,19 @@ vi.mock('@services/operationTracker', () => ({
 vi.mock('@services/consultationUserLog', () => ({ submitConsultationUserLog: vi.fn() }));
 vi.mock('@/utils/patientContext', () => ({
   getPatientContextAllergyHistory: vi.fn(() => ''),
+  getPatientContextAgeText: mocks.getPatientContextAgeText,
   getPatientContextCurrentMedicationHistory: vi.fn(() => ''),
   getPatientContextFamilyHistory: mocks.getPatientContextFamilyHistory,
   getPatientContextGenderText: mocks.getPatientContextGenderText,
   getPatientContextMenstrualHistory: mocks.getPatientContextMenstrualHistory,
+  getPatientContextMaritalReproductiveHistory: mocks.getPatientContextMaritalReproductiveHistory,
   getPatientContextPastMedicalHistory: vi.fn(() => ''),
   getPatientContextPersonalHistory: mocks.getPatientContextPersonalHistory,
 }));
 vi.mock('@shared/lib/errorMessages', () => ({ formatUserFacingError: vi.fn(() => 'error') }));
 vi.mock('@features/clinical-result', () => ({ cloneClinicalResultInput: vi.fn((value) => value) }));
 vi.mock('@features/voice-consultation', () => ({
+  voiceTimingTracker: { start: vi.fn(() => mocks.timing) },
   clearVoiceConsultationCacheById: mocks.clearCache,
   hasVoiceConsultationCache: vi.fn(() => false),
   loadVoiceConsultationCacheEntry: vi.fn(() => null),
@@ -91,12 +97,17 @@ describe('useVoiceConsultation result navigation ordering', () => {
       patientContext: expect.objectContaining({
         personalHistory: '吸烟20年。',
         menstrualHistory: '周期28天。',
+        maritalReproductiveHistory: '已婚已育；未孕。',
         familyHistory: '父亲有高血压病史。',
         gender: '女性',
+        ageText: '8岁',
       }),
     }));
     expect(api.isProcessingVoice.value).toBe(false);
     expect(api.intentResult.value?.chiefComplaint).toBe('咳嗽2天');
+    expect(mocks.processTranscript.mock.calls[0][1].timing).toBe(mocks.timing);
+    expect(mocks.timing.mark).toHaveBeenCalledWith('window_and_skeleton_ready');
+    expect(mocks.timing.finish).not.toHaveBeenCalled();
   });
 
   it('creates a user-log round for a non-voice generated clinical result', async () => {

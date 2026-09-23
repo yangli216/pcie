@@ -117,6 +117,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
 import { audioRecorder, getMicrophoneErrorMessage } from '@/services/audioRecorder';
+import { voiceTimingTracker } from '../model/voiceTimingTracker';
 import { saveVoiceRecording } from '@/services/voiceRecordingStorage';
 import { trackClick, trackError } from '@/services/operationTracker';
 import type { VoiceInteractionWindowStage } from '@/constants/windowSizes';
@@ -488,6 +489,7 @@ const handleConfirm = async () => {
   if (isFinalizing.value || !editableText.value.trim()) return;
   trackClick('voice_transcription_confirm');
   if (!stoppedBlob) return;
+  voiceTimingTracker.confirm();
 
   isFinalizing.value = true;
   const segments = [...completedAudioSegments, stoppedBlob];

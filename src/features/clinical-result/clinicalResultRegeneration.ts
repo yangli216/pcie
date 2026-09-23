@@ -11,6 +11,7 @@ export interface ClinicalResultRegenerationRecord {
   pastMedicalHistory: string;
   personalHistory: string;
   menstrualHistory: string;
+  maritalReproductiveHistory?: string;
   familyHistory: string;
   physicalExam: string;
   precautions: string;
@@ -50,8 +51,9 @@ const USER_INSTRUCTIONS = [
   '3. 未被补充信息影响的有效内容应保留，不得因重写而丢失。',
   '4. 既往史、个人史、家族史、体格检查、注意事项仅在有依据时更新；没有新依据则保留原值。',
   '4.1 月经史仅适用于女性患者，只能使用医生补充或当前病历中的明确内容；非女性或无依据时输出空字符串，不得默认生成“月经规律”。',
+  '4.2 婚育史 maritalReproductiveHistory 与月经史独立，仅记录明确婚育状况、当前妊娠状态和生育事实；不得根据年龄、月经或既往孕产次数推断已婚已育、未孕或已孕。未知留空。',
   '5. 不在病例字段中输出诊断建议、药品推荐或模型分析过程。',
-  '6. 输出全部字段：chiefComplaint、historyOfPresentIllness、pastMedicalHistory、personalHistory、menstrualHistory、familyHistory、physicalExam、precautions。',
+  '6. 输出全部字段：chiefComplaint、historyOfPresentIllness、pastMedicalHistory、personalHistory、menstrualHistory、maritalReproductiveHistory、familyHistory、physicalExam、precautions。',
 ].join('\n');
 
 export function buildClinicalResultRegenerationRequest(
@@ -123,6 +125,7 @@ export function normalizeClinicalResultRegenerationOutput(
     pastMedicalHistory: readField(record, 'pastMedicalHistory', fallback.pastMedicalHistory),
     personalHistory: readField(record, 'personalHistory', fallback.personalHistory),
     menstrualHistory: readField(record, 'menstrualHistory', fallback.menstrualHistory),
+    maritalReproductiveHistory: readField(record, 'maritalReproductiveHistory', fallback.maritalReproductiveHistory || ''),
     familyHistory: readField(record, 'familyHistory', fallback.familyHistory),
     physicalExam: readField(record, 'physicalExam', fallback.physicalExam),
     precautions: readField(record, 'precautions', fallback.precautions),

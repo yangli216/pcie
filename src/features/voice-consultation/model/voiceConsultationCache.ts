@@ -23,11 +23,14 @@ export interface VoiceConsultationCacheEntry {
  * 组件或更上层模块；恢复端在使用前会做 narrowing。
  */
 export interface VoiceEditorSnapshot {
+  /** 同一运行期收起恢复的轮次身份；旧缓存仍可由显式 cache 入口恢复。 */
+  consultationRoundId?: string | null;
   chiefComplaint?: string;
   historyOfPresentIllness?: string;
   pastMedicalHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory?: string;
   physicalExam?: string;
   precautions?: string;

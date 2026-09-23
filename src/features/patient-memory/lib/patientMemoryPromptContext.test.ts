@@ -51,6 +51,8 @@ describe('buildPatientMemoryPromptContext', () => {
     expect(context).toContain('青霉素');
     expect(context).toContain('2型糖尿病');
     expect(context).toContain('盐酸二甲双胍片');
+    expect(context).not.toContain('0.5g');
+    expect(context).not.toContain('每日2次');
     expect(context).toContain('存在未消解冲突');
     expect(context).not.toContain('已停用药物');
   });
@@ -61,5 +63,15 @@ describe('buildPatientMemoryPromptContext', () => {
     brief.chronicConditions = [];
     brief.recentMedications = [];
     expect(buildPatientMemoryPromptContext(brief)).toBe('');
+  });
+
+  it('removes clues already present in authoritative patient context', () => {
+    const context = buildPatientMemoryPromptContext(briefFixture(), {
+      knownAllergyText: '药物过敏：青霉素',
+      knownConditionText: '既往确诊2型糖尿病',
+      knownMedicationText: '目前服用盐酸二甲双胍片',
+    });
+
+    expect(context).toBe('');
   });
 });

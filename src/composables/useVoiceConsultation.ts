@@ -23,6 +23,7 @@ import {
   persistVoiceConsultationCacheEntry,
   resolveVoiceConsultationId,
   useVoiceIntentRecognition,
+  voiceTimingTracker,
   type VoiceConsultationCacheEntry,
 } from '@features/voice-consultation';
 import {
@@ -33,10 +34,12 @@ import {
 import { submitConsultationUserLog } from '@services/consultationUserLog';
 import {
   getPatientContextAllergyHistory,
+  getPatientContextAgeText,
   getPatientContextCurrentMedicationHistory,
   getPatientContextFamilyHistory,
   getPatientContextGenderText,
   getPatientContextMenstrualHistory,
+  getPatientContextMaritalReproductiveHistory,
   getPatientContextPastMedicalHistory,
   getPatientContextPersonalHistory,
 } from '@/utils/patientContext';
@@ -319,11 +322,13 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
 
     const currentToken = processingToken + 1;
     processingToken = currentToken;
+    let timing: ReturnType<typeof voiceTimingTracker.start> | undefined;
     try {
       const normalizedText = transcribedText.trim();
       const consultationId = resolveVoiceConsultationId(currentPatient.value);
       consultationRoundId.value = crypto.randomUUID();
       const roundId = consultationRoundId.value;
+      timing = voiceTimingTracker.start(roundId);
       void submitConsultationUserLog({
         consultationId,
         consultationRoundId: roundId,
@@ -343,6 +348,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
         });
         isProcessingVoice.value = false;
         await showClinicalResult(cached.intentResult, 'cache');
+        timing.finish('cached');
         return;
       }
 
@@ -355,20 +361,32 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       if (currentToken !== processingToken) return;
       isProcessingVoice.value = true;
 
+      timing.mark('window_and_skeleton_ready');
       intentRecognition.clearTranscripts();
       intentRecognition.addTranscript(transcribedText);
+      const patient = currentPatient.value;
+      const patientAllergyHistory = getPatientContextAllergyHistory(patient) || '';
+      const patientPastMedicalHistory = getPatientContextPastMedicalHistory(patient) || '';
+      const patientMedicationHistory = getPatientContextCurrentMedicationHistory(patient) || '';
       const result = await intentRecognition.processTranscript(transcribedText, {
         consultationId,
-        memoryContext: buildPatientMemoryPromptContext(options.patientMemoryBrief?.value),
+        timing,
+        memoryContext: buildPatientMemoryPromptContext(options.patientMemoryBrief?.value, {
+          knownAllergyText: patientAllergyHistory,
+          knownConditionText: patientPastMedicalHistory,
+          knownMedicationText: patientMedicationHistory,
+        }),
         patientContext: {
-          pastMedicalHistory: getPatientContextPastMedicalHistory(currentPatient.value) || null,
-          allergyHistory: getPatientContextAllergyHistory(currentPatient.value) || null,
-          currentMedicationHistory: getPatientContextCurrentMedicationHistory(currentPatient.value) || null,
-          personalHistory: getPatientContextPersonalHistory(currentPatient.value) || null,
-          menstrualHistory: getPatientContextMenstrualHistory(currentPatient.value) || null,
-          familyHistory: getPatientContextFamilyHistory(currentPatient.value) || null,
-          gender: getPatientContextGenderText(currentPatient.value) || null,
-          vitals: getCurrentPatientVitalSource(currentPatient.value) || null,
+          pastMedicalHistory: patientPastMedicalHistory || null,
+          allergyHistory: patientAllergyHistory || null,
+          currentMedicationHistory: patientMedicationHistory || null,
+          personalHistory: getPatientContextPersonalHistory(patient) || null,
+          menstrualHistory: getPatientContextMenstrualHistory(patient) || null,
+          maritalReproductiveHistory: getPatientContextMaritalReproductiveHistory(patient) || null,
+          familyHistory: getPatientContextFamilyHistory(patient) || null,
+          gender: getPatientContextGenderText(patient) || null,
+          ageText: getPatientContextAgeText(patient) || null,
+          vitals: getCurrentPatientVitalSource(patient) || null,
         },
         onProgress: ({ result: partialResult }) => {
           if (currentToken !== processingToken) return;
@@ -382,6 +400,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       }
 
       if (!result) {
+        timing.finish('failed');
         isProcessingVoice.value = false;
         const errMsg = intentRecognition.processingError.value || '意图识别失败';
         showToast(errMsg, 'error');
@@ -410,6 +429,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
         return;
       }
 
+      timing?.finish('failed');
       isProcessingVoice.value = false;
       console.error('[VoiceConsultation] Processing failed:', err);
       trackError('voice_processing_failed', err, withConsultationId());

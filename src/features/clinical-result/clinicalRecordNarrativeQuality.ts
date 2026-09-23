@@ -4,6 +4,7 @@ export type ClinicalRecordNarrativeField =
   | 'pastMedicalHistory'
   | 'personalHistory'
   | 'menstrualHistory'
+  | 'maritalReproductiveHistory'
   | 'familyHistory'
   | 'physicalExam'
   | 'precautions';

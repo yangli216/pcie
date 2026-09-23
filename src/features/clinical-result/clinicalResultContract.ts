@@ -122,6 +122,7 @@ export interface ClinicalResultInput {
   allergyHistory: string;
   currentMedicationHistory: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory: string;
   symptoms: string[];
   negativeSymptoms: string[];

@@ -2,8 +2,8 @@ export { default as RiskAlertBubble } from './ui/RiskAlertBubble.vue';
 export { default as RiskAlertPanel } from './ui/RiskAlertPanel.vue';
 export { generateChronicRefillRecord } from './api/chronicRefillRecord';
 export type { ChronicRefillRecordGenerationOptions } from './api/chronicRefillRecord';
-export { suggestChronicRefillMedicationAttributions } from './api/chronicRefillMedicationAttribution';
 export {
+  applyChronicRefillMedicationScope,
   assessChronicRefillCandidate,
   getChronicRefillCandidateKey,
   getChronicRefillConditionOptions,
@@ -13,7 +13,6 @@ export {
 export type {
   ChronicRefillMedicationAttributionConfidence,
   ChronicRefillMedicationAttributionItem,
-  ChronicRefillMedicationAttributionStatus,
   ChronicRefillSelection,
 } from './lib/chronicRefillMedicationAttribution';
 export {
@@ -39,6 +38,21 @@ export {
   normalizeRiskPresentationItems,
   RISK_CAPSULE_CONTENT_MAX_LENGTH,
 } from './lib/riskPresentation';
+export {
+  chronicRefillTimingTracker,
+  createChronicRefillTimingTracker,
+} from './model/chronicRefillTimingTracker';
+export type {
+  ChronicRefillTimingOutcome,
+  ChronicRefillTimingRow,
+  ChronicRefillTimingSession,
+} from './model/chronicRefillTimingTracker';
+export {
+  useChronicRefillTimingPresentation,
+} from './model/useChronicRefillTimingPresentation';
+export type {
+  ChronicRefillTimingPresentationState,
+} from './model/useChronicRefillTimingPresentation';
 export type {
   ChronicRefillConfirmationItem,
   ChronicRefillConfirmationOption,

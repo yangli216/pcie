@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TreatmentRecommendation } from '@/types/consultation';
+import { normalizeChronicRefillConfirmationPlan } from '@features/reception-risk/lib/chronicRefillConfirmation';
+import type { ChronicRefillCandidate } from '@features/reception-risk/lib/chronicRefillAssessment';
 import {
   updateChronicRefillReviewRecordText,
   useChronicRefillReview,
@@ -45,6 +47,66 @@ describe('updateChronicRefillReviewRecordText', () => {
 });
 
 describe('useChronicRefillReview', () => {
+  it('selects fallback medication status without copying historical prescriptions', () => {
+    const candidate = {
+      diagnoses: ['高血压病'],
+      medications: ['苯磺酸氨氯地平片', '缬沙坦'],
+    } as ChronicRefillCandidate;
+    const fallback = normalizeChronicRefillConfirmationPlan(null, candidate);
+    let history = '患者既往确诊高血压病。今复诊配药。';
+    const controller = useChronicRefillReview({
+      getHistoryOfPresentIllness: () => history,
+      setHistoryOfPresentIllness: (value) => { history = value; },
+      getTreatments: () => [],
+    });
+    controller.reset(fallback);
+    const item = fallback.items[0];
+    expect(item.description).toContain('苯磺酸氨氯地平片');
+    controller.select(item.id, item.options[0]);
+    controller.select(item.id, item.options[0]);
+    expect(history).toBe('患者既往确诊高血压病。今复诊配药。仍按近期方案服药');
+    controller.select(item.id, item.options[1]);
+    expect(history).toBe('患者既往确诊高血压病。今复诊配药。近期用药方案已有调整');
+    controller.select(item.id, item.options[3]);
+    expect(history).toBe('患者既往确诊高血压病。今复诊配药。');
+  });
+
+  it('guards an existing model plan at click time and preserves manual history and safety behavior', () => {
+    const manualHistory = '医生记录：服用缬沙坦后头晕。';
+    let history = manualHistory;
+    const treatments = [{ type: 'medicine', name: '缬沙坦', selected: true }] as TreatmentRecommendation[];
+    const controller = useChronicRefillReview({
+      getHistoryOfPresentIllness: () => history,
+      setHistoryOfPresentIllness: (value) => { history = value; },
+      getTreatments: () => treatments,
+    });
+    const unsafePlan = structuredClone(plan);
+    unsafePlan.items[0].options[1].recordText = '近期自行停用缬沙坦，血压控制欠佳';
+    controller.reset(unsafePlan);
+    controller.select('control', unsafePlan.items[0].options[1]);
+    expect(history).toBe(manualHistory);
+    expect(controller.selections.value.control).toBe('poor');
+    expect(treatments[0].selected).toBe(false);
+    expect(controller.treatmentReviewTriggered.value).toBe(true);
+    controller.select('control', unsafePlan.items[0].options[0]);
+    expect(history).toBe(`${manualHistory}近期血压控制平稳`);
+  });
+
+  it('cleans prescription details already present before applying a review answer', () => {
+    let history = '患者既往确诊2型糖尿病、高血压2级。今复诊配药：厄贝沙坦片口服1天共1盒。';
+    const controller = useChronicRefillReview({
+      getHistoryOfPresentIllness: () => history,
+      setHistoryOfPresentIllness: (value) => { history = value; },
+      getTreatments: () => [],
+    });
+
+    controller.reset(plan);
+    controller.select('control', plan.items[0].options[0]);
+
+    expect(history).toBe('患者既往确诊2型糖尿病、高血压2级。今复诊配药。近期血压控制平稳');
+    expect(history).not.toMatch(/厄贝沙坦|口服|共1盒/u);
+  });
+
   it('keeps review optional and only writes explicitly selected facts', () => {
     let history = '患者既往确诊高血压。今复诊配药。';
     const controller = useChronicRefillReview({
@@ -82,6 +144,22 @@ describe('useChronicRefillReview', () => {
     expect(history).toContain('近期血压控制欠佳');
     expect(treatments[0].selected).toBe(false);
     expect(controller.treatmentReviewTriggered.value).toBe(true);
+  });
+
+  it('preserves a manually edited history even when it contains prescription wording', () => {
+    const manualHistory = '医生记录：今复诊配药：口服药物后头晕。';
+    let history = manualHistory;
+    const controller = useChronicRefillReview({
+      getHistoryOfPresentIllness: () => history,
+      setHistoryOfPresentIllness: (value) => { history = value; },
+      isHistoryOfPresentIllnessModified: () => true,
+      getTreatments: () => [],
+    });
+
+    controller.reset(plan);
+    controller.select('control', plan.items[0].options[0]);
+
+    expect(history).toBe(`${manualHistory}近期血压控制平稳`);
   });
 
   it('replaces an option fragment restored from an editor snapshot', () => {

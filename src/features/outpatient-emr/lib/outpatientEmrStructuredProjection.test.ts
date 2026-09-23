@@ -171,6 +171,33 @@ describe('outpatient EMR structured projection', () => {
     expect(values).toEqual({});
   });
 
+  it('projects other physical-exam text after removing fixed vital signs', () => {
+    const values = resolveOutpatientEmrStructuredFieldValues({
+      recordContext: {
+        sections: {
+          physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:128/82mmHg。双肺呼吸音粗，腹部柔软。',
+        },
+      },
+      fields: [
+        field('其他体格检查'),
+        field('体温'),
+      ],
+    });
+
+    expect(values).toEqual({
+      '其他体格检查': '双肺呼吸音粗，腹部柔软。',
+    });
+  });
+
+  it('does not synthesize other physical-exam text without a physical-exam section', () => {
+    const values = resolveOutpatientEmrStructuredFieldValues({
+      recordContext: { recordText: '主诉：咳嗽。' },
+      fields: [field('其他体格检查')],
+    });
+
+    expect(values).toEqual({});
+  });
+
   it('maps only explicitly collected physical-exam vital values', () => {
     const values = resolveOutpatientEmrStructuredFieldValues({
       recordContext: {

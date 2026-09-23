@@ -13,6 +13,7 @@ export interface ClinicalResultIntentRecordInput {
   allergyHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory?: string;
   physicalExam?: string;
   precautions?: string;
@@ -28,6 +29,7 @@ export interface ClinicalResultIntentResetRecordSnapshot {
   pastMedicalHistory: string;
   personalHistory: string;
   menstrualHistory: string;
+  maritalReproductiveHistory: string;
   familyHistory: string;
   physicalExam: string;
   precautions: string;
@@ -41,6 +43,7 @@ export interface ClinicalResultIntentResetOptions {
   pastMedicalHistory: Ref<string>;
   personalHistory: Ref<string>;
   menstrualHistory: Ref<string>;
+  maritalReproductiveHistory: Ref<string>;
   familyHistory: Ref<string>;
   physicalExam: Ref<string>;
   precautions: Ref<string>;
@@ -69,6 +72,7 @@ export function buildClinicalResultIntentRecordSnapshot(
     allergyHistory: input.allergyHistory,
     personalHistory: input.outpatientRecord?.personalHistory || input.personalHistory,
     menstrualHistory: input.outpatientRecord?.menstrualHistory || input.menstrualHistory,
+    maritalReproductiveHistory: input.outpatientRecord?.maritalReproductiveHistory || input.maritalReproductiveHistory,
     familyHistory: input.outpatientRecord?.familyHistory || input.familyHistory,
     physicalExam: input.outpatientRecord?.physicalExam || input.physicalExam,
     precautions: input.outpatientRecord?.precautions || input.precautions || input.healthEducation,
@@ -84,6 +88,7 @@ export function buildClinicalResultIntentRecordSnapshot(
       chronicFollowUp,
     ),
     menstrualHistory: outpatientRecord.menstrualHistory || '',
+    maritalReproductiveHistory: outpatientRecord.maritalReproductiveHistory || '',
   };
 }
 
@@ -110,6 +115,7 @@ export function useClinicalResultIntentReset(options: ClinicalResultIntentResetO
     options.pastMedicalHistory.value = snapshot.pastMedicalHistory;
     options.personalHistory.value = snapshot.personalHistory;
     options.menstrualHistory.value = snapshot.menstrualHistory;
+    options.maritalReproductiveHistory.value = snapshot.maritalReproductiveHistory;
     options.familyHistory.value = snapshot.familyHistory;
     options.physicalExam.value = snapshot.physicalExam;
     options.precautions.value = snapshot.precautions;

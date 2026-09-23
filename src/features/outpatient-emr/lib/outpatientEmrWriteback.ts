@@ -227,6 +227,7 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     'historyOfPresentIllness',
     'pastMedicalHistory',
     'menstrualHistory',
+    'maritalReproductiveHistory',
     'familyHistory',
     'precautions',
   ]);

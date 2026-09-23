@@ -31,6 +31,24 @@ vi.mock('@features/clinical-result', async () => {
 });
 
 describe('generateChronicRefillRecord', () => {
+  it.each(['女性', '男性'])('retains applicable existing histories in initial and final chronic records for %s', async (gender) => {
+    const patient = buildPatientContext({ payload: {
+      patientId: 'history-patient', visitId: 'history-visit', gender,
+      menstrualHistory: '周期28天，经期5天。', maritalReproductiveHistory: '已婚已育；目前未孕。',
+    } })!;
+    const candidate = assessChronicRefillCandidate({ patientId: 'history-patient', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['原发性高血压'], medications: [] },
+    ] })!;
+    const partials: ClinicalResultInput[] = [];
+    const result = await generateChronicRefillRecord(patient, candidate, { onPartial: (record) => partials.push(record) });
+    expect(partials.length).toBeGreaterThan(0);
+    for (const record of [...partials, result]) {
+      expect(record.outpatientRecord?.menstrualHistory || '').toBe(gender === '女性' ? '周期28天，经期5天。' : '');
+      expect(record.outpatientRecord?.maritalReproductiveHistory || '').toBe(gender === '女性' ? '已婚已育；目前未孕。' : '');
+    }
+    expect(chatStream).toHaveBeenCalledTimes(1);
+  });
+
   it('uses HIS positive history and does not carry it into a different patient', async () => {
     const candidate = assessChronicRefillCandidate({ patientId: 'patient-1', visits: [
       { visitTime: Date.now() - 86400000, diagnoses: ['原发性高血压'], medications: [] },
@@ -139,8 +157,15 @@ describe('generateChronicRefillRecord', () => {
       }] } }) + '\n');
     });
     const partials: ClinicalResultInput[] = [];
-    const result = await generateChronicRefillRecord(patient, candidate, { onPartial: (value) => partials.push(value) });
+    const timing = {
+      mark: vi.fn(), span: vi.fn(() => vi.fn()), measure: vi.fn(), finish: vi.fn(),
+    };
+    const result = await generateChronicRefillRecord(patient, candidate, {
+      onPartial: (value) => partials.push(value),
+      timing,
+    });
     expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(timing.mark).toHaveBeenCalledWith('inventory_prompt_full', 1);
     expect(result.factSuggestions).toEqual(expect.arrayContaining([
       expect.objectContaining({ negativeRecordText: '双足背动脉搏动可触及', status: 'pending' }),
       expect.objectContaining({ negativeRecordText: '双足浅感觉正常', priority: 'critical' }),
@@ -150,6 +175,36 @@ describe('generateChronicRefillRecord', () => {
     expect(result.outpatientRecord?.physicalExam).not.toContain('浅感觉正常');
     expect(partials.some((item) => item.factSuggestions?.some((entry) => entry.negativeRecordText === '双足浅感觉正常'))).toBe(true);
     expect(result.recommendationPolicy?.autoFetchTreatments).toBe(false);
+  });
+
+  it('enforces record-extra output bounds after model generation', async () => {
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'visit-1' },
+    })!;
+    const candidate = assessChronicRefillCandidate({ patientId: 'patient-1', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['2型糖尿病'], medications: [] },
+    ] })!;
+    const suggestions = ['足部感觉', '足背动脉', '皮肤破损'].map((label) => ({
+      field: 'physicalExam' as const,
+      question: `${label}是否异常？`,
+      negativeRecordText: `${label}未见明显异常`,
+      rationale: '糖尿病相关专科查体',
+      priority: 'general' as const,
+    }));
+    const longHealthEducation = `规律用药并记录家庭监测结果${'持续观察血压血糖变化并按期复诊'.repeat(20)}`;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk(`${JSON.stringify({
+        event: 'record_extra',
+        data: { physicalExamSuggestions: suggestions, healthEducation: longHealthEducation },
+      })}\n`);
+    });
+
+    const result = await generateChronicRefillRecord(patient, candidate);
+
+    expect(Array.from(result.healthEducation)).toHaveLength(160);
+    expect(result.factSuggestions?.some((item) => item.question.includes('足部感觉'))).toBe(true);
+    expect(result.factSuggestions?.some((item) => item.question.includes('足背动脉'))).toBe(true);
+    expect(result.factSuggestions?.some((item) => item.question.includes('皮肤破损'))).toBe(false);
   });
 
   it('creates a refill-specific record and suppresses generic treatment generation', async () => {
@@ -298,8 +353,7 @@ describe('generateChronicRefillRecord', () => {
       chiefComplaint: '糖尿病定期复诊续方',
       historyOfPresentIllness: '患者既往诊断糖尿病，长期口服盐酸二甲双胍片，本次复诊续方，病情控制及依从性待医生核实。',
       recommendedMedicines: [{
-        name: '盐酸二甲双胍片',
-        spec: '0.25g*60片/瓶',
+        ref: 'S1',
         dosage: 0.5,
         dosageUnit: 'g',
         frequency: '每日3次',
@@ -366,14 +420,17 @@ describe('generateChronicRefillRecord', () => {
 
     const messages = vi.mocked(chatStream).mock.calls[0][0];
     const prompt = messages.map((message) => message.content).join('\n');
-    expect(prompt).toContain('盐酸二甲双胍片｜0.25g*60片/瓶');
+    expect(prompt).toContain('S1|盐酸二甲双胍片|0.25g*60片/瓶');
     expect(prompt).not.toContain('可用库存');
-    expect(prompt).toContain('recommendedMedicines 必须返回结构化药品对象');
-    expect(prompt).toContain('historyOfPresentIllness禁止写入任何历史药名、规格、剂量、频次、用法、疗程、总量');
-    expect(prompt).toContain('对话中未提及、问诊中未说明、资料中未记录');
-    expect(prompt).toContain('"targetDose":"目标临床一次剂量数值"');
-    expect(prompt).toContain('days、totalQty、totalUnit必须留空');
-    expect(prompt).toContain('reason只说明诊断、历史用药和适应证等临床推荐依据');
+    expect(prompt).toContain('recommended_medicines只生成药品');
+    expect(prompt).toContain('病历核心、通用核查骨架和基础查体已由程序确定性生成');
+    expect(prompt).toContain('review_plan只补充确定性核查骨架');
+    expect(prompt).toContain('不得输出dosage、dosageUnit、days、totalQty、totalUnit');
+    expect(prompt).not.toContain('张建国');
+    expect(vi.mocked(chatStream).mock.calls[0][5]).toMatchObject({
+      configProfile: 'fast',
+      temperature: 0,
+    });
   });
 
   it('uses the preserved specific historical diagnosis for the initial catalog match', async () => {
@@ -427,11 +484,18 @@ describe('generateChronicRefillRecord', () => {
   it('publishes deterministic and streamed partial content before the final result', async () => {
     vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
       onChunk('{"event":"record_core","data":{"chiefComplaint":"高血压复诊配药","historyOfPresentIllness":"患者既往确诊高血压，今复诊配药。"}}\n');
+      onChunk('{"event":"medication_scope","data":{"assignments":[]}}\n');
       onChunk('{"event":"review_plan","data":{"summary":"请核查","items":[]}}\n');
       onChunk('{"event":"recommended_medicines","data":[{"name":"苯磺酸氨氯地平片"}]}\n');
       onChunk('{"event":"record_extra","data":{"healthEducation":"规律监测家庭血压。"}}\n{"event":"done","data":{}}');
     });
     const onPartial = vi.fn();
+    const timing = {
+      mark: vi.fn(),
+      span: vi.fn(() => vi.fn()),
+      measure: vi.fn(),
+      finish: vi.fn(),
+    };
     const patient = buildPatientContext({
       payload: { patientId: 'patient-1', visitId: 'visit-current', name: '测试患者' },
     })!;
@@ -445,7 +509,7 @@ describe('generateChronicRefillRecord', () => {
       diagnosisEvidenceText: '历史诊断为高血压',
       medicationEvidenceText: '历史用药为苯磺酸氨氯地平片',
       evidenceText: '近期慢病复诊记录',
-    }, { onPartial });
+    }, { onPartial, timing });
 
     expect(onPartial).toHaveBeenCalledWith(expect.objectContaining({
       chiefComplaint: '高血压复诊配药',
@@ -458,6 +522,180 @@ describe('generateChronicRefillRecord', () => {
     expect(streamedPartials.some((partial) => partial.generation?.readySections.includes('recommended_medicines') && partial.treatments.length === 1)).toBe(true);
     expect(result.healthEducation).toBe('规律监测家庭血压。');
     expect(chatStream).toHaveBeenCalledOnce();
+    expect(timing.mark).toHaveBeenCalledWith('inventory_prompt_scoped', 1);
+    expect(timing.mark).toHaveBeenCalledWith('inventory_prompt_chars', expect.any(Number));
+    expect(timing.mark).toHaveBeenCalledWith('history_evidence_chars', expect.any(Number));
+    expect(timing.mark).toHaveBeenCalledWith('medication_scope_items', 0);
+    expect(timing.mark).toHaveBeenCalledWith('medication_scope_groups', 0);
+    expect(timing.mark).toHaveBeenCalledWith('llm_prompt_chars', expect.any(Number));
+    expect(timing.mark).toHaveBeenCalledWith('section_record_core', expect.any(Number));
+    expect(timing.mark).toHaveBeenCalledWith('section_record_extra', expect.any(Number));
+    expect(timing.mark).toHaveBeenCalledWith('llm_stream_chunks', 5);
+    expect(timing.mark).toHaveBeenCalledWith('llm_output_chars', expect.any(Number));
+    expect(timing.measure).toHaveBeenCalledWith('llm_chunk_gap_max', expect.any(Number), 5);
+    expect(JSON.stringify([timing.mark.mock.calls, timing.measure.mock.calls])).not.toContain('高血压复诊配药');
+  });
+
+  it('classifies ambiguous historical medicines inside the same stream and only keeps selected-disease medicines', async () => {
+    vi.mocked(loadAvailableMedicineInventoryContext).mockResolvedValue({
+      items: [
+        {
+          productId: 'med-amlodipine',
+          productName: '苯磺酸氨氯地平片',
+          spec: '5mg*28片/盒',
+          unit: '盒',
+          availableQuantity: 12,
+          storeIds: ['1760'],
+          storeNames: ['西药房'],
+        },
+        {
+          productId: 'med-metformin',
+          productName: '盐酸二甲双胍片',
+          spec: '0.5g*60片/瓶',
+          unit: '瓶',
+          availableQuantity: 20,
+          storeIds: ['1760'],
+          storeNames: ['西药房'],
+        },
+      ],
+      promptContext: '不应传入全量目录',
+      pharmacyCount: 1,
+      staleStoreCount: 0,
+    });
+    const candidate = assessChronicRefillCandidate({
+      patientId: 'patient-1',
+      visits: [{
+        visitId: 'mixed-visit',
+        visitTime: Date.parse('2026-06-01T08:00:00+08:00'),
+        diagnoses: ['原发性高血压', '2型糖尿病'],
+        medicationOrders: [
+          {
+            orderId: 'rx-amlodipine',
+            productId: 'med-amlodipine',
+            name: '苯磺酸氨氯地平片',
+            spec: '5mg*28片/盒',
+            dose: '1',
+            doseUnit: '片',
+            frequency: '每日1次',
+            frequencyKey: 'QD',
+            route: '口服',
+            routeKey: 'PO',
+            days: '28',
+            totalQty: '1',
+            totalUnit: '盒',
+          },
+          {
+            orderId: 'rx-metformin',
+            productId: 'med-metformin',
+            name: '盐酸二甲双胍片',
+            spec: '0.5g*60片/瓶',
+          },
+        ],
+      }],
+    })!;
+    const scoped = scopeChronicRefillCandidate(candidate, ['高血压'])!;
+    const amlodipineItem = scoped.medicationAttributions?.find((item) => item.medication.name.includes('氨氯地平'))!;
+    const metforminItem = scoped.medicationAttributions?.find((item) => item.medication.name.includes('二甲双胍'))!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk('{"event":"record_core","data":{"chiefComplaint":"原发性高血压复诊配药"}}\n');
+      onChunk(`${JSON.stringify({
+        event: 'medication_scope',
+        data: { accepted: [['M1', 'C1', 'h'], ['M2', 'C2', 'h'], ['forged', 'C1', 'h']] },
+      })}\n`);
+      onChunk('{"event":"review_plan","data":{"summary":"请核查","items":[]}}\n');
+      onChunk('{"event":"recommended_medicines","data":[{"name":"苯磺酸氨氯地平片"},{"name":"盐酸二甲双胍片"}]}\n');
+      onChunk('{"event":"record_extra","data":{}}\n{"event":"done","data":{}}');
+    });
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'current-visit', name: '测试患者' },
+    })!;
+
+    const result = await generateChronicRefillRecord(patient, scoped);
+
+    expect(chatStream).toHaveBeenCalledOnce();
+    expect(result.currentMedicationHistory).toBe('苯磺酸氨氯地平片');
+    expect(result.treatments).toHaveLength(1);
+    expect(result.treatments[0]).toMatchObject({
+      name: '苯磺酸氨氯地平片',
+      dosage: '1',
+      dosageUnit: '片',
+      selected: true,
+    });
+    expect(result.treatments.some((item) => item.name.includes('二甲双胍'))).toBe(false);
+    const prompt = vi.mocked(chatStream).mock.calls[0][0].map((message) => message.content).join('\n');
+    expect(prompt).toContain('"M1"');
+    expect(prompt).toContain('"C1"');
+    expect(prompt).not.toContain(amlodipineItem.id);
+    expect(prompt).not.toContain(metforminItem.id);
+    expect(prompt).not.toContain('不应传入全量目录');
+  });
+
+  it('keeps ambiguous historical medicines excluded when medication_scope is missing', async () => {
+    const candidate = assessChronicRefillCandidate({
+      patientId: 'patient-1',
+      visits: [{
+        visitId: 'mixed-visit',
+        visitTime: Date.now() - 86_400_000,
+        diagnoses: ['原发性高血压', '2型糖尿病'],
+        medications: ['苯磺酸氨氯地平片', '盐酸二甲双胍片'],
+      }],
+    })!;
+    const scoped = scopeChronicRefillCandidate(candidate, ['高血压'])!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk('{"event":"record_core","data":{"chiefComplaint":"原发性高血压复诊配药"}}\n');
+      onChunk('{"event":"recommended_medicines","data":["苯磺酸氨氯地平片"]}\n');
+      onChunk('{"event":"done","data":{}}');
+    });
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'current-visit' },
+    })!;
+
+    const result = await generateChronicRefillRecord(patient, scoped);
+
+    expect(result.currentMedicationHistory).toBe('历史用药方案待医生核实');
+    expect(result.treatments).toEqual([]);
+  });
+
+  it('keeps repeated 90-day history compact and excludes direct patient identity from the prompt', async () => {
+    const visits = Array.from({ length: 21 }, (_, index) => ({
+      visitTime: Date.parse('2026-09-18T08:00:00+08:00') - index * 86_400_000,
+      diagnoses: ['2型糖尿病'],
+      chiefComplaint: '',
+      presentIllness: '',
+      medicationOrders: [
+        {
+          name: '盐酸二甲双胍缓释片', dose: '1', doseUnit: 'g',
+          frequency: '每日一次', route: '口服', days: '30',
+        },
+        {
+          name: '阿卡波糖片', dose: '50', doseUnit: 'mg',
+          frequency: '每日三次', route: '口服', days: '14',
+        },
+      ],
+    }));
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'current-visit', name: '不应进入模型的姓名', gender: '女性', ageText: '37岁' },
+    })!;
+
+    await generateChronicRefillRecord(patient, {
+      diagnosis: '2型糖尿病',
+      diagnoses: ['2型糖尿病'],
+      diagnosisGroups: ['糖尿病'],
+      medications: ['盐酸二甲双胍缓释片', '阿卡波糖片'],
+      medicationOrders: visits[0].medicationOrders,
+      chronicVisitCount: visits.length,
+      chronicVisits: visits,
+      diagnosisEvidenceText: '近期历史就诊记录有“2型糖尿病”诊断',
+      medicationEvidenceText: '历史用药记录',
+      evidenceText: '历史证据',
+    });
+
+    const prompt = vi.mocked(chatStream).mock.calls[0][0].map((message) => message.content).join('\n');
+    expect(prompt.length).toBeLessThan(3_500);
+    expect(prompt).toContain('盐酸二甲双胍缓释片|最近');
+    expect(prompt).toContain('出现21次');
+    expect(prompt).not.toMatch(/第21次|主诉：未记录|现病史：未记录/u);
+    expect(prompt).not.toContain('不应进入模型的姓名');
   });
 
   it('recommends an inventory medicine through AI when no historical medication is available', async () => {
@@ -536,8 +774,8 @@ describe('generateChronicRefillRecord', () => {
       rationale: '',
     });
     const prompt = vi.mocked(chatStream).mock.calls[0][0].map((message) => message.content).join('\n');
-    expect(prompt).toContain('历史慢病配药：未获取到可确认的历史用药记录');
-    expect(prompt).toContain('同一次返回reviewPlan');
-    expect(prompt).toContain('推荐只用于界面提示，不代表医生已确认');
+    expect(prompt).toContain('历史处方摘要：\n无可靠历史处方');
+    expect(prompt).toContain('review_plan只补充确定性核查骨架');
+    expect(prompt).not.toContain('medication_scope');
   });
 });

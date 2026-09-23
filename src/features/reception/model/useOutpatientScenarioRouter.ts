@@ -12,6 +12,8 @@ import {
   scopeChronicRefillCandidate,
   type ChronicRefillCandidate,
 } from '@features/reception-risk/lib/chronicRefillAssessment';
+import { chronicRefillTimingTracker } from '@features/reception-risk/model/chronicRefillTimingTracker';
+import type { ChronicRefillRecordGenerationOptions } from '@features/reception-risk/api/chronicRefillRecord';
 import type { ChronicRefillSelection } from '@features/reception-risk/lib/chronicRefillMedicationAttribution';
 import { hasPatientReportedLabOrExamResults } from '../lib/reportedApplyResults';
 import type { ReceptionSessionController } from './useReceptionSessionController';
@@ -49,13 +51,7 @@ export interface OutpatientScenarioRouterOptions {
   generateChronicRefillRecord: (
     patient: AppPatient,
     candidate: ChronicRefillCandidate,
-    options?: {
-      onProgress?: (stage: Extract<
-        ClinicalResultGenerationStage,
-        'generating-content' | 'finalizing-result'
-      >) => void;
-      onPartial?: (result: ClinicalResultInput) => void;
-    },
+    options?: ChronicRefillRecordGenerationOptions,
   ) => Promise<ClinicalResultInput>;
   beginGeneratedClinicalResult: (input: {
     channel: 'chronic-refill';
@@ -144,7 +140,10 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
         stage: 'preparing-context',
         message: `正在读取${diagnosisText}历史资料与院内药品`,
       });
+      const timing = chronicRefillTimingTracker.start(generationSessionId);
       const result = await generateChronicRefillRecord(patient, scopedCandidate, {
+        sessionId: generationSessionId,
+        timing,
         onProgress: (stage) => {
           if (!isCurrentOpportunity(opportunity, patientAnchorId)) return;
           updateGeneratedClinicalResultProgress(generationSessionId, {
@@ -170,6 +169,7 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
       }
       trackError('generate_chronic_refill_result_failed', error);
       if (generationSessionId) {
+        chronicRefillTimingTracker.get(generationSessionId)?.finish('failed');
         failGeneratedClinicalResult(generationSessionId, '慢病复诊结果生成失败，请收起页面后重试');
       }
       showToast('生成复诊配药结果失败，请稍后重试', 'error');

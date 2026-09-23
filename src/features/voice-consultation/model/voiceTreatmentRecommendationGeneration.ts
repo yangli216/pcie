@@ -1,3 +1,4 @@
+import type { VoiceTimingSession } from './voiceTimingTracker';
 import { chat, chatFast } from '@/services/llm';
 import { medicalDataService } from '@/services/medicalData';
 import { explicitlyRequestsRestrictedMedicalItem } from '@/services/medicalCatalogPolicy';
@@ -22,6 +23,7 @@ import {
 } from '@features/clinical-result';
 
 export interface VoiceTreatmentGenerationInput {
+  timing?: VoiceTimingSession;
   patientName: string;
   gender: string;
   age: string;
@@ -77,7 +79,9 @@ export async function generateVoiceTreatmentRecommendations(
   if (requestedSet.has('medicine')) {
     runners.push({ key: 'medication', types: ['medicine'], run: async () => {
       await input.onMedicationPhase?.('preparing');
+      const endInventory = input.timing?.span('medicine_inventory');
       const inventory = await loadAvailableMedicineInventoryContext({ pharmacies: input.pharmacies });
+      endInventory?.(inventory.items.length);
       await input.onMedicationPhase?.('assessing');
       const medicationPrompt = input.currentInformationMedication
         ? buildCurrentInformationMedicationPrompt(
@@ -95,7 +99,9 @@ export async function generateVoiceTreatmentRecommendations(
         operationAction: 'assess_medication_with_current_information',
         title: '医生主动基于现有信息评估用药',
       } : undefined);
+      const endModel = input.timing?.span('medicine_model');
       const response = await chat(spec.messages, undefined, undefined, undefined, spec.config);
+      endModel?.();
       const assessment = input.currentInformationMedication
         ? parseCurrentInformationMedicationResult(
           parseLLMJson<unknown>(response), input.currentInformationMedication.symptomaticOnly,
@@ -130,13 +136,17 @@ export async function generateVoiceTreatmentRecommendations(
     let auxiliaryItems = [] as Awaited<ReturnType<typeof medicalDataService.fetchAvailableExamLabItems>>;
     let auxiliaryCatalogError: unknown;
     if (auxiliaryTypes.length > 0) {
+      const endCatalog = input.timing?.span('auxiliary_catalog');
       try {
         auxiliaryItems = await medicalDataService.fetchAvailableExamLabItems();
       } catch (error) {
         auxiliaryCatalogError = error;
         console.warn('[VoiceTreatment] Failed to query available exam/lab items from PHIS', error);
+      } finally {
+        endCatalog?.(auxiliaryItems.length);
       }
     }
+    const endCatalogContext = input.timing?.span('auxiliary_catalog_context');
     const auxiliaryCatalog = buildInstitutionAuxiliaryCatalogContext(
       auxiliaryItems,
       auxiliaryTypes,
@@ -148,6 +158,7 @@ export async function generateVoiceTreatmentRecommendations(
         ].join(' ')),
       },
     );
+    endCatalogContext?.(auxiliaryCatalog.entries.length);
     const availableAuxiliaryTypes = auxiliaryTypes.filter((type) => (
       type === 'exam' ? auxiliaryCatalog.counts.exam > 0 : auxiliaryCatalog.counts.labTest > 0
     ));
@@ -162,6 +173,7 @@ export async function generateVoiceTreatmentRecommendations(
 
     if (availableAuxiliaryTypes.length > 0) {
       auxiliaryRunners.push({ key: 'auxiliary', types: availableAuxiliaryTypes, run: async () => {
+        const endRequestBuild = input.timing?.span('auxiliary_request_build');
         const spec = buildClinicalResultTreatmentRequestSpec('exam', {
           ...baseParams,
           availableExamLabCatalog: auxiliaryCatalog.promptContext,
@@ -176,7 +188,15 @@ export async function generateVoiceTreatmentRecommendations(
           operationAction: 'generate_auxiliary_catalog_recommendation',
           title: '语音问诊生成院内目录检验检查推荐',
         });
-        const response = await chatFast(spec.messages, undefined, undefined, undefined, spec.config);
+        endRequestBuild?.();
+        input.timing?.mark('auxiliary_model_started');
+        const endModel = input.timing?.span('auxiliary_model');
+        let response: Awaited<ReturnType<typeof chatFast>>;
+        try {
+          response = await chatFast(spec.messages, undefined, undefined, undefined, spec.config);
+        } finally {
+          endModel?.();
+        }
         return {
           key: 'auxiliary',
           types: availableAuxiliaryTypes,
@@ -190,10 +210,23 @@ export async function generateVoiceTreatmentRecommendations(
       } });
     }
 
-    for (const result of immediateResults) {
-      await input.onTaskResult?.(result);
-    }
-    return Promise.all(auxiliaryRunners.map(runTask));
+    const auxiliaryResultsPromise = Promise.all(auxiliaryRunners.map(runTask));
+    const immediateResultsApplication = (async () => {
+      if (immediateResults.length === 0) return;
+      const endImmediateApply = input.timing?.span('auxiliary_immediate_results');
+      try {
+        for (const result of immediateResults) {
+          await input.onTaskResult?.(result);
+        }
+      } finally {
+        endImmediateApply?.(immediateResults.length);
+      }
+    })();
+    const [auxiliaryResults] = await Promise.all([
+      auxiliaryResultsPromise,
+      immediateResultsApplication,
+    ]);
+    return auxiliaryResults;
   };
 
   if (requestedSet.has('procedure')) {
@@ -234,7 +267,9 @@ export async function generateVoiceTreatmentRecommendations(
         error,
       };
     }
+    const endApply = input.timing?.span(`treatment_apply_${runner.key}`);
     await input.onTaskResult?.(result);
+    endApply?.(result.items.length);
     return result;
   }
 }

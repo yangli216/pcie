@@ -20,6 +20,80 @@ const candidate: ChronicRefillCandidate = {
 };
 
 describe('chronic refill confirmation', () => {
+  it('applies compact disease-specific patches to the deterministic review skeleton', () => {
+    const normalized = normalizeChronicRefillConfirmationPlan({
+      patches: [
+        {
+          id: 'control-status',
+          question: '近期家庭血压控制情况如何？',
+          basis: '高血压复诊需核对家庭血压趋势',
+        },
+        {
+          id: 'unknown-item',
+          question: '模型新增问题',
+        },
+      ],
+    }, candidate);
+
+    expect(normalized.items).toHaveLength(3);
+    expect(normalized.items.find((item) => item.id === 'control-status')).toMatchObject({
+      question: '近期家庭血压控制情况如何？',
+      basis: '高血压复诊需核对家庭血压趋势',
+    });
+    expect(normalized.items.some((item) => item.id === 'unknown-item')).toBe(false);
+    expect(normalized.items.find((item) => item.id === 'control-status')?.options).toHaveLength(4);
+  });
+
+  it('rejects model review prescription text while preserving its reference and safety flag', () => {
+    const raw = normalizeChronicRefillConfirmationPlan(null, candidate);
+    raw.items[0].options[0].recordText = '规律服用苯磺酸氨氯地平片5mg，每日一次';
+    raw.items[0].options[1].recordText = '已停用苯磺酸氨氯地平片';
+    const normalized = normalizeChronicRefillConfirmationPlan(raw, candidate);
+    expect(normalized.items[0].options[0].recordText).toBe('');
+    expect(normalized.items[0].options[1]).toMatchObject({ recordText: '', treatmentReviewRequired: true });
+    expect(normalized.items[0].description).toContain('苯磺酸氨氯地平片');
+    expect(normalized.items[1].options[0].recordText).toBe('近期病情及相关监测指标控制平稳');
+  });
+
+  it('shortens prescription details in review descriptions while keeping medicine names', () => {
+    const normalized = normalizeChronicRefillConfirmationPlan({
+      items: [
+        {
+          id: 'medication',
+          question: '目前用药是否仍按近期方案执行？',
+          description: '近期历史处方：厄贝沙坦片口服1天共1盒、盐酸二甲双胍片口服30天共3瓶。',
+          options: [
+            { value: 'continued', label: '仍按近期方案服用', recordText: '仍按近期方案服药' },
+            { value: 'unknown', label: '暂未确认', recordText: '' },
+          ],
+          recommendedValue: 'continued',
+        },
+        {
+          id: 'control',
+          question: '近期控制情况如何？',
+          options: [
+            { value: 'stable', label: '控制平稳', recordText: '近期控制平稳' },
+            { value: 'unknown', label: '暂未确认', recordText: '' },
+          ],
+        },
+        {
+          id: 'symptoms',
+          question: '近期有无不适？',
+          options: [
+            { value: 'none', label: '无明显不适', recordText: '近期无明显不适' },
+            { value: 'unknown', label: '暂未确认', recordText: '' },
+          ],
+        },
+      ],
+    }, {
+      ...candidate,
+      medications: ['厄贝沙坦片', '盐酸二甲双胍片'],
+    });
+
+    expect(normalized.items[0].description).toBe('近期历史处方：厄贝沙坦片、盐酸二甲双胍片。');
+    expect(normalized.items[0].description).not.toMatch(/口服|共1盒|30天|3瓶/u);
+  });
+
   it('normalizes dynamic items and keeps their recommended defaults', () => {
     const plan = normalizeChronicRefillConfirmationPlan({
       summary: '只确认必要信息',

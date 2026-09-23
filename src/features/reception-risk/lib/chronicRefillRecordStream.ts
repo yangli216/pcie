@@ -2,6 +2,7 @@ import type { ClinicalResultGenerationSection } from '@features/clinical-result'
 
 export type ChronicRefillRecordStreamEventName =
   | 'record_core'
+  | 'medication_scope'
   | 'review_plan'
   | 'recommended_medicines'
   | 'record_extra'
@@ -20,6 +21,7 @@ export interface ChronicRefillRecordStreamAccumulator<TDraft extends object> {
 
 const EVENT_NAMES = new Set<ChronicRefillRecordStreamEventName>([
   'record_core',
+  'medication_scope',
   'review_plan',
   'recommended_medicines',
   'record_extra',
@@ -103,6 +105,9 @@ export function applyChronicRefillRecordStreamEvent<TDraft extends object>(
     case 'review_plan':
       draft.reviewPlan = event.data;
       markReady(accumulator, 'review_plan');
+      break;
+    case 'medication_scope':
+      draft.medicationScope = event.data;
       break;
     case 'recommended_medicines':
       draft.recommendedMedicines = Array.isArray(event.data) ? event.data : [];

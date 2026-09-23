@@ -118,13 +118,18 @@ export function formatPhysicalExamVitalTemplate(values: PhysicalExamVitalValues 
   ].join(' ');
 }
 
-function stripVitalNarrative(value: string): string {
+export function stripPhysicalExamVitalNarrative(value: string): string {
   return value
     .replace(/T\s*[:：]\s*\{?[^\s，,；;。]+\}?℃\s*P\s*[:：]\s*\{?[^\s，,；;。]+\}?(?:次\/?分)\s*R\s*[:：]\s*\{?[^\s，,；;。]+\}?(?:次\/?分)\s*Bp\s*[:：]\s*\{?[^\s，,；;。/]+\}?\s*[／/]\s*\{?[^\s，,；;。]+\}?\s*mmHg[。.]?/giu, '')
     .replace(/(?:体温)\s*[:：]?\s*\{?\d{2}(?:\.\d+)?\}?\s*(?:℃|度)[，,；;。]?/giu, '')
     .replace(/(?:脉搏|心率)\s*(?:每分钟)?\s*[:：]?\s*\{?\d{2,3}\}?\s*(?:次\/?分|次每分|次|bpm)[，,；;。]?/giu, '')
     .replace(/(?:呼吸(?:频率)?)\s*(?:每分钟)?\s*[:：]?\s*\{?\d{1,2}\}?\s*(?:次\/?分|次每分|次)[，,；;。]?/giu, '')
     .replace(/(?:血压|BP)\s*[:：]?\s*\{?\d{2,3}\}?\s*[／/]\s*\{?\d{2,3}\}?\s*(?:mmHg)?[，,；;。]?/giu, '')
+    .replace(/(?:收缩压|高压)\s*[:：]?\s*\{?\d{2,3}\}?\s*(?:mmHg)?[，,；;。]?/giu, '')
+    .replace(/(?:舒张压|低压)\s*[:：]?\s*\{?\d{2,3}\}?\s*(?:mmHg)?[，,；;。]?/giu, '')
+    .replace(/\bT\s*[:：]?\s*\{?\d{2}(?:\.\d+)?\}?\s*(?:℃|度)[，,；;。]?/giu, '')
+    .replace(/\bP\s*[:：]?\s*\{?\d{2,3}\}?\s*(?:次\/?分|次每分|次|bpm)[，,；;。]?/giu, '')
+    .replace(/\bR\s*[:：]?\s*\{?\d{1,2}\}?\s*(?:次\/?分|次每分|次)[，,；;。]?/giu, '')
     .replace(/^[\s，,；;。]+/u, '')
     .replace(/\s+/gu, ' ')
     .trim();
@@ -138,7 +143,7 @@ export function buildPhysicalExamWithVitalTemplate(input: {
   const physicalExam = normalizeSource(input.physicalExam);
   const values = extractPhysicalExamVitalValues(physicalExam, input.vitals);
   const detail = buildPhysicalExamMeasurements(
-    stripVitalNarrative(physicalExam), input.vitals || '', input.measurementContext || '',
+    stripPhysicalExamVitalNarrative(physicalExam), input.vitals || '', input.measurementContext || '',
   );
   const vitalTemplate = formatPhysicalExamVitalTemplate(values);
   return detail ? `${vitalTemplate}${detail}` : vitalTemplate;

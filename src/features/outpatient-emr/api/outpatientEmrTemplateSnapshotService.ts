@@ -20,6 +20,7 @@ const RECORD_FIELDS = new Set<OutpatientEmrRecordField>([
   'pastMedicalHistory',
   'personalHistory',
   'menstrualHistory',
+  'maritalReproductiveHistory',
   'familyHistory',
   'physicalExam',
   'precautions',

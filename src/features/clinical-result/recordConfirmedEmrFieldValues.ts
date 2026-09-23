@@ -1,4 +1,5 @@
 import type { OutpatientRecord } from './outpatientRecord';
+import { buildMaritalReproductiveHistoryFieldValues } from './lib/maritalReproductiveHistory';
 import type {
   HistoryRecordTemplateChanges,
   HistoryRecordTemplateSlotValue,
@@ -52,6 +53,7 @@ const RECORD_DATA_IDS: Readonly<Record<RecordConfirmedWritebackField, readonly s
   pastMedicalHistory: ['既往史文本'],
   personalHistory: ['个人史文本'],
   menstrualHistory: ['月经史文本'],
+  maritalReproductiveHistory: ['婚育史文本'],
   familyHistory: ['家族史文本'],
   physicalExam: ['体格检查'],
   precautions: ['注意事项文本'],
@@ -73,11 +75,15 @@ export function buildRecordConfirmedEmrFieldValues(
   input.selectedRecordFields.forEach((field) => {
     const value = input.record[field];
     if (typeof value !== 'string') return;
-    if (field === 'menstrualHistory' && !value.trim()) return;
+    if (['menstrualHistory', 'maritalReproductiveHistory'].includes(field) && !value.trim()) return;
     RECORD_DATA_IDS[field].forEach((dataId) => {
       values[dataId] = value;
     });
   });
+
+  if (input.selectedRecordFields.has('maritalReproductiveHistory')) {
+    Object.assign(values, buildMaritalReproductiveHistoryFieldValues(input.record.maritalReproductiveHistory || ''));
+  }
 
   input.historyTemplateValues?.forEach((item) => {
     if (!input.selectedRecordFields.has(item.field)) return;

@@ -43,6 +43,7 @@ const RECORD_FIELD_ALIASES: Readonly<Record<OutpatientEmrRecordField, readonly s
     '个人史',
     '个人史文本',
   ],
+  maritalReproductiveHistory: ['maritalReproductiveHistory', '婚育史', '婚育史文本'],
   menstrualHistory: [
     'menstrualHistory',
     'menstrualHistoryText',
@@ -66,6 +67,10 @@ const RECORD_FIELD_ALIASES: Readonly<Record<OutpatientEmrRecordField, readonly s
     '体格检查文本',
     '查体',
     '查体文本',
+    '其他体格检查',
+    '其他体格检查文本',
+    '其他查体',
+    '其他查体文本',
   ],
   precautions: [
     'precautions',
@@ -97,6 +102,7 @@ const RECORD_ARTICLE_ALIASES: Readonly<Record<OutpatientEmrRecordField, readonly
   ],
   personalHistory: ['personalHistory', 'personal_history', '个人史'],
   menstrualHistory: ['menstrualHistory', 'menstrual_history', '月经史'],
+  maritalReproductiveHistory: ['maritalReproductiveHistory', '婚育史'],
   familyHistory: ['familyHistory', 'family_history', '家族史'],
   physicalExam: [
     'physicalExam',
@@ -179,6 +185,16 @@ export function resolveOutpatientEmrFieldMapping(input: {
   const aliasRecordField = NORMALIZED_ALIAS_MAP.get(normalizeAlias(input.fieldId))
     || NORMALIZED_ALIAS_MAP.get(normalizeAlias(input.fieldName));
   if (aliasRecordField) {
+    const articleFields = [input.articleId, input.articleName, input.articleDefinitionName]
+      .map((value) => NORMALIZED_ARTICLE_ALIAS_MAP.get(normalizeAlias(value || '')));
+    // 其他体格检查是体格检查章节的文本投影，需与固定体征保持同一章节归并。
+    if (aliasRecordField === 'physicalExam' && [input.fieldId, input.fieldName].some((value) => /^其他(?:体格检查|查体)(?:文本)?$/u.test(value.trim()))) {
+      return { recordField: aliasRecordField, mappingSource: 'deterministic-alias', projectionMode: 'section-compose' };
+    }
+    if (['menstrualHistory', 'maritalReproductiveHistory'].includes(aliasRecordField)
+      && articleFields.includes(aliasRecordField)) {
+      return { recordField: aliasRecordField, mappingSource: 'deterministic-article', projectionMode: 'section-compose' };
+    }
     return {
       recordField: aliasRecordField,
       mappingSource: 'deterministic-alias',

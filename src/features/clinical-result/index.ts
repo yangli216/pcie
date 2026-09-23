@@ -438,5 +438,9 @@ export {
 } from './currentInformationMedication';
 export type { CurrentInformationMedicationAssessment } from './currentInformationMedication';
 
-export { PHYSICAL_EXAM_GUIDANCE_PROMPT, completePhysicalExamSuggestions } from './lib/physicalExamGuidance';
+export {
+  PHYSICAL_EXAM_GUIDANCE_PROMPT,
+  VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT,
+  completePhysicalExamSuggestions,
+} from './lib/physicalExamGuidance';
 export { stripUnverifiedPhysicalExam } from './clinicalRecordAnnotation';

@@ -6,33 +6,62 @@ function clean(value: unknown, maxLength = 120): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
-function factLabel(item: PatientMemoryFactItem): string {
-  const name = clean(item.name || item.valueText || item.code || '待核实');
+function factLabel(item: PatientMemoryFactItem, namesOnly = false): string {
+  const name = clean(namesOnly ? item.name || item.code : item.name || item.valueText || item.code || '待核实');
+  if (namesOnly) return name;
   const detail = item.valueText && item.name ? clean(item.valueText, 100) : '';
   return detail ? `${name}（${detail}）` : name;
 }
 
-function joinFacts(items: PatientMemoryFactItem[], limit: number): string {
+function normalizedFactKey(value: string): string {
+  return clean(value, 2_000).replace(/[\s☆★*·•⊙（）()，,；;:：/\\-]/gu, '').toLowerCase();
+}
+
+function joinFacts(
+  items: PatientMemoryFactItem[],
+  limit: number,
+  options: { knownText?: string; namesOnly?: boolean } = {},
+): string {
+  const knownKey = normalizedFactKey(options.knownText || '');
   return items
     .filter((item) => item.status !== 'inactive' && item.status !== 'disputed')
+    .filter((item) => {
+      const nameKey = normalizedFactKey(clean(
+        options.namesOnly ? item.name || item.code : item.name || item.valueText || item.code,
+      ));
+      return !nameKey || !knownKey.includes(nameKey);
+    })
     .slice(0, limit)
-    .map(factLabel)
+    .map((item) => factLabel(item, options.namesOnly))
     .filter(Boolean)
     .join('；');
+}
+
+export interface PatientMemoryPromptContextOptions {
+  knownAllergyText?: string;
+  knownConditionText?: string;
+  knownMedicationText?: string;
 }
 
 /**
  * 把服务端患者记忆压缩为 LLM 可消费的“核对线索”。
  * 长期记忆永远不自动升级为本次就诊事实，医生本次陈述和确认优先。
  */
-export function buildPatientMemoryPromptContext(brief: PatientMemoryBrief | null | undefined): string {
+export function buildPatientMemoryPromptContext(
+  brief: PatientMemoryBrief | null | undefined,
+  options: PatientMemoryPromptContextOptions = {},
+): string {
   if (!brief) return '';
-  const allergies = joinFacts(brief.allergies, 8);
+  const allergies = joinFacts(brief.allergies, 8, { knownText: options.knownAllergyText });
   const conditions = joinFacts(
     brief.chronicConditions.length > 0 ? brief.chronicConditions : brief.recentDiagnoses,
     6,
+    { knownText: options.knownConditionText },
   );
-  const medications = joinFacts(brief.recentMedications, 6);
+  const medications = joinFacts(brief.recentMedications, 6, {
+    knownText: options.knownMedicationText,
+    namesOnly: true,
+  });
   if (!allergies && !conditions && !medications) return '';
 
   const lines = [

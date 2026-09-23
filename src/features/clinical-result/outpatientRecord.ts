@@ -1,3 +1,4 @@
+import { normalizeFemaleHistoryText } from './lib/maritalReproductiveHistory';
 import {
   DEFAULT_FAMILY_HISTORY_TEMPLATE,
   DEFAULT_HEALTH_EXAM_PAST_MEDICAL_HISTORY_TEMPLATE,
@@ -28,6 +29,7 @@ export interface OutpatientRecord {
   pastMedicalHistory: string;
   personalHistory: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory: string;
   physicalExam: string;
   precautions: string;
@@ -40,6 +42,7 @@ export interface BuildOutpatientRecordInput {
   allergyHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   familyHistory?: string;
   physicalExam?: string;
   precautions?: string;
@@ -175,7 +178,16 @@ function buildMenstrualHistory(input: BuildOutpatientRecordInput): string {
     return '';
   }
 
-  const provided = stripFieldLabel(normalizeFreeText(input.menstrualHistory), ['月经史']);
+  const provided = stripFieldLabel(normalizeFemaleHistoryText(normalizeFreeText(input.menstrualHistory)), ['月经史']);
+  return isMeaningfulRecordText(provided) ? provided : '';
+}
+
+function buildMaritalReproductiveHistory(input: BuildOutpatientRecordInput): string {
+  if (isExplicitMaleGender(input.patientGender)) {
+    return '';
+  }
+
+  const provided = stripFieldLabel(normalizeFemaleHistoryText(normalizeFreeText(input.maritalReproductiveHistory)), ['婚育史']);
   return isMeaningfulRecordText(provided) ? provided : '';
 }
 
@@ -386,6 +398,7 @@ export function buildOutpatientRecord(input: BuildOutpatientRecordInput): Outpat
   const historyOfPresentIllness = normalizeFreeText(input.historyOfPresentIllness);
 
   const menstrualHistory = buildMenstrualHistory(input);
+  const maritalReproductiveHistory = buildMaritalReproductiveHistory(input);
 
   return {
     schemaVersion: OUTPATIENT_RECORD_SCHEMA_VERSION,
@@ -394,6 +407,7 @@ export function buildOutpatientRecord(input: BuildOutpatientRecordInput): Outpat
     pastMedicalHistory: buildPastMedicalHistory(input, scenario),
     personalHistory: buildPersonalHistory(input),
     ...(menstrualHistory ? { menstrualHistory } : {}),
+    ...(maritalReproductiveHistory ? { maritalReproductiveHistory } : {}),
     familyHistory: buildFamilyHistory(input),
     physicalExam: buildPhysicalExam(input, scenario),
     precautions: buildPrecautions(input, scenario),

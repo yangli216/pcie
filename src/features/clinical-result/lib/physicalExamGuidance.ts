@@ -58,6 +58,12 @@ export const PHYSICAL_EXAM_GUIDANCE_PROMPT = [
   'physicalExam只写本次明确查体；未明确的模板补充（含默认“双肺呼吸音粗”）写入候选列表并由界面标记AI，不得当作诊断、排除危险疾病或用药安全性的已核实依据。',
 ].join('\n');
 
+export const VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT = [
+  '【语音查体增量】基础查体候选由客户端依据本次病历和正式诊断补齐，模型不得重复输出通用神志、精神、扁桃体、呼吸、心脏、腹部、下肢水肿、足部、瞳孔或肌力正常候选。',
+  'record_suggestions中的physicalExam最多4项，只补基础库之外、与本次主诉或正式诊断直接相关且不能遗漏的专科查体；每项只描述一个核查点，不写测量值，不把候选作为诊断、排除危险疾病或用药安全性的已核实依据。',
+  'record_extra.physicalExam只写本次明确查体与生命体征；已有明确正常或异常结果原样保留，不得用候选覆盖。',
+].join('\n');
+
 /** Conservative: if the current record already describes the same exam item,
  * never append a competing template finding (including synonyms and laterality). */
 export function canAppendPhysicalExamCandidate(candidate: string, explicitText: string): boolean {

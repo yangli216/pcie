@@ -37,6 +37,8 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 export interface LLMConfigOverride {
   configProfile?: 'default' | 'fast' | 'reviewer';
   enableWebSearch?: boolean;
+  /** Optional upstream sampling temperature; omit to keep provider defaults. */
+  temperature?: number;
   traceContext?: {
     consultationId?: string;
     scene?: string;

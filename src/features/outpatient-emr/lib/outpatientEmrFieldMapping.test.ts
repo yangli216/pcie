@@ -45,6 +45,19 @@ describe('outpatient EMR field mapping', () => {
     });
   });
 
+  it('maps the other physical-exam field as a section-composed physicalExam projection', () => {
+    expect(resolveOutpatientEmrFieldMapping({
+      fieldId: 'other-exam-field',
+      fieldName: '其他体格检查',
+      articleId: '体格检查',
+      articleName: '体格检查',
+    })).toEqual({
+      recordField: 'physicalExam',
+      mappingSource: 'deterministic-alias',
+      projectionMode: 'section-compose',
+    });
+  });
+
   it('maps structured leaf fields through their deterministic article', () => {
     expect(resolveOutpatientEmrFieldMapping({
       fieldId: '肝炎史标志',

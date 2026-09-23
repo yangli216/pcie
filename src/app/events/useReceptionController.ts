@@ -30,9 +30,7 @@ import {
 import {
   assessChronicRefillCandidate,
   buildChronicRefillHistoryQuery,
-  getChronicRefillCandidateKey,
   normalizeRiskPresentationItems,
-  suggestChronicRefillMedicationAttributions,
   type RiskItem,
 } from '@features/reception-risk';
 import {
@@ -373,49 +371,6 @@ export function useReceptionController(options: ReceptionControllerOptions) {
       'chronic-refill',
       candidate ? { type: 'chronic-refill', candidate } : null,
     );
-    if (!candidate?.medicationAttributions?.length) return;
-
-    const candidateKey = getChronicRefillCandidateKey(candidate);
-    void suggestChronicRefillMedicationAttributions(candidate)
-      .then((medicationAttributions) => {
-        if (!isReceptionFlowCurrent(flowVersion)) return;
-        if (receptionSession.executingOpportunity.value === 'chronic-refill') return;
-        const currentOpportunity = receptionSession.getOpportunity('chronic-refill');
-        if (
-          currentOpportunity?.type !== 'chronic-refill'
-          || getChronicRefillCandidateKey(currentOpportunity.candidate) !== candidateKey
-        ) {
-          return;
-        }
-        receptionSession.replaceOpportunity('chronic-refill', {
-          type: 'chronic-refill',
-          candidate: {
-            ...currentOpportunity.candidate,
-            medicationAttributions,
-            medicationAttributionStatus: 'ready',
-          },
-        });
-      })
-      .catch((error) => {
-        if (!isReceptionFlowCurrent(flowVersion)) return;
-        if (receptionSession.executingOpportunity.value === 'chronic-refill') return;
-        const currentOpportunity = receptionSession.getOpportunity('chronic-refill');
-        if (
-          currentOpportunity?.type !== 'chronic-refill'
-          || getChronicRefillCandidateKey(currentOpportunity.candidate) !== candidateKey
-        ) {
-          return;
-        }
-        console.warn('[ReceptionController] Chronic refill medication attribution unavailable', error);
-        trackError('chronic_refill_medication_attribution_failed', error);
-        receptionSession.replaceOpportunity('chronic-refill', {
-          type: 'chronic-refill',
-          candidate: {
-            ...currentOpportunity.candidate,
-            medicationAttributionStatus: 'failed',
-          },
-        });
-      });
   }
 
   async function syncPatientMemoryState(

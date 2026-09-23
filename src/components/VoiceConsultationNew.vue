@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch, inject, onMounted, onUnmounted, nextTick } from 'vue';
+import { useFemaleHistoryFields } from '@features/consultation-result/model/useFemaleHistoryFields';
+import { voiceTimingTracker, useVoiceTimingPresentation, restoreVoiceEditorSnapshot } from '@features/voice-consultation';
+import {
+  chronicRefillTimingTracker,
+  useChronicRefillTimingPresentation,
+} from '@features/reception-risk';
+import { ref, computed, watch, inject, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { PatientHeader } from '@entities/patient';
 import Icon from '@shared/ui/Icon.vue';
@@ -237,7 +243,6 @@ const chiefComplaint = ref('');
 const historyOfPresentIllness = ref('');
 const pastMedicalHistory = ref('');
 const personalHistory = ref('');
-const menstrualHistory = ref('');
 const familyHistory = ref('');
 const physicalExam = ref('');
 const precautions = ref('');
@@ -356,6 +361,8 @@ const {
   patientTetId,
 } = patientContext;
 const isFemalePatient = computed(() => /^(?:F|2|女)/iu.test(patientGender.value.trim()));
+const femaleHistoryFields = useFemaleHistoryFields(isFemalePatient);
+const { menstrualHistory, maritalReproductiveHistory } = femaleHistoryFields;
 
 const diagnosisChecklist = useClinicalResultDiagnosisChecklist({
   isEnabled: () => {
@@ -527,6 +534,7 @@ function getFactRecord() {
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
     menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
   };
@@ -661,6 +669,7 @@ const {
 const chronicRefillReview = useChronicRefillReview({
   getHistoryOfPresentIllness: () => historyOfPresentIllness.value,
   setHistoryOfPresentIllness: (value) => { historyOfPresentIllness.value = value; },
+  isHistoryOfPresentIllnessModified: () => isRecordFieldModified('historyOfPresentIllness'),
   getTreatments: () => treatments.value,
   notify: showToast,
 });
@@ -682,6 +691,7 @@ const writebackScopeController = useClinicalResultWritebackScope({
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
     menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -744,15 +754,20 @@ function buildPreferenceContext(sceneSuffix: string) {
 
 // ---- 编辑器快照（用于跨会话恢复全部病历，避免重新调 fetchAITreatment） ----
 
+let editorSessionKey = '';
+let editorDisposed = false;
 const editorSnapshotPersistence = useVoiceEditorSnapshotPersistence({
   getPatient: () => props.initialPatientData,
-  shouldPersist: () => shouldUseVoiceCache.value && !suppressDiagnosisTreatmentRefetch.value,
+  shouldPersist: () => shouldUseVoiceCache.value && !suppressDiagnosisTreatmentRefetch.value
+    && !editorDisposed && editorSessionKey === getProgressiveIntentSessionKey(),
   getSnapshot: () => ({
+    consultationRoundId: props.consultationRoundId,
     chiefComplaint: chiefComplaint.value,
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
     menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -781,7 +796,8 @@ const {
  * 注意：调用方必须在 `suppressDiagnosisTreatmentRefetch.value === true` 时段调用，
  * 否则诊断/治疗的副作用 watcher 会把 treatments 清空再重拉。
  */
-async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot): Promise<void> {
+async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot, isCurrent: () => boolean): Promise<void> {
+  if (!isCurrent()) return;
   if (typeof snapshot.chiefComplaint === 'string') {
     chiefComplaint.value = snapshot.chiefComplaint;
   }
@@ -794,11 +810,7 @@ async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot): Promise<void>
   if (typeof snapshot.personalHistory === 'string') {
     personalHistory.value = snapshot.personalHistory;
   }
-  if (isFemalePatient.value && typeof snapshot.menstrualHistory === 'string') {
-    menstrualHistory.value = snapshot.menstrualHistory;
-  } else if (!isFemalePatient.value) {
-    menstrualHistory.value = '';
-  }
+  femaleHistoryFields.restore(snapshot);
   if (typeof snapshot.familyHistory === 'string') {
     familyHistory.value = snapshot.familyHistory;
   }
@@ -832,13 +844,16 @@ async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot): Promise<void>
       chosen,
     );
   }
-  if (Array.isArray(snapshot.treatments) && snapshot.treatments.length > 0) {
-    await fetchPharmacyOptions();
+  if (Array.isArray(snapshot.treatments)) {
+    if (snapshot.treatments.length > 0) await fetchPharmacyOptions();
+    if (!isCurrent()) return;
     treatments.value = snapshot.treatments as TreatmentRecommendation[];
     normalizeMedicinePharmacyValues(treatments.value);
     lastTreatmentDiagnosisKey.value =
-      snapshot.treatmentDiagnosisKey || getDiagnosisIdentity(selectedDiagnosis.value);
-    await reconcileAutoSelectedMedicineInventory(treatments.value);
+      snapshot.treatmentDiagnosisKey || (snapshot.treatments.length > 0
+        ? getDiagnosisIdentity(selectedDiagnosis.value) : '');
+    await reconcileAutoSelectedMedicineInventory(treatments.value, isCurrent);
+    if (!isCurrent()) return;
     void registerCurrentRecommendations();
     console.info('[VoiceConsultationNew] Applied editor snapshot from cache', {
       treatmentCount: treatments.value.length,
@@ -1069,6 +1084,7 @@ function buildVoiceUserLogSnapshot() {
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
     menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -1275,6 +1291,7 @@ function buildIntentResultKey(result: ClinicalResultInput | VoiceIntentResult): 
       pastMedicalHistory: normalizeIntentKeyPart(result.pastMedicalHistory),
       personalHistory: normalizeIntentKeyPart(result.outpatientRecord?.personalHistory),
       menstrualHistory: normalizeIntentKeyPart(result.outpatientRecord?.menstrualHistory || result.menstrualHistory),
+      maritalReproductiveHistory: normalizeIntentKeyPart(result.outpatientRecord?.maritalReproductiveHistory || result.maritalReproductiveHistory),
       familyHistory: normalizeIntentKeyPart(result.outpatientRecord?.familyHistory || result.familyHistory),
       physicalExam: normalizeIntentKeyPart(result.outpatientRecord?.physicalExam),
       precautions: normalizeIntentKeyPart(result.outpatientRecord?.precautions),
@@ -1813,6 +1830,10 @@ async function fetchAITreatment(
     });
   };
 
+  const voiceTiming = resultChannel.value === 'voice'
+    ? voiceTimingTracker.get(props.consultationRoundId) : undefined;
+  const endTreatment = voiceTiming?.span('treatment_total');
+  voiceTiming?.mark('treatment_started');
   treatmentLoading.value = true;
   beginTreatmentGeneration(diagnosisIdentity);
 
@@ -1834,10 +1855,14 @@ async function fetchAITreatment(
   };
   const requestedTypes: ClinicalResultRecommendationType[] = options.currentInformationMedication
     ? ['medicine'] : resolveRequestedTreatmentTypes();
+  if (resultChannel.value === 'voice') {
+    console.info(`[VoiceDecision] 实际启动分支=[${requestedTypes.join(',') || '无'}]`);
+  }
   if (requestedTypes.length === 0) {
     lastTreatmentDiagnosisKey.value = diagnosisIdentity;
     treatmentLoading.value = false;
     finishTreatmentGeneration(diagnosisIdentity);
+    endTreatment?.(0);
     return true;
   }
   requestedTypes.forEach((type) => {
@@ -1851,13 +1876,16 @@ async function fetchAITreatment(
 
   try {
     reportCurrentMedicationPhase('preparing');
+    const endPreparation = voiceTiming?.span('treatment_catalog_preparation');
     if (requestedTypes.includes('medicine')) {
       await fetchPharmacyOptions({
         finalizeExistingMedicines: !options.currentInformationMedication,
       });
     }
     if (!isCurrentTreatmentRequest()) return false;
+    endPreparation?.();
     await generateVoiceTreatmentRecommendations({
+      timing: voiceTiming,
       ...baseParams,
       clinicalContext: options.currentInformationMedication
         ? currentMedicationClinicalContext.value : historyOfPresentIllness.value,
@@ -2011,6 +2039,7 @@ async function fetchAITreatment(
     logCurrentMedicationTiming(false);
     return false;
   } finally {
+    endTreatment?.();
     if (requestSeq === treatmentRequestSeq.value) {
       treatmentLoading.value = false;
       finishTreatmentGeneration(diagnosisIdentity);
@@ -2025,6 +2054,7 @@ function getCurrentRegenerationRecord(): ClinicalResultRegenerationRecord {
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
     menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -2037,6 +2067,7 @@ function applyRegenerationRecord(record: ClinicalResultRegenerationRecord): void
   pastMedicalHistory.value = record.pastMedicalHistory;
   personalHistory.value = record.personalHistory;
   menstrualHistory.value = isFemalePatient.value ? record.menstrualHistory : '';
+  maritalReproductiveHistory.value = isFemalePatient.value ? record.maritalReproductiveHistory || '' : '';
   familyHistory.value = record.familyHistory;
   physicalExam.value = record.physicalExam;
   precautions.value = record.precautions;
@@ -2232,6 +2263,7 @@ const { resetForIntent } = useClinicalResultIntentReset({
   pastMedicalHistory,
   personalHistory,
   menstrualHistory,
+  maritalReproductiveHistory,
   familyHistory,
   physicalExam,
   precautions,
@@ -2254,7 +2286,6 @@ const { resetForIntent } = useClinicalResultIntentReset({
 });
 
 const progressiveIntentApplication = useClinicalResultProgressiveIntentApplication();
-let progressiveMenstrualBaseline = '';
 
 function getProgressiveIntentSessionKey(): string {
   return [
@@ -2295,13 +2326,7 @@ function applyProgressiveIntentRecord(
   if (next.has('history_context')) {
     applyTrackedField('pastMedicalHistory', snapshot.pastMedicalHistory);
     applyTrackedField('personalHistory', snapshot.personalHistory);
-    if (
-      isFemalePatient.value
-      && menstrualHistory.value.trim() === progressiveMenstrualBaseline.trim()
-    ) {
-      menstrualHistory.value = snapshot.menstrualHistory;
-      progressiveMenstrualBaseline = snapshot.menstrualHistory;
-    }
+    femaleHistoryFields.applyProgressive(snapshot);
   }
   if (next.has('record_extra')) {
     applyTrackedField('familyHistory', snapshot.familyHistory);
@@ -2830,6 +2855,15 @@ onMounted(() => {
     .then(() => prewarmCurrentInformationMedicationInventory());
 });
 
+onBeforeUnmount(() => {
+  if (resultChannel.value === 'voice') {
+    persistEditorSnapshotImmediate();
+    editorDisposed = true;
+    intentResultApplicationSequence += 1;
+    invalidateTreatmentRequests();
+  }
+});
+
 onUnmounted(() => {
   clearPendingSnapshotPersist();
 });
@@ -3124,11 +3158,15 @@ function clearInsuranceSelection(rec: TreatmentRecommendation): void {
   }
 }
 
-async function reconcileAutoSelectedMedicineInventory(items: TreatmentRecommendation[]): Promise<void> {
+async function reconcileAutoSelectedMedicineInventory(
+  items: TreatmentRecommendation[],
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   const autoSelectedMedicines = items.filter((item) => item.type === 'medicine' && item.selected);
   const results = await finalizeMedicineRecommendations(items, {
     checkInventory: autoSelectedMedicines.length > 0,
   });
+  if (!isCurrent()) return;
   const blockedSet = new Set(
     results
       .filter((result) => !result.ready)
@@ -3193,6 +3231,9 @@ async function handleBatchWriteBack(): Promise<void> {
         personalHistory: personalHistory.value,
         ...(isFemalePatient.value && menstrualHistory.value.trim()
           ? { menstrualHistory: menstrualHistory.value }
+          : {}),
+        ...(isFemalePatient.value && maritalReproductiveHistory.value.trim()
+          ? { maritalReproductiveHistory: maritalReproductiveHistory.value }
           : {}),
         familyHistory: familyHistory.value,
         physicalExam: physicalExam.value,
@@ -3259,7 +3300,7 @@ watch(
     });
     intentResultApplicationSequence += 1;
     progressiveIntentApplication.reset();
-    progressiveMenstrualBaseline = '';
+    femaleHistoryFields.resetBaseline();
     resetFinalResultApplication();
     invalidateDiagnosisRequests();
     resetGenerationSequence();
@@ -3286,7 +3327,7 @@ watch(
     if (!result) {
       intentResultApplicationSequence += 1;
       progressiveIntentApplication.reset();
-      progressiveMenstrualBaseline = '';
+      femaleHistoryFields.resetBaseline();
       resetFinalResultApplication();
       invalidateDiagnosisRequests();
       resetGenerationSequence();
@@ -3308,6 +3349,11 @@ watch(
       return;
     }
     lastAppliedIntentKey.value = intentKey;
+    const endApplication = resultChannel.value === 'voice'
+      ? voiceTimingTracker.get(props.consultationRoundId)?.span('intent_page_application')
+      : (resultChannel.value === 'chronic-refill'
+        ? chronicRefillTimingTracker.get(props.consultationRoundId)?.span('intent_page_application')
+        : undefined);
     const applicationSequence = ++intentResultApplicationSequence;
     const applicationPlan = progressiveIntentApplication.plan({
       sessionKey: getProgressiveIntentSessionKey(),
@@ -3316,6 +3362,16 @@ watch(
     const isFinalApplication = beginFinalResultApplication(result.generation);
     const newSections = new Set(applicationPlan.newSections);
     const isStreaming = result.generation?.status === 'streaming';
+    const applicationSessionKey = getProgressiveIntentSessionKey();
+    const isCurrentApplication = () => !editorDisposed
+      && applicationSequence === intentResultApplicationSequence
+      && applicationSessionKey === getProgressiveIntentSessionKey();
+    const shouldRestoreEditor = applicationPlan.mode === 'reset'
+      && resultChannel.value === 'voice' && !isStreaming;
+    // 先取快照，防止重置过程中的持久化覆盖原来的治疗方案。
+    const editorSnapshot = shouldRestoreEditor
+      ? getVoiceConsultationEditorSnapshot(props.initialPatientData) : null;
+    editorSessionKey = applicationSessionKey;
 
     try {
       suppressDiagnosisTreatmentRefetch.value = true;
@@ -3327,8 +3383,7 @@ watch(
         autoTreatmentFetchAttemptKey.value = '';
         resetPrecautionsScope();
         resetForIntent(result, resultChannel.value === 'chronic-refill');
-        progressiveMenstrualBaseline = menstrualHistory.value;
-        if (!isFemalePatient.value) menstrualHistory.value = '';
+        femaleHistoryFields.captureBaseline();
         resetDifferentialDiagnosisDirection();
         resetFactConfirmation();
         resetChronicRefillReview(result.chronicRefillReview);
@@ -3371,9 +3426,21 @@ watch(
       if (applicationPlan.mode === 'reset') resetWritebackScope();
       else refreshWritebackScope();
 
-      await nextTick();
-      if (applicationSequence !== intentResultApplicationSequence) return;
-      suppressDiagnosisTreatmentRefetch.value = false;
+      if (shouldRestoreEditor) {
+        if (!await restoreVoiceEditorSnapshot({
+          channel: resultChannel.value,
+          source: props.intentSource,
+          roundId: props.consultationRoundId,
+          snapshot: editorSnapshot,
+          suppressed: suppressDiagnosisTreatmentRefetch,
+          isCurrent: isCurrentApplication,
+          apply: applyEditorSnapshot,
+        })) return;
+      } else {
+        await nextTick();
+        if (applicationSequence !== intentResultApplicationSequence) return;
+        suppressDiagnosisTreatmentRefetch.value = false;
+      }
 
       if (shouldApplyDiagnoses && formalDiagnoses.value.length > 0) {
         void performDiagnosisFactCheck(formalDiagnoses.value);
@@ -3382,16 +3449,6 @@ watch(
       if (isStreaming) {
         void maybeAutoFetchMissingTreatment('progressive-intent-ready');
         return;
-      }
-
-      // 仅在“同就诊缓存恢复”路径上叠加编辑快照，避免上一会话的治疗方案/诊断
-      // 污染全新 LLM 语音问诊的默认推荐。
-      if (applicationPlan.mode === 'reset' && shouldUseVoiceCache.value && props.intentSource === 'cache') {
-        const editorSnapshot = getVoiceConsultationEditorSnapshot(props.initialPatientData);
-        if (editorSnapshot) {
-          await applyEditorSnapshot(editorSnapshot);
-          if (applicationSequence !== intentResultApplicationSequence) return;
-        }
       }
 
       if (!result.factSuggestions?.length) {
@@ -3433,6 +3490,7 @@ watch(
         await nextTick();
         finishFinalResultApplication();
       }
+      endApplication?.();
     }
   },
   { immediate: true },
@@ -3447,6 +3505,7 @@ watch(
     pastMedicalHistory.value,
     personalHistory.value,
     menstrualHistory.value,
+    maritalReproductiveHistory.value,
     familyHistory.value,
     physicalExam.value,
     precautions.value,
@@ -3464,6 +3523,30 @@ watch(
   },
   { deep: true },
 );
+useVoiceTimingPresentation(() => ({
+  round: props.consultationRoundId,
+  enabled: resultChannel.value === 'voice' && props.intentSource === 'llm',
+  complete: props.intentResult?.generation?.status === 'complete',
+  failed: isResultGenerationFailed.value,
+  pending: isResultGenerating.value || diagnosisLoading.value || treatmentLoading.value
+    || suppressDiagnosisTreatmentRefetch.value,
+  coreReady: props.intentResult?.generation?.readySections.includes('record_core') === true,
+  diagnosisCount: formalDiagnoses.value.length,
+  treatmentErrors: Object.values(treatmentGenerationState.value).includes('error'),
+}));
+useChronicRefillTimingPresentation(() => ({
+  sessionId: props.consultationRoundId,
+  enabled: resultChannel.value === 'chronic-refill' && props.intentSource === 'llm',
+  complete: props.intentResult?.generation?.status === 'complete',
+  failed: isResultGenerationFailed.value,
+  pending: isResultGenerating.value,
+  coreReady: props.intentResult?.generation?.readySections.includes('record_core') === true,
+  diagnosisCount: formalDiagnoses.value.length,
+  reviewPlanReady: props.intentResult?.generation?.readySections.includes('review_plan') === true
+    || Boolean(chronicRefillReviewPlan.value),
+  treatmentsReady: props.intentResult?.generation?.readySections.includes('recommended_medicines') === true
+    || treatments.value.length > 0,
+}));
 </script>
 
 <template>
@@ -3575,6 +3658,14 @@ watch(
               presentation="document"
               :rows="3"
               placeholder="请输入月经史..."
+            />
+            <VoiceRecordFieldEditor
+              v-if="isFemalePatient"
+              v-model="maritalReproductiveHistory"
+              title="婚育史"
+              presentation="document"
+              :rows="3"
+              placeholder="请输入婚育史..."
             />
             <VoiceRecordFieldEditor
               v-model="familyHistory"

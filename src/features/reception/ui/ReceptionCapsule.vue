@@ -137,6 +137,7 @@ import Icon from '@shared/ui/Icon.vue';
 import { trackClick } from '@services/operationTracker';
 import { resolvePatientAvatar, PATIENT_AVATAR_FALLBACK } from '@/utils/patientAvatar';
 import {
+  chronicRefillTimingTracker,
   getChronicRefillCandidateKey,
   getChronicRefillConditionOptions,
   type ChronicRefillCandidate,
@@ -289,6 +290,7 @@ function closeChronicScope(): void {
 }
 
 function submitChronicRefill(selection: ChronicRefillSelection): void {
+  chronicRefillTimingTracker.confirm();
   chronicScopeSelecting.value = false;
   emit('chronic-scope-selecting', false);
   emit('confirm-chronic-refill', selection);

@@ -11,6 +11,7 @@ const currentRecord: ClinicalResultRegenerationRecord = {
   pastMedicalHistory: '否认高血压病史。',
   personalHistory: '无特殊。',
   menstrualHistory: '周期28天，经期5天。',
+  maritalReproductiveHistory: '已婚已育；未孕。',
   familyHistory: '无特殊。',
   physicalExam: '咽部稍红。',
   precautions: '病情加重及时复诊。',

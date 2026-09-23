@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HisVisitRecord } from '@/services/his/types';
 import {
+  applyChronicRefillMedicationScope,
   assessChronicRefillCandidate,
   isReportFollowUpIntent,
   scopeChronicRefillCandidate,
@@ -128,28 +129,32 @@ describe('assessChronicRefillCandidate', () => {
     const hypertensionMedication = candidate?.medicationAttributions?.find((item) => (
       item.medication.name === '苯磺酸氨氯地平片'
     ));
-    const attributedCandidate = {
-      ...candidate!,
-      medicationAttributionStatus: 'ready' as const,
-      medicationAttributions: candidate?.medicationAttributions?.map((item) => (
-        item.id === hypertensionMedication?.id
-          ? {
-            ...item,
-            suggestedConditionId: '高血压',
-            confidence: 'high' as const,
+    const diabetesMedication = candidate?.medicationAttributions?.find((item) => (
+      item.medication.name === '盐酸二甲双胍片'
+    ));
+    const automaticallyAttributedHypertensionMedication = applyChronicRefillMedicationScope(
+      hypertensionOnly!,
+      {
+        assignments: [
+          {
+            itemId: hypertensionMedication?.id,
+            conditionId: '高血压',
+            confidence: 'high',
             reason: '常用降压药',
-          }
-          : {
-            ...item,
-            suggestedConditionId: '糖尿病',
-            confidence: 'high' as const,
+          },
+          {
+            itemId: diabetesMedication?.id,
+            conditionId: '糖尿病',
+            confidence: 'high',
             reason: '常用降糖药',
-          }
-      )),
-    };
-    const automaticallyAttributedHypertensionMedication = scopeChronicRefillCandidate(
-      attributedCandidate,
-      ['高血压'],
+          },
+          {
+            itemId: 'forged-item',
+            conditionId: '高血压',
+            confidence: 'high',
+          },
+        ],
+      },
     );
 
     expect(candidate?.conditions?.map((condition) => condition.medicationEvidenceScope)).toEqual([
@@ -159,8 +164,8 @@ describe('assessChronicRefillCandidate', () => {
     expect(hypertensionOnly?.chronicVisits).toHaveLength(1);
     expect(hypertensionOnly?.medications).toEqual([]);
     expect(hypertensionOnly?.medicationOrders).toBeUndefined();
-    expect(candidate?.medicationAttributionStatus).toBe('loading');
     expect(candidate?.medicationAttributions).toHaveLength(2);
+    expect(hypertensionOnly?.medicationAttributions).toHaveLength(2);
     expect(automaticallyAttributedHypertensionMedication?.medications).toEqual(['苯磺酸氨氯地平片']);
     expect(automaticallyAttributedHypertensionMedication?.medicationOrders).toEqual([
       expect.objectContaining({ orderId: 'hypertension-med' }),
@@ -168,6 +173,34 @@ describe('assessChronicRefillCandidate', () => {
     expect(automaticallyAttributedHypertensionMedication?.medications).not.toContain('盐酸二甲双胍片');
     expect(bothConditions?.medications).toEqual(['苯磺酸氨氯地平片', '盐酸二甲双胍片']);
     expect(bothConditions?.medicationOrders).toHaveLength(2);
+    expect(bothConditions?.medicationAttributions).toEqual([]);
+  });
+
+  it('rejects low-confidence and out-of-scope medication assignments', () => {
+    const now = new Date('2026-06-25T08:00:00+08:00').getTime();
+    const candidate = assessChronicRefillCandidate(history([{
+      visitId: 'mixed-visit',
+      visitTime: now - 7 * DAY,
+      diagnoses: ['高血压', '2型糖尿病'],
+      medicationOrders: [
+        { orderId: 'hypertension-med', name: '苯磺酸氨氯地平片' },
+        { orderId: 'diabetes-med', name: '盐酸二甲双胍片' },
+      ],
+    }]));
+    const scoped = scopeChronicRefillCandidate(candidate!, ['高血压'])!;
+    const first = scoped.medicationAttributions?.[0]!;
+    const second = scoped.medicationAttributions?.[1]!;
+
+    const result = applyChronicRefillMedicationScope(scoped, {
+      assignments: [
+        { itemId: first.id, conditionId: '高血压', confidence: 'low' },
+        { itemId: second.id, conditionId: '糖尿病', confidence: 'high' },
+      ],
+    });
+
+    expect(result.medications).toEqual([]);
+    expect(result.medicationOrders).toBeUndefined();
+    expect(result.prescriptionHistoryVisits?.[0].medicationOrders).toHaveLength(2);
   });
 
   it('keeps the latest structured prescription attributes for each medicine', () => {

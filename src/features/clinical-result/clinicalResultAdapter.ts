@@ -11,6 +11,7 @@ import {
   getPatientContextAllergyHistory,
   getPatientContextGenderText,
   getPatientContextMenstrualHistory,
+  getPatientContextMaritalReproductiveHistory,
   getPatientContextPastMedicalHistory,
 } from '@/utils/patientContext';
 import { getDiagnosisKey, getStandardDiagnosisId } from './recordConfirmedPayload';
@@ -25,6 +26,7 @@ export interface ClinicalResultRecordInput {
   familyHistory?: string;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   physicalExam?: string;
   precautions?: string;
   vitals?: string;
@@ -42,6 +44,7 @@ export interface SymptomClinicalResultInput {
     familyHistory?: string;
     personalHistory?: string;
     menstrualHistory?: string;
+    maritalReproductiveHistory?: string;
     physicalExam?: string;
     precautions?: string;
     vitals?: string;
@@ -140,6 +143,9 @@ export function buildSymptomClinicalResultInput(input: SymptomClinicalResultInpu
   const menstrualHistory = record.menstrualHistory
     || getPatientContextMenstrualHistory(input.patient)
     || '';
+  const maritalReproductiveHistory = record.maritalReproductiveHistory
+    || getPatientContextMaritalReproductiveHistory(input.patient)
+    || '';
   const patientGender = getPatientContextGenderText(input.patient);
   return {
     chiefComplaint,
@@ -148,6 +154,7 @@ export function buildSymptomClinicalResultInput(input: SymptomClinicalResultInpu
     allergyHistory,
     currentMedicationHistory: record.currentMedicationHistory || '',
     ...(menstrualHistory ? { menstrualHistory } : {}),
+    ...(maritalReproductiveHistory ? { maritalReproductiveHistory } : {}),
     familyHistory,
     symptoms: [],
     negativeSymptoms: [],
@@ -162,6 +169,7 @@ export function buildSymptomClinicalResultInput(input: SymptomClinicalResultInpu
       allergyHistory,
       personalHistory: record.personalHistory,
       menstrualHistory,
+      maritalReproductiveHistory,
       familyHistory,
       physicalExam: record.physicalExam,
       precautions: record.precautions,

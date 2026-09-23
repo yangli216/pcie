@@ -1,3 +1,4 @@
+import { normalizeFemaleHistoryText } from '@features/clinical-result/lib/maritalReproductiveHistory';
 import type { HisPatientHistory, HisPatientInfo } from '../services/his/types';
 import type { Patient } from '../types/consultation';
 import type { AppPatient, PatientContext } from '../types/appState';
@@ -187,11 +188,29 @@ export function extractMenstrualHistoryFromRecordText(value: unknown): string {
 }
 
 export function getPatientContextMenstrualHistory(patient: AppPatient | null | undefined): string {
-  return patient?.menstrualHistory
+  return normalizeFemaleHistoryText(patient?.menstrualHistory
     || patient?.clinical?.menstrualHistory
     || extractMenstrualHistoryFromRecordText(
       patient?.currentOutpatientRecordText || patient?.clinical?.currentOutpatientRecordText,
-    );
+    ));
+}
+
+export function extractMaritalReproductiveHistoryFromRecordText(value: unknown): string {
+  const recordText = text(value).replace(/\r\n?/gu, '\n');
+  if (!recordText) return '';
+
+  const matched = recordText.match(
+    /(?:^|[\n。；])\s*婚育史\s*[：:]\s*([\s\S]*?)(?=(?:[\n。；]\s*(?:月经史|个人史|家族史|既往史|体格检查|查体|注意事项|诊断)\s*[：:])|$)/u,
+  );
+  return matched?.[1]?.trim().replace(/[。；]+$/u, '') || '';
+}
+
+export function getPatientContextMaritalReproductiveHistory(patient: AppPatient | null | undefined): string {
+  return normalizeFemaleHistoryText(patient?.maritalReproductiveHistory
+    || patient?.clinical?.maritalReproductiveHistory
+    || extractMaritalReproductiveHistoryFromRecordText(
+      patient?.currentOutpatientRecordText || patient?.clinical?.currentOutpatientRecordText,
+    ));
 }
 
 export function getPatientContextFamilyHistory(patient: AppPatient | null | undefined): string {
@@ -268,6 +287,9 @@ export function buildPatientContext(input: BuildPatientContextInput): AppPatient
   const menstrualHistory = pickFirstText(payload, ['menstrualHistory', 'menstrual_history', 'menstrualHistoryText'])
     || extractMenstrualHistoryFromRecordText(currentOutpatientRecordText)
     || getPatientContextMenstrualHistory(patientFallback);
+  const maritalReproductiveHistory = pickFirstText(payload, ['maritalReproductiveHistory'])
+    || extractMaritalReproductiveHistoryFromRecordText(currentOutpatientRecordText)
+    || getPatientContextMaritalReproductiveHistory(patientFallback);
   const familyHistory = pickFirstText(payload, ['familyHistory', 'family_history', 'familyHistoryText'])
     || getPatientContextFamilyHistory(patientFallback);
   const chiefComplaint = pickFirstText(payload, ['chiefComplaint'])
@@ -312,6 +334,7 @@ export function buildPatientContext(input: BuildPatientContextInput): AppPatient
       currentMedicationHistory: currentMedicationHistory || undefined,
       personalHistory: personalHistory || undefined,
       menstrualHistory: menstrualHistory || undefined,
+      maritalReproductiveHistory: maritalReproductiveHistory || undefined,
       familyHistory: familyHistory || undefined,
       diagnosis: diagnosis || undefined,
       hisHistory,
@@ -346,6 +369,7 @@ export function buildPatientContext(input: BuildPatientContextInput): AppPatient
     currentMedicationHistory: currentMedicationHistory || undefined,
     personalHistory: personalHistory || undefined,
     menstrualHistory: menstrualHistory || undefined,
+    maritalReproductiveHistory: maritalReproductiveHistory || undefined,
     familyHistory: familyHistory || undefined,
     diagnosis: diagnosis || undefined,
     hisHistory,

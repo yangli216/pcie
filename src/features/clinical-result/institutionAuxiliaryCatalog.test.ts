@@ -24,6 +24,20 @@ describe('institutionAuxiliaryCatalog', () => {
     expect(context.promptContext).toContain('L001|血常规|组合');
   });
 
+  it('reads explicit combination fields without serializing the complete vendor payload', () => {
+    const toJSON = vi.fn(() => { throw new Error('raw payload must not be serialized'); });
+    const rawContext = buildInstitutionAuxiliaryCatalogContext([{
+      id: 'lab-raw',
+      code: 'LAB-RAW',
+      name: '生化项目',
+      category: '检验',
+      raw: { fgCombination: '1', nestedPayload: { toJSON } },
+    }], ['lab_test']);
+
+    expect(rawContext.promptContext).toContain('L001|生化项目|组合');
+    expect(toJSON).not.toHaveBeenCalled();
+  });
+
   it('accepts only valid references in the requested category', () => {
     const result = mapAuxiliaryCatalogRecommendations({
       exams: [{

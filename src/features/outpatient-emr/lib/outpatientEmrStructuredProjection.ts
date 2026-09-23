@@ -6,6 +6,7 @@ import {
   HISTORY_DATA_ID_BY_SLOT,
   PHYSICAL_EXAM_DATA_ID_BY_SLOT,
 } from '@features/clinical-result/recordConfirmedEmrFieldValues';
+import { stripPhysicalExamVitalNarrative } from '@features/clinical-result/physicalExamVitalTemplate';
 
 interface StructuredHistoryChange {
   field: string;
@@ -28,6 +29,31 @@ function readStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => (
     typeof item === 'string' ? [[key, item]] : []
   )));
+}
+
+const OTHER_PHYSICAL_EXAM_FIELD_ALIASES = new Set([
+  '其他体格检查',
+  '其他体格检查文本',
+  '其他查体',
+  '其他查体文本',
+]);
+
+function normalizeFieldAlias(value: string): string {
+  return value.normalize('NFKC').trim().toLowerCase().replace(/[\s_\-./\\:：·（）()\[\]{}]+/gu, '');
+}
+
+function isOtherPhysicalExamField(field: OutpatientEmrTemplateField): boolean {
+  return [field.id, field.name].some((value) => (
+    OTHER_PHYSICAL_EXAM_FIELD_ALIASES.has(normalizeFieldAlias(value))
+  ));
+}
+
+function readPhysicalExamSection(recordContext: OutpatientEmrRecordContext): string | undefined {
+  const sections = isRecord(recordContext.sections) ? recordContext.sections : null;
+  const sectionValue = sections?.physicalExam;
+  if (typeof sectionValue === 'string') return sectionValue;
+  const directValue = recordContext.physicalExam;
+  return typeof directValue === 'string' ? directValue : undefined;
 }
 
 function readHistoryChanges(value: unknown): StructuredHistoryChange[] {
@@ -122,6 +148,10 @@ export function resolveOutpatientEmrStructuredFieldValues(input: {
   const historyChanges = readHistoryChanges(structuredFacts.historyTemplateChanges);
   const vitalSigns = readVitalSigns(structuredFacts.physicalExamVitalSigns);
   const confirmedEmrFieldValues = readStringRecord(structuredFacts.confirmedEmrFieldValues);
+  const physicalExamSection = readPhysicalExamSection(input.recordContext);
+  const otherPhysicalExamValue = physicalExamSection === undefined
+    ? undefined
+    : stripPhysicalExamVitalNarrative(physicalExamSection);
   const fieldsById = new Map(input.fields.map((field) => [field.id, field]));
   const values: Record<string, string> = {};
 
@@ -155,6 +185,12 @@ export function resolveOutpatientEmrStructuredFieldValues(input: {
     const field = fieldId ? fieldsById.get(fieldId) : undefined;
     if (field && field.dictionaryItems.length === 0) values[field.id] = vitalSign.value;
   });
+
+  if (otherPhysicalExamValue !== undefined) {
+    input.fields.filter(isOtherPhysicalExamField).forEach((field) => {
+      if (field.dictionaryItems.length === 0) values[field.id] = otherPhysicalExamValue;
+    });
+  }
 
   return values;
 }

@@ -11,6 +11,7 @@ export {
   promoteOrdinaryVoiceSymptomWorkingDiagnosis,
 } from './lib/ordinaryVoiceDiagnosisGuard';
 export { useVoiceEditorSnapshotPersistence } from './model/useVoiceEditorSnapshotPersistence';
+export { restoreVoiceEditorSnapshot } from './model/voiceEditorSnapshotRestoration';
 export { useVoiceFeedbackActions } from './model/useVoiceFeedbackActions';
 export { useVoiceCatalogMatching } from './model/useVoiceCatalogMatching';
 export { useVoiceIntentRecognition } from './model/useVoiceIntentRecognition';
@@ -71,3 +72,6 @@ export {
   type SimulatedVoiceTranscriptPayload,
   type SimulatedVoiceTranscriptResolution,
 } from './lib/simulatedVoiceTranscript';
+
+export { voiceTimingTracker } from './model/voiceTimingTracker';
+export { useVoiceTimingPresentation } from './model/useVoiceTimingPresentation';

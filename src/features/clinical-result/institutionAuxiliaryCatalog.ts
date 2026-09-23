@@ -40,8 +40,10 @@ export interface InstitutionAuxiliaryCatalogOptions {
 function isCombinationItem(item: MedicalItem): boolean {
   const jsonField = (item.jsonField || '').trim();
   if (/fgCombination[^a-z0-9]*(?:true|1)/iu.test(jsonField)) return true;
-  const rawText = JSON.stringify(item.raw || {});
-  return /组合|套餐|成套/u.test(`${item.name} ${rawText}`);
+  const rawFlag = item.raw?.fgCombination;
+  if (rawFlag === true || rawFlag === 1 || rawFlag === '1') return true;
+  const rawLabel = item.raw?.fgCombinationText;
+  return /组合|套餐|成套/u.test(`${item.name} ${typeof rawLabel === 'string' ? rawLabel : ''}`);
 }
 
 function formatEntry(entry: AuxiliaryCatalogEntry): string {

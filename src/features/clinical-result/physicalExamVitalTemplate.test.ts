@@ -4,6 +4,7 @@ import {
   collectPhysicalExamVitalSigns,
   DEFAULT_PHYSICAL_EXAM_VITAL_TEMPLATE,
   extractPhysicalExamVitalValues,
+  stripPhysicalExamVitalNarrative,
 } from './physicalExamVitalTemplate';
 
 describe('physicalExamVitalTemplate', () => {
@@ -31,6 +32,12 @@ describe('physicalExamVitalTemplate', () => {
       physicalExam: '体温37.2℃，心率90次/分，血压130/80mmHg。咽部充血。',
       vitals: '呼吸20次/分',
     })).toBe('T:{37.2}℃ P:{90}次/分 R:{20}次/分 Bp:{130}/{80}mmHg。咽部充血。');
+  });
+
+  it('strips fixed vital signs in both combined and named formats', () => {
+    expect(stripPhysicalExamVitalNarrative(
+      'T:36.5℃ P:76次/分 R:18次/分 Bp:128/82mmHg。收缩压：128mmHg，舒张压：82mmHg。双肺呼吸音粗。',
+    )).toBe('双肺呼吸音粗。');
   });
 
   it('returns only filled slots as writeback metadata', () => {

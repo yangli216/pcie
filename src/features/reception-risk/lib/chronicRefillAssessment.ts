@@ -8,9 +8,9 @@ import {
   buildChronicRefillCandidateKey,
   buildChronicRefillMedicationAttributionItems,
   getAutoIncludedChronicRefillMedicationAttributions,
+  normalizeChronicRefillMedicationAttributions,
   selectAttributedChronicRefillVisitMedications,
   type ChronicRefillMedicationAttributionItem,
-  type ChronicRefillMedicationAttributionStatus,
 } from './chronicRefillMedicationAttribution';
 
 export interface ChronicRefillCandidate {
@@ -35,7 +35,6 @@ export interface ChronicRefillCandidate {
   conditions?: ChronicRefillConditionOption[];
   /** 同次多慢病、HIS 无处方诊断关联时的药品辅助归类候选。 */
   medicationAttributions?: ChronicRefillMedicationAttributionItem[];
-  medicationAttributionStatus?: ChronicRefillMedicationAttributionStatus;
 }
 
 export interface ChronicRefillConditionOption {
@@ -287,7 +286,7 @@ export function getChronicRefillConditionOptions(
 
 /**
  * 按医生确认的慢病范围裁剪后续病历与用药上下文。
- * 同次就诊含多个慢病且处方无法归属时，部分选择只恢复 AI 高/中置信归入所选慢病的药品。
+ * 同次就诊含多个慢病且处方无法归属时，部分选择先移除歧义药品，交给同一次病历流归类。
  */
 export function scopeChronicRefillCandidate(
   candidate: ChronicRefillCandidate,
@@ -299,11 +298,6 @@ export function scopeChronicRefillCandidate(
   if (selectedConditions.length === 0) return null;
 
   const selectedGroups = new Set(selectedConditions.map((condition) => condition.diagnosisGroup));
-  const autoIncludedAttributions = getAutoIncludedChronicRefillMedicationAttributions(
-    candidate.medicationAttributions || [],
-    selectedGroups,
-  );
-  const autoIncludedAttributionIds = new Set(autoIncludedAttributions.map((item) => item.id));
   const visitMatches = new Map<HisVisitRecord, ChronicDiagnosisMatch[]>();
   const relatedVisits = candidate.chronicVisits.filter((visit) => {
     const matches = getVisitChronicMatches(visit);
@@ -315,13 +309,6 @@ export function scopeChronicRefillCandidate(
     const groups = new Set((visitMatches.get(visit) || []).map((match) => match.groupName));
     const canInheritMedication = groups.size > 0
       && Array.from(groups).every((group) => selectedGroups.has(group));
-    const attributedMedications = canInheritMedication
-      ? null
-      : selectAttributedChronicRefillVisitMedications(
-        visit,
-        candidate.medicationAttributions || [],
-        selectedGroups,
-      );
     const selectedDiagnosisNames = matches
       .filter((match) => selectedGroups.has(match.groupName))
       .map((match) => match.diagnosisName);
@@ -332,8 +319,8 @@ export function scopeChronicRefillCandidate(
         const match = findChronicDiagnosis(diagnosis, hasVisitMedicationEvidence(visit));
         return Boolean(match && selectedGroups.has(match.groupName));
       }),
-      medications: canInheritMedication ? visit.medications : attributedMedications?.medications,
-      medicationOrders: canInheritMedication ? visit.medicationOrders : attributedMedications?.medicationOrders,
+      medications: canInheritMedication ? visit.medications : undefined,
+      medicationOrders: canInheritMedication ? visit.medicationOrders : undefined,
     };
   });
   const selectedAllConditions = options.every((condition) => selectedIds.has(condition.id));
@@ -350,6 +337,16 @@ export function scopeChronicRefillCandidate(
     ? `历史用药记录：${medicationEvidence.medications.join('、')}`
     : '未获取到可确认的历史用药记录';
 
+  const relatedVisitKeys = new Set(relatedVisits.map((visit) => (
+    visit.visitId?.trim() || String(visit.visitTime)
+  )));
+  const medicationAttributions = selectedAllConditions
+    ? []
+    : (candidate.medicationAttributions || []).filter((item) => (
+      item.candidateConditionIds.some((id) => selectedGroups.has(id))
+      && relatedVisitKeys.has(item.visitId?.trim() || String(item.visitTime))
+    ));
+
   return {
     diagnosis: diagnoses[0],
     diagnoses,
@@ -364,10 +361,66 @@ export function scopeChronicRefillCandidate(
     medicationEvidenceText,
     evidenceText: `${diagnosisEvidenceText}；${medicationEvidenceText}`,
     conditions: selectedConditions,
-    medicationAttributions: (candidate.medicationAttributions || []).filter((item) => (
-      autoIncludedAttributionIds.has(item.id)
-    )),
-    medicationAttributionStatus: candidate.medicationAttributionStatus,
+    medicationAttributions,
+  };
+}
+
+/**
+ * 将同一次慢病生成流返回的药品归类应用到已裁剪候选。
+ * 模型只能引用既有药品与慢病 ID，且仅高/中置信归入本次范围的结果会被采用。
+ */
+export function applyChronicRefillMedicationScope(
+  candidate: ChronicRefillCandidate,
+  rawScope: unknown,
+): ChronicRefillCandidate {
+  const items = candidate.medicationAttributions || [];
+  if (items.length === 0) return candidate;
+
+  const normalizedItems = normalizeChronicRefillMedicationAttributions(items, rawScope);
+  const selectedGroups = new Set(candidate.diagnosisGroups);
+  const acceptedItems = getAutoIncludedChronicRefillMedicationAttributions(
+    normalizedItems,
+    selectedGroups,
+  );
+  if (acceptedItems.length === 0) {
+    return {
+      ...candidate,
+      medicationAttributions: normalizedItems,
+    };
+  }
+
+  const chronicVisits = candidate.chronicVisits.map((visit) => {
+    const attributed = selectAttributedChronicRefillVisitMedications(
+      visit,
+      acceptedItems,
+      selectedGroups,
+    );
+    if (!attributed.medications?.length && !attributed.medicationOrders?.length) return visit;
+    return {
+      ...visit,
+      medications: Array.from(new Set([
+        ...(visit.medications || []),
+        ...(attributed.medications || []),
+      ])),
+      medicationOrders: [
+        ...(visit.medicationOrders || []),
+        ...(attributed.medicationOrders || []),
+      ],
+    };
+  });
+  const medicationEvidence = collectMedicationEvidence(chronicVisits);
+  const medicationEvidenceText = medicationEvidence.medications.length > 0
+    ? `历史用药记录：${medicationEvidence.medications.join('、')}`
+    : '未获取到可确认的历史用药记录';
+
+  return {
+    ...candidate,
+    medications: medicationEvidence.medications,
+    medicationOrders: medicationEvidence.medicationOrders,
+    chronicVisits,
+    medicationEvidenceText,
+    evidenceText: `${candidate.diagnosisEvidenceText}；${medicationEvidenceText}`,
+    medicationAttributions: normalizedItems,
   };
 }
 
@@ -458,6 +511,5 @@ export function assessChronicRefillCandidate(
     evidenceText: `${diagnosisEvidenceText}；${medicationEvidenceText}`,
     conditions,
     medicationAttributions,
-    medicationAttributionStatus: medicationAttributions.length > 0 ? 'loading' : 'not-needed',
   };
 }

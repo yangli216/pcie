@@ -1,7 +1,6 @@
 import type { HisHistoricalMedication, HisVisitRecord } from '@/services/his/types';
 
 export type ChronicRefillMedicationAttributionConfidence = 'high' | 'medium' | 'low';
-export type ChronicRefillMedicationAttributionStatus = 'not-needed' | 'loading' | 'ready' | 'failed';
 
 export interface ChronicRefillMedicationAttributionCondition {
   id: string;

@@ -12,9 +12,10 @@ vi.mock('@/services/medicalData', () => ({ medicalDataService: {} }));
 describe('voice physical examination same-stream integration', () => {
   it.each(['', '右肺呼吸音粗，可闻及湿啰音。'])('keeps explicit examination separate from AI candidates: %s', async (physicalExam) => {
     vi.mocked(chatStream).mockImplementation(async (messages, onChunk) => {
-      expect(messages[0].content).toContain('双肺呼吸音粗');
-      expect(messages[1].content).toContain('应在同一 diagnoses 分区返回一项症状性工作诊断');
-      expect(messages[1].content).toContain('无符合条件症状时允许空结果');
+      expect(messages[0].content).toContain('基础查体候选由客户端');
+      expect(messages[0].content).not.toContain('基础项目库（均为未核实的书写候选）');
+      expect(messages[0].content).toContain('symptom_working formal');
+      expect(messages[1].content).not.toContain('【本次输出协议】');
       const events = [
         { event: 'record_core', data: { chiefComplaint: '咳嗽2天', historyOfPresentIllness: '咳嗽2天', symptoms: ['咳嗽'], negativeSymptoms: [] } },
         { event: 'history_context', data: {} },

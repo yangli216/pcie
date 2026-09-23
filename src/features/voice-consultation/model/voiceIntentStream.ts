@@ -230,6 +230,7 @@ export function createVoiceIntentStreamAccumulator(): VoiceIntentStreamAccumulat
         currentMedicationHistory: '',
         personalHistory: '',
         menstrualHistory: '',
+        maritalReproductiveHistory: '',
         familyHistory: '',
         physicalExam: '',
         symptoms: [],

@@ -1,3 +1,7 @@
+import { normalizeRecommendationPlan, VOICE_ROUTING_RULES } from '../lib/voiceRecommendationPlan';
+import { createVoiceRoutingDiagnostics } from './voiceRoutingDiagnostics';
+import { applyVoiceIntentStreamProtocol } from '../lib/voiceIntentStreamProtocol';
+import type { VoiceTimingSession } from './voiceTimingTracker';
 /**
  * 语音意图识别 Composable
  *
@@ -17,7 +21,6 @@ import {
   mergeStructuredNegativeSymptoms,
   normalizeClinicalRecordFactSuggestions,
   completePhysicalExamSuggestions,
-  PHYSICAL_EXAM_GUIDANCE_PROMPT,
   normalizeGeneratedClinicalRecordNarrative,
   type ClinicalResultGenerationSection,
   type ClinicalResultInput,
@@ -294,45 +297,6 @@ function normalizeTreatmentHints(hints: TreatmentHint[] | undefined): TreatmentH
     .filter((hint) => hint.name);
 }
 
-const RECOMMENDATION_TYPES: VoiceRecommendationType[] = ['medicine', 'exam', 'lab_test'];
-
-function normalizeRecommendationTypes(value: unknown): VoiceRecommendationType[] {
-  if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.filter(
-    (item): item is VoiceRecommendationType => RECOMMENDATION_TYPES.includes(item as VoiceRecommendationType),
-  )));
-}
-
-function normalizeRecommendationPlan(value: VoiceRecommendationPlan | undefined): VoiceRecommendationPlan {
-  const mode = value?.mode;
-  const normalizedMode = mode === 'diagnostic_first'
-    || mode === 'treatment_first'
-    || mode === 'parallel'
-    || mode === 'explicit_only'
-    || mode === 'urgent_referral'
-    ? mode
-    : 'parallel';
-  const confidence = value?.confidence === 'high' || value?.confidence === 'medium' || value?.confidence === 'low'
-    ? value.confidence
-    : 'low';
-  const requested = normalizeRecommendationTypes(value?.recommendNow);
-  const recommendNow = confidence === 'low' && normalizedMode !== 'explicit_only' && normalizedMode !== 'urgent_referral'
-    ? [...RECOMMENDATION_TYPES]
-    : requested;
-
-  return {
-    mode: normalizedMode,
-    recommendNow,
-    defer: normalizeRecommendationTypes(value?.defer),
-    skip: normalizeRecommendationTypes(value?.skip),
-    reason: getText(value?.reason),
-    resumeCondition: value?.resumeCondition === 'report_available' || value?.resumeCondition === 'doctor_request'
-      ? value.resumeCondition
-      : '',
-    confidence,
-  };
-}
-
 function mapRecommendationTypeToClinicalType(
   type: VoiceRecommendationType,
 ): 'medicine' | 'examination' | 'labTest' | 'procedure' {
@@ -441,6 +405,10 @@ function normalizeVoiceExtraction(parsed: VoiceExtractionResult): NormalizedVoic
       getText(parsed.recordDraft?.menstrualHistory || parsed.menstrualHistory),
       'menstrualHistory',
     ).text,
+    maritalReproductiveHistory: normalizeGeneratedClinicalRecordNarrative(
+      getText(parsed.recordDraft?.maritalReproductiveHistory || parsed.maritalReproductiveHistory),
+      'maritalReproductiveHistory',
+    ).text,
     familyHistory: normalizeGeneratedClinicalRecordNarrative(
       getText(parsed.recordDraft?.familyHistory || parsed.familyHistory),
       'familyHistory',
@@ -517,6 +485,9 @@ function validateVoiceExtractionPayload(payload: unknown): string[] {
       }
       if (typeof recordDraftObject.menstrualHistory !== 'undefined' && typeof recordDraftObject.menstrualHistory !== 'string') {
         issues.push('recordDraft.menstrualHistory 必须是 string');
+      }
+      if (typeof recordDraftObject.maritalReproductiveHistory !== 'undefined' && typeof recordDraftObject.maritalReproductiveHistory !== 'string') {
+        issues.push('recordDraft.maritalReproductiveHistory 必须是 string');
       }
       if (typeof recordDraftObject.familyHistory !== 'undefined' && typeof recordDraftObject.familyHistory !== 'string') {
         issues.push('recordDraft.familyHistory 必须是 string');
@@ -661,6 +632,7 @@ async function repairVoiceExtractionPayload(
       }),
     },
   ], undefined, undefined, undefined, {
+    temperature: 0,
     traceContext: {
       scene: 'voice-intent-repair',
       sourceModule: 'voice_intent',
@@ -775,11 +747,12 @@ export function useVoiceIntentRecognition() {
     });
     const personalHistory = normalizedExtraction.recordDraft.personalHistory || '';
     const menstrualHistory = normalizedExtraction.recordDraft.menstrualHistory || '';
+    const maritalReproductiveHistory = normalizedExtraction.recordDraft.maritalReproductiveHistory || '';
     const familyHistory = normalizedExtraction.recordDraft.familyHistory || '';
-    const plan = constrainOrdinaryVoiceWorkingDiagnosisPlan(
+    const plan = normalizeRecommendationPlan(constrainOrdinaryVoiceWorkingDiagnosisPlan(
       normalizedExtraction.recommendationPlan,
       matchedDiagnoses,
-    );
+    ));
     const autoFetchTreatments = plan.mode !== 'explicit_only' && plan.mode !== 'urgent_referral';
 
     const outpatientRecord = buildOutpatientRecord({
@@ -789,6 +762,7 @@ export function useVoiceIntentRecognition() {
       allergyHistory: normalizedExtraction.recordDraft.allergyHistory,
       personalHistory,
       menstrualHistory,
+      maritalReproductiveHistory,
       familyHistory,
       physicalExam: normalizedExtraction.recordDraft.physicalExam,
       vitals: vitalSourceText,
@@ -824,6 +798,7 @@ export function useVoiceIntentRecognition() {
       allergyHistory: normalizedExtraction.recordDraft.allergyHistory || '',
       currentMedicationHistory,
       ...(menstrualHistory ? { menstrualHistory } : {}),
+      ...(maritalReproductiveHistory ? { maritalReproductiveHistory } : {}),
       familyHistory,
       symptoms: normalizedExtraction.recordDraft.symptoms || [],
       negativeSymptoms: normalizedExtraction.recordDraft.negativeSymptoms || [],
@@ -866,6 +841,7 @@ export function useVoiceIntentRecognition() {
   async function processTranscript(
     transcribedText?: string,
     options?: {
+      timing?: VoiceTimingSession;
       memoryContext?: string;
       patientContext?: {
         pastMedicalHistory?: string | null;
@@ -873,8 +849,10 @@ export function useVoiceIntentRecognition() {
         currentMedicationHistory?: string | null;
         personalHistory?: string | null;
         menstrualHistory?: string | null;
+        maritalReproductiveHistory?: string | null;
         familyHistory?: string | null;
         gender?: string | null;
+        ageText?: string | null;
         vitals?: string | null;
       };
       consultationId?: string;
@@ -931,24 +909,29 @@ export function useVoiceIntentRecognition() {
       const ctxPersonal = cleanCtx(patientCtx?.personalHistory);
       const isFemalePatient = /^(?:F|2|女)/iu.test((patientCtx?.gender || '').trim());
       const ctxMenstrual = isFemalePatient ? cleanCtx(patientCtx?.menstrualHistory) : '';
+      const ctxMarital = isFemalePatient ? cleanCtx(patientCtx?.maritalReproductiveHistory) : '';
       const ctxFamily = cleanCtx(patientCtx?.familyHistory);
-      if (ctxAllergy || ctxPmh || ctxMed || ctxPersonal || ctxMenstrual || ctxFamily) {
+      if (ctxAllergy || ctxPmh || ctxMed || ctxPersonal || ctxMenstrual || ctxMarital || ctxFamily) {
         patientContextLines.push('【患者已有档案信息】');
         if (ctxAllergy) patientContextLines.push(`过敏史：${ctxAllergy}`);
         if (ctxPmh) patientContextLines.push(`既往史：${ctxPmh}`);
         if (ctxMed) patientContextLines.push(`长期用药：${ctxMed}`);
         if (ctxPersonal) patientContextLines.push(`个人史：${ctxPersonal}`);
         if (ctxMenstrual) patientContextLines.push(`月经史：${ctxMenstrual}`);
+        if (ctxMarital) patientContextLines.push(`婚育史：${ctxMarital}`);
         if (ctxFamily) patientContextLines.push(`家族史：${ctxFamily}`);
-        patientContextLines.push(
-          '请在 recordDraft 中保留以上档案信息：若对话未明确撤销或修订，必须原样保留对应字段，不要因为对话未提及就改写为"无特殊"。既往史仅记录慢性病、手术史、外伤史等长期健康信息，不要将门诊就诊流水写入既往史；个人史、女性月经史与家族史必须分别放入对应字段。'
-        );
+        patientContextLines.push('history_context保留以上权威事实；仅在本次对话明确修订时覆盖。');
       }
-      const patientContextBlock = patientContextLines.length ? `\n${patientContextLines.join('\n')}` : '';
+      const patientTraits = `【患者特征】性别：${patientCtx?.gender || '未知'}；年龄：${patientCtx?.ageText || '未知'}`;
+      const patientContextBlock = `\n${patientTraits}${patientContextLines.length ? `\n${patientContextLines.join('\n')}` : ''}`;
       const normalizeWithKnownHistories = (payload: VoiceExtractionResult): NormalizedVoiceExtractionResult => {
         const normalized = normalizeVoiceExtraction(payload);
+        normalized.recordDraft.pastMedicalHistory ||= ctxPmh;
+        normalized.recordDraft.allergyHistory ||= ctxAllergy;
+        normalized.recordDraft.currentMedicationHistory ||= ctxMed;
         normalized.recordDraft.personalHistory ||= ctxPersonal;
-        normalized.recordDraft.menstrualHistory ||= ctxMenstrual;
+        normalized.recordDraft.menstrualHistory = isFemalePatient ? normalized.recordDraft.menstrualHistory || ctxMenstrual : '';
+        normalized.recordDraft.maritalReproductiveHistory = isFemalePatient ? normalized.recordDraft.maritalReproductiveHistory || ctxMarital : '';
         normalized.recordDraft.familyHistory ||= ctxFamily;
         normalized.diagnosisHints = guardOrdinaryVoiceDiagnosisHints(
           normalized.diagnosisHints,
@@ -969,16 +952,15 @@ export function useVoiceIntentRecognition() {
         PROMPTS.consultation.voiceIntentRecognition,
       ) as typeof PROMPTS.consultation.voiceIntentRecognition;
       const baseUserPrompt = recognitionPrompt.buildUserPrompt(text);
-      const outputProtocolReminder = `
-【本次输出协议】请按 record_core、history_context、record_suggestions、diagnoses、recommendation_plan、explicit_orders、record_extra、done 的顺序逐行输出 NDJSON。record_suggestions 是带 AI 来源标记的候选而非已确认事实；diagnoses 每项必须填写 clinicalRole、diagnosisKind 和 evidenceScope，current_visit/both 还必须填写仅来自本次就诊的 currentVisitEvidenceText。history_only/risk_modifier 不得进入诊断建议，不能解释本次主诉的糖尿病、贫血等历史共病也不得作为待鉴别；正式建议允许有当前证据支持的临床初步诊断，不要求先排除全部其他疾病；需排除其他病因不等于目标诊断依据不足。没有病因性正式诊断、但本次存在明确肯定且无矛盾的症状时，应在同一 diagnoses 分区返回一项症状性工作诊断，标为 current_diagnosis+symptom_working+formal，confidence 为 high/medium，填写 current_visit 证据与标准症状名称/R类编码；无符合条件症状时允许空结果，不编造诊断或编码。上腹不适不得改写成腹痛，明确呕吐可作为症状候选，AI 补充查体不得作为已核实依据。症状性工作诊断的自动路由保持 diagnostic_first，仅检查/检验，不自动给药。explicit_orders 只能包含医生明确医嘱，每项 name 必须是非空字符串，type 必须是 medicine、examination、labTest、procedure 之一的字符串，没有明确医嘱时输出空数组；recommendation_plan 必须包含 mode、recommendNow、defer、skip、reason、resumeCondition、confidence。`;
-      const userContent = `${baseUserPrompt}${patientContextBlock}${memoryBlock ? `\n${memoryBlock}` : ''}${outputProtocolReminder}`;
+      const userContent = `${baseUserPrompt}${patientContextBlock}${memoryBlock ? `\n${memoryBlock}` : ''}`;
       const messages: ChatMessage[] = [
-        { role: 'system', content: recognitionPrompt.system.includes(PHYSICAL_EXAM_GUIDANCE_PROMPT)
-          ? recognitionPrompt.system : `${recognitionPrompt.system}\n${PHYSICAL_EXAM_GUIDANCE_PROMPT}` },
+        { role: 'system', content: `${applyVoiceIntentStreamProtocol(recognitionPrompt.system)}\n${VOICE_ROUTING_RULES}` },
         { role: 'user', content: userContent },
       ];
 
+      const logRouting = await createVoiceRoutingDiagnostics(messages);
       const traceConfig = {
+        temperature: 0,
         traceContext: {
           scene: 'voice-intent-recognition',
           sourceModule: 'voice_intent',
@@ -988,6 +970,9 @@ export function useVoiceIntentRecognition() {
           consultationId: options?.consultationId,
         },
       };
+      const timing = options?.timing;
+      timing?.mark('llm_prompt_chars', messages.reduce((sum, message) => sum + message.content.length, 0));
+      timing?.mark('context_prepared');
       let streamAccumulator = createVoiceIntentStreamAccumulator();
       // Cache only catalog assessments, not context-sensitive clinical decisions.
       // The request owns this map; catalog reload/clear replaces the array.
@@ -1008,9 +993,14 @@ export function useVoiceIntentRecognition() {
         return assessment;
       };
       let streamParser = createVoiceIntentStreamParser((event) => {
+        timing?.mark(`section_${event.event}`, JSON.stringify(event.data)?.length || 0);
+        const endSection = timing?.span(`section_processing_${event.event}`);
         applyVoiceIntentStreamEvent(streamAccumulator, event);
-        if (!options?.onProgress || event.event === 'done') return;
+        if (!options?.onProgress || event.event === 'done') { endSection?.(); return; }
+        const endNormalize = timing?.span(`normalize_${event.event}`);
         const partialExtraction = normalizeWithKnownHistories(streamAccumulator.payload);
+        endNormalize?.();
+        const endBuild = timing?.span(`build_intent_${event.event}`);
         const partial = buildIntentResult(
           partialExtraction,
           'streaming',
@@ -1020,16 +1010,33 @@ export function useVoiceIntentRecognition() {
           vitalSourceText,
           assessDiagnosis,
         );
+        endBuild?.(partial.intentResult.diagnoses.length);
+        if (streamAccumulator.readySections.includes('recommendation_plan')) {
+          logRouting(streamAccumulator.payload.recommendationPlan,
+            partial.intentResult.recommendationPolicy!.plan!, partial.intentResult.diagnoses);
+        }
         options.onProgress({
           result: partial.intentResult,
           readySections: [...streamAccumulator.readySections],
         });
+        endSection?.();
       });
 
+      let streamChunkCount = 0;
+      let previousChunkAt: number | undefined;
+      let maxChunkGapMs = 0;
+      timing?.mark('llm_stream_started');
       try {
         await chatStream(
           messages,
           (chunk) => {
+            const chunkAt = performance.now();
+            if (previousChunkAt !== undefined) {
+              maxChunkGapMs = Math.max(maxChunkGapMs, chunkAt - previousChunkAt);
+            }
+            previousChunkAt = chunkAt;
+            streamChunkCount += 1;
+            if (chunk.length) timing?.mark('llm_first_chunk');
             rawOutput += chunk;
             streamParser.push(chunk);
           },
@@ -1038,7 +1045,9 @@ export function useVoiceIntentRecognition() {
           undefined,
           traceConfig,
         );
+        timing?.mark('llm_stream_completed');
       } catch (streamError) {
+        timing?.mark('llm_stream_failed');
         streamParser.flush();
         const hasUsablePartial = ['record_core', 'diagnoses', 'recommendation_plan']
           .every((section) => streamAccumulator.readySections.includes(section as ClinicalResultGenerationSection));
@@ -1046,6 +1055,7 @@ export function useVoiceIntentRecognition() {
           console.warn('[VoiceIntent] Streaming extraction ended after usable sections; preserving partial result', streamError);
         } else {
           console.warn('[VoiceIntent] Streaming extraction failed before usable sections, falling back once', streamError);
+          timing?.mark('fallback_started');
           rawOutput = await chat(
             messages,
             undefined,
@@ -1053,6 +1063,7 @@ export function useVoiceIntentRecognition() {
             undefined,
             traceConfig,
           );
+          timing?.mark('fallback_completed');
           streamAccumulator = createVoiceIntentStreamAccumulator();
           streamParser = createVoiceIntentStreamParser((event) => {
             applyVoiceIntentStreamEvent(streamAccumulator, event);
@@ -1061,6 +1072,9 @@ export function useVoiceIntentRecognition() {
         }
       }
       streamParser.flush();
+      timing?.mark('llm_output_chars', rawOutput.length);
+      timing?.mark('llm_stream_chunks', streamChunkCount);
+      timing?.mark('llm_chunk_gap_max_ms', Math.round(maxChunkGapMs));
 
       let parsed: VoiceExtractionResult;
       let repairUsed = false;
@@ -1070,7 +1084,9 @@ export function useVoiceIntentRecognition() {
       if (streamAccumulator.eventCount > 0 && hasRequiredStreamSections) {
         parsed = streamAccumulator.payload;
       } else {
+        const endRepair = timing?.span('parse_or_repair');
         const repaired = await parseOrRepairVoiceExtraction(normalizedText, rawOutput, options?.consultationId);
+        endRepair?.();
         parsed = repaired.payload;
         repairUsed = repaired.repairUsed;
         protocolWarnings = repaired.warnings;
@@ -1085,6 +1101,7 @@ export function useVoiceIntentRecognition() {
         return null;
       }
 
+      const endExplicit = timing?.span('explicit_catalog_resolution');
       const resolvedTreatments = await resolveExplicitTreatmentCatalogHints(
         normalizedExtraction.treatmentHints,
         options?.consultationId,
@@ -1098,6 +1115,8 @@ export function useVoiceIntentRecognition() {
           treatmentPlan: normalizedExtraction.recordDraft.treatmentPlan,
         },
       );
+      endExplicit?.(resolvedTreatments.length);
+      const endFinalBuild = timing?.span('build_intent_complete');
       const built = buildIntentResult(
         normalizedExtraction,
         'complete',
@@ -1114,6 +1133,9 @@ export function useVoiceIntentRecognition() {
         segregatedTreatments,
       } = built;
 
+      endFinalBuild?.(intentResult.diagnoses.length);
+      timing?.mark('intent_completed');
+      logRouting(parsed.recommendationPlan, intentResult.recommendationPolicy!.plan!, intentResult.diagnoses);
       result.value = intentResult;
 
       const debugSnapshot: VoiceIntentDebugSnapshot = {

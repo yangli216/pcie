@@ -16,6 +16,7 @@ describe('useClinicalResultIntentReset', () => {
       pastMedicalHistory: ref(''),
       personalHistory: ref(''),
       menstrualHistory,
+      maritalReproductiveHistory: ref(''),
       familyHistory: ref(''),
       physicalExam: ref(''),
       precautions,

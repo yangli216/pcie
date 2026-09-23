@@ -54,35 +54,16 @@ const emit = defineEmits<{
 }>();
 
 const selectedConditionIds = ref<string[]>([]);
-const submitQueued = ref(false);
 const conditionOptions = computed(() => getChronicRefillConditionOptions(props.candidate));
-const allConditionsSelected = computed(() => (
-  conditionOptions.value.length > 0
-  && selectedConditionIds.value.length === conditionOptions.value.length
-));
-const medicationAttributionPending = computed(() => (
-  selectedConditionIds.value.length > 0
-  && !allConditionsSelected.value
-  && Boolean(props.candidate.medicationAttributions?.length)
-  && props.candidate.medicationAttributionStatus === 'loading'
-));
 const candidateKey = computed(() => getChronicRefillCandidateKey(props.candidate));
 
 watch(candidateKey, () => {
-  submitQueued.value = false;
   selectedConditionIds.value = conditionOptions.value.length === 1
     ? [conditionOptions.value[0].id]
     : [];
 }, { immediate: true });
 
-watch(medicationAttributionPending, (pending) => {
-  if (pending || !submitQueued.value) return;
-  submitQueued.value = false;
-  emitSelection();
-});
-
 function toggleCondition(conditionId: string): void {
-  submitQueued.value = false;
   selectedConditionIds.value = selectedConditionIds.value.includes(conditionId)
     ? selectedConditionIds.value.filter((id) => id !== conditionId)
     : [...selectedConditionIds.value, conditionId];
@@ -90,10 +71,6 @@ function toggleCondition(conditionId: string): void {
 
 function submit(): void {
   if (selectedConditionIds.value.length === 0) return;
-  if (medicationAttributionPending.value) {
-    submitQueued.value = true;
-    return;
-  }
   emitSelection();
 }
 
@@ -180,6 +157,10 @@ function emitSelection(): void {
   margin-top: 8px;
   border: 0;
   border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   color: #fff;
   background: #2563eb;
   cursor: pointer;
@@ -191,4 +172,5 @@ function emitSelection(): void {
   cursor: not-allowed;
   opacity: 0.48;
 }
+
 </style>

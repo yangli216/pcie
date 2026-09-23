@@ -240,6 +240,30 @@ describe('voice treatment branch concurrency', () => {
     expect(chatFast).toHaveBeenCalledTimes(1);
   });
 
+  it('starts the available auxiliary model before a missing-type result finishes applying', async () => {
+    const missingTypeApplication = deferred<void>();
+    const modelResponse = deferred<string>();
+    vi.mocked(medicalDataService.fetchAvailableExamLabItems).mockResolvedValueOnce([labItem]);
+    vi.mocked(chatFast).mockReturnValueOnce(modelResponse.promise);
+    const complete = vi.fn();
+    const pending = generateVoiceTreatmentRecommendations(concurrentInput((result) => {
+      if (result.key === 'auxiliary' && result.error) return missingTypeApplication.promise;
+    })).then(complete);
+
+    try {
+      await vi.waitFor(() => expect(chatFast).toHaveBeenCalledTimes(1));
+      expect(complete).not.toHaveBeenCalled();
+      modelResponse.resolve('{"exams":[],"labTests":[]}');
+      await vi.waitFor(() => expect(mapAuxiliaryCatalogRecommendations).toHaveBeenCalledTimes(1));
+      expect(complete).not.toHaveBeenCalled();
+    } finally {
+      modelResponse.resolve('{"exams":[],"labTests":[]}');
+      missingTypeApplication.resolve();
+      await pending;
+    }
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it('handles an early medicine rejection while the auxiliary catalog is still pending', async () => {
     const catalog = deferred<MedicalItem[]>();
     const error = new Error('药品模型失败');

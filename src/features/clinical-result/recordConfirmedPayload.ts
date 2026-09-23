@@ -370,6 +370,7 @@ export const RECORD_CONFIRMED_WRITEBACK_FIELDS = [
   'pastMedicalHistory',
   'personalHistory',
   'menstrualHistory',
+  'maritalReproductiveHistory',
   'familyHistory',
   'physicalExam',
   'precautions',
@@ -417,6 +418,7 @@ export interface BuildRecordConfirmedPayloadInput {
   outpatientRecord?: Partial<OutpatientRecord>;
   personalHistory?: string;
   menstrualHistory?: string;
+  maritalReproductiveHistory?: string;
   physicalExam?: string;
   precautions?: string;
   vitals?: string;
@@ -450,6 +452,7 @@ export function buildRecordConfirmedPayload(
     outpatientRecord,
     personalHistory,
     menstrualHistory,
+    maritalReproductiveHistory,
     physicalExam,
     precautions,
     vitals,
@@ -470,6 +473,7 @@ export function buildRecordConfirmedPayload(
         pastMedicalHistory: outpatientRecord?.pastMedicalHistory || pastMedicalHistory,
         personalHistory: outpatientRecord?.personalHistory || personalHistory,
         menstrualHistory: outpatientRecord?.menstrualHistory || menstrualHistory,
+        maritalReproductiveHistory: outpatientRecord?.maritalReproductiveHistory || maritalReproductiveHistory,
         familyHistory: resolvedFamilyHistory,
         physicalExam: outpatientRecord?.physicalExam || physicalExam,
         precautions: outpatientRecord?.precautions || precautions,
@@ -492,7 +496,7 @@ export function buildRecordConfirmedPayload(
   const outpatientRecordPayload = writebackOutpatientRecord && selectedRecordFields.size > 0
     ? RECORD_CONFIRMED_WRITEBACK_FIELDS.reduce<Record<string, string>>((record, field) => {
         const value = writebackOutpatientRecord[field] || '';
-        if (selectedRecordFields.has(field) && (field !== 'menstrualHistory' || value.trim())) {
+        if (selectedRecordFields.has(field) && (!['menstrualHistory', 'maritalReproductiveHistory'].includes(field) || value.trim())) {
           record[field] = value;
         }
         return record;
@@ -513,6 +517,7 @@ export function buildRecordConfirmedPayload(
   const resolvedHistoryOfPresentIllness = writebackOutpatientRecord?.historyOfPresentIllness || historyOfPresentIllness;
   const resolvedPastMedicalHistory = writebackOutpatientRecord?.pastMedicalHistory || stripHistoryRecordTemplateMarkers(pastMedicalHistory);
   const resolvedMenstrualHistory = writebackOutpatientRecord?.menstrualHistory || '';
+  const resolvedMaritalReproductiveHistory = writebackOutpatientRecord?.maritalReproductiveHistory || '';
   const resolvedWritebackFamilyHistory = writebackOutpatientRecord?.familyHistory || stripHistoryRecordTemplateMarkers(resolvedFamilyHistory);
   const resolvedPrecautions = writebackOutpatientRecord?.precautions || precautions || '';
   const includeDiagnosis = !isScopedWriteback || Boolean(writebackScope?.includeDiagnosis);
@@ -525,6 +530,7 @@ export function buildRecordConfirmedPayload(
           pastMedicalHistory: resolvedPastMedicalHistory,
           personalHistory: writebackOutpatientRecord?.personalHistory || personalHistory || '',
           menstrualHistory: resolvedMenstrualHistory,
+          maritalReproductiveHistory: resolvedMaritalReproductiveHistory,
           familyHistory: resolvedWritebackFamilyHistory,
           physicalExam: writebackOutpatientRecord?.physicalExam || physicalExam || '',
           precautions: resolvedPrecautions,
@@ -553,6 +559,9 @@ export function buildRecordConfirmedPayload(
     ...(!isScopedWriteback || selectedRecordFields.has('pastMedicalHistory') ? { pastMedicalHistory: resolvedPastMedicalHistory } : {}),
     ...((!isScopedWriteback || selectedRecordFields.has('menstrualHistory')) && resolvedMenstrualHistory
       ? { menstrualHistory: resolvedMenstrualHistory }
+      : {}),
+    ...((!isScopedWriteback || selectedRecordFields.has('maritalReproductiveHistory')) && resolvedMaritalReproductiveHistory
+      ? { maritalReproductiveHistory: resolvedMaritalReproductiveHistory }
       : {}),
     ...((!isScopedWriteback || selectedRecordFields.has('familyHistory')) && resolvedWritebackFamilyHistory
       ? { familyHistory: resolvedWritebackFamilyHistory }

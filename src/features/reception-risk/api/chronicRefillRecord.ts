@@ -5,7 +5,8 @@ import {
   getPatientContextAgeText,
   getPatientContextAllergyHistory,
   getPatientContextGenderText,
-  getPatientContextName,
+  getPatientContextMenstrualHistory,
+  getPatientContextMaritalReproductiveHistory,
   getPatientContextPastMedicalHistory,
 } from '@/utils/patientContext';
 import {
@@ -13,10 +14,9 @@ import {
   buildOutpatientRecord,
   completePhysicalExamSuggestions,
   normalizeClinicalRecordFactSuggestions,
-  PHYSICAL_EXAM_GUIDANCE_PROMPT,
   type ClinicalRecordFactSuggestionResponse,
   type ClinicalRecordFactSuggestion,
-  formatAvailableMedicineInventoryPrompt,
+  type AvailableMedicineInventoryCatalogItem,
   normalizeGeneratedClinicalRecordNarrative,
   resolveHistoryRecordTemplate,
   parseLLMJson,
@@ -24,12 +24,16 @@ import {
   type ClinicalResultDiagnosis,
   type ClinicalResultInput,
 } from '@features/clinical-result';
-import type { ChronicRefillCandidate } from '../lib/chronicRefillAssessment';
+import {
+  applyChronicRefillMedicationScope,
+  type ChronicRefillCandidate,
+} from '../lib/chronicRefillAssessment';
 import {
   normalizeChronicRefillConfirmationPlan,
   type ChronicRefillConfirmationPlan,
   type RawChronicRefillConfirmationPlan,
 } from '../lib/chronicRefillConfirmation';
+import { normalizeChronicRefillHistoryOfPresentIllness } from '@features/clinical-result/lib/chronicRefillReviewRecordText';
 import {
   buildChronicRefillInventoryTreatments,
   type ChronicRefillMedicineInput,
@@ -40,6 +44,15 @@ import {
   createChronicRefillRecordStreamAccumulator,
   createChronicRefillRecordStreamParser,
 } from '../lib/chronicRefillRecordStream';
+import {
+  buildChronicRefillInventoryPromptContext,
+  buildChronicRefillMedicationScopePromptContext,
+  buildCompactChronicRefillHistoryEvidence,
+} from '../lib/chronicRefillPromptContext';
+import {
+  chronicRefillTimingTracker,
+  type ChronicRefillTimingSession,
+} from '../model/chronicRefillTimingTracker';
 
 export interface ChronicRefillRecordGenerationOptions {
   onProgress?: (stage: Extract<
@@ -47,6 +60,8 @@ export interface ChronicRefillRecordGenerationOptions {
     'generating-content' | 'finalizing-result'
   >) => void;
   onPartial?: (result: ClinicalResultInput) => void;
+  sessionId?: string;
+  timing?: ChronicRefillTimingSession;
 }
 
 interface ChronicRefillDraft {
@@ -59,6 +74,7 @@ interface ChronicRefillDraft {
   healthEducation?: string;
   recommendedMedicines?: ChronicRefillMedicineInput[];
   reviewPlan?: RawChronicRefillConfirmationPlan;
+  medicationScope?: unknown;
 }
 
 interface NormalizedChronicRefillDraft {
@@ -71,24 +87,6 @@ interface NormalizedChronicRefillDraft {
   healthEducation: string;
   recommendedMedicines: ChronicRefillMedicineInput[];
   reviewPlan: ChronicRefillConfirmationPlan;
-}
-
-function buildHistoryEvidence(candidate: ChronicRefillCandidate): string {
-  return candidate.chronicVisits.map((visit, index) => {
-    const date = new Date(visit.visitTime);
-    const dateText = Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
-    return [
-      `第${index + 1}次：${dateText}`,
-      `诊断：${(visit.diagnoses || []).join('、') || '未记录'}`,
-      `用药：${(visit.medications || []).join('、') || '未记录'}`,
-      `主诉：${visit.chiefComplaint || '未记录'}`,
-      `现病史：${visit.presentIllness || '未记录'}`,
-    ].join('；');
-  }).join('\n');
-}
-
-function buildMedicationSummary(medications: string[]): string {
-  return medications.length > 0 ? medications.join('、') : '当前有效库存中未匹配到历史续方药品';
 }
 
 function isPatientFactHistory(value: string, candidate: ChronicRefillCandidate): boolean {
@@ -108,21 +106,30 @@ function normalizeChronicRefillHealthEducation(value: unknown, fallback: string)
   if (/(?:注意休息|1\s*周内复诊|一\s*周内复诊|上级医院进一步(?:检查|治疗|诊治))/u.test(text)) {
     return fallback;
   }
-  return text;
+  return Array.from(text).slice(0, 160).join('').replace(/[，,；;：:\s]+$/u, '');
 }
 
-function normalizeMedicineRecommendation(value: unknown): ChronicRefillMedicineInput | null {
+function normalizeMedicineRecommendation(
+  value: unknown,
+  inventoryByRef: ReadonlyMap<string, AvailableMedicineInventoryCatalogItem>,
+): ChronicRefillMedicineInput | null {
   if (typeof value === 'string') {
     return value.trim() || null;
   }
   if (!value || typeof value !== 'object') return null;
   const source = value as Record<string, unknown>;
-  const name = typeof source.name === 'string' ? source.name.trim() : '';
+  const inventoryRef = typeof source.ref === 'string' ? source.ref.trim() : '';
+  const referencedInventory = inventoryRef ? inventoryByRef.get(inventoryRef) : undefined;
+  const name = referencedInventory?.productName
+    || (typeof source.name === 'string' ? source.name.trim() : '');
   if (!name) return null;
 
-  const result: ChronicRefillMedicineRecommendation = { name };
+  const result: ChronicRefillMedicineRecommendation = {
+    name,
+    ...(referencedInventory?.spec ? { spec: referencedInventory.spec } : {}),
+  };
   const textFields: Array<keyof Omit<ChronicRefillMedicineRecommendation, 'name'>> = [
-    'spec',
+    ...(referencedInventory ? [] : ['spec'] as const),
     'targetDose',
     'targetDoseUnit',
     'frequency',
@@ -170,6 +177,40 @@ function buildHistoricalMedicationNames(candidate: ChronicRefillCandidate): stri
       .map(standardizeMedicineName)
       .filter(Boolean),
   ));
+}
+
+function isMedicationRecommendationInScope(
+  recommendation: ChronicRefillMedicineInput,
+  candidate: ChronicRefillCandidate,
+): boolean {
+  const name = typeof recommendation === 'string' ? recommendation : recommendation.name;
+  const normalizedName = standardizeMedicineName(name).replace(/\s+/gu, '');
+  if (!normalizedName) return false;
+  const isAmbiguousHistoricalMedication = (candidate.medicationAttributions || []).some((item) => (
+    standardizeMedicineName(item.medication.name).replace(/\s+/gu, '') === normalizedName
+  ));
+  if (!isAmbiguousHistoricalMedication) return true;
+  return candidate.medications.some((item) => (
+    standardizeMedicineName(item).replace(/\s+/gu, '') === normalizedName
+  ));
+}
+
+function buildInventoryCandidateContext(candidate: ChronicRefillCandidate): {
+  medications: string[];
+  medicationOrders: NonNullable<ChronicRefillCandidate['medicationOrders']>;
+} {
+  return {
+    medications: Array.from(new Set([
+      ...candidate.medications,
+      ...(candidate.medicationAttributions || []).map((item) => item.medication.name),
+    ].filter(Boolean))),
+    medicationOrders: [
+      ...(candidate.medicationOrders || []),
+      ...(candidate.medicationAttributions || [])
+        .filter((item) => item.source === 'structured')
+        .map((item) => item.medication),
+    ],
+  };
 }
 
 function buildChronicPastMedicalHistory(patient: AppPatient, candidate: ChronicRefillCandidate): string {
@@ -222,27 +263,33 @@ function normalizeDraft(
   patient: AppPatient,
   candidate: ChronicRefillCandidate,
   availableMedications: string[],
+  inventoryByRef: ReadonlyMap<string, AvailableMedicineInventoryCatalogItem>,
 ): NormalizedChronicRefillDraft {
   const fallback = fallbackDraft(patient, candidate, availableMedications);
   const chiefComplaint = normalizeGeneratedClinicalRecordNarrative(
     value.chiefComplaint,
     'chiefComplaint',
   ).text;
-  const historyOfPresentIllness = normalizeGeneratedClinicalRecordNarrative(
-    value.historyOfPresentIllness,
-    'historyOfPresentIllness',
-  ).text;
+  const historyOfPresentIllness = normalizeChronicRefillHistoryOfPresentIllness(
+    normalizeGeneratedClinicalRecordNarrative(
+      value.historyOfPresentIllness,
+      'historyOfPresentIllness',
+    ).text,
+  );
   const healthEducation = normalizeGeneratedClinicalRecordNarrative(
     value.healthEducation,
     'precautions',
   ).text;
   const recommendedMedicines = Array.isArray(value.recommendedMedicines)
     ? value.recommendedMedicines
-      .map(normalizeMedicineRecommendation)
+      .map((item) => normalizeMedicineRecommendation(item, inventoryByRef))
       .filter((item): item is ChronicRefillMedicineInput => Boolean(item))
+      .filter((item) => isMedicationRecommendationInScope(item, candidate))
     : [];
   return {
-    physicalExamSuggestions: normalizeClinicalRecordFactSuggestions({ items: value.physicalExamSuggestions }).filter((item) => item.field === 'physicalExam'),
+    physicalExamSuggestions: normalizeClinicalRecordFactSuggestions({ items: value.physicalExamSuggestions })
+      .filter((item) => item.field === 'physicalExam')
+      .slice(0, 2),
     chiefComplaint: chiefComplaint.length >= 6
       && /复诊|续方|配药/u.test(chiefComplaint)
       && candidate.diagnoses.every((diagnosis) => chiefComplaint.includes(diagnosis))
@@ -294,6 +341,9 @@ function buildChronicRefillClinicalResult(
     chiefComplaint: draft.chiefComplaint, historyOfPresentIllness: draft.historyOfPresentIllness,
     pastMedicalHistory: draft.pastMedicalHistory, precautions: draft.healthEducation,
     diagnosisNames: candidate.diagnoses, chronicFollowUp: true,
+    patientGender: getPatientContextGenderText(patient),
+    menstrualHistory: getPatientContextMenstrualHistory(patient),
+    maritalReproductiveHistory: getPatientContextMaritalReproductiveHistory(patient),
   });
   const factSuggestions = completePhysicalExamSuggestions(outpatientRecord, candidate.diagnoses, draft.physicalExamSuggestions);
   return {
@@ -327,14 +377,18 @@ export async function generateChronicRefillRecord(
   candidate: ChronicRefillCandidate,
   options?: ChronicRefillRecordGenerationOptions,
 ): Promise<ClinicalResultInput> {
-  let draft = fallbackDraft(patient, candidate, []);
-  options?.onPartial?.(buildChronicRefillClinicalResult(patient, candidate, draft, [], {
+  const timing = options?.timing || chronicRefillTimingTracker.get(options?.sessionId);
+  const baseCandidate = candidate;
+  let resolvedCandidate = baseCandidate;
+  let draft = fallbackDraft(patient, resolvedCandidate, []);
+  options?.onPartial?.(buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, [], {
     status: 'streaming',
     readySections: ['record_core', 'history_context', 'diagnoses', 'review_plan'],
     stage: 'preparing-context',
     message: '已整理历史病历，正在读取院内药品',
   }));
 
+  const endInventory = timing?.span('inventory_context_loading');
   const inventoryContext = await loadAvailableMedicineInventoryContext().catch((error) => {
     console.warn('[ChronicRefill] Failed to load available inventory, no refill medicine will be preselected', error);
     return {
@@ -344,47 +398,91 @@ export async function generateChronicRefillRecord(
       staleStoreCount: 0,
     };
   });
+  endInventory?.(inventoryContext.items.length);
+
+  const endInitialTreatments = timing?.span('initial_inventory_matching');
   const initialTreatments = buildChronicRefillInventoryTreatments(
-    candidate.medications,
+    baseCandidate.medications,
     inventoryContext.items,
     standardizeMedicineName,
     {
-      historicalMedicationOrders: candidate.medicationOrders,
-      prescriptionHistoryVisits: candidate.prescriptionHistoryVisits || candidate.chronicVisits,
+      historicalMedicationOrders: baseCandidate.medicationOrders,
+      prescriptionHistoryVisits: baseCandidate.prescriptionHistoryVisits || baseCandidate.chronicVisits,
     },
   );
   const availableMedicationNames = initialTreatments
     .filter((item) => item.matchStatus === 'exact')
     .map((item) => item.name);
-  draft = fallbackDraft(patient, candidate, availableMedicationNames);
+  endInitialTreatments?.(availableMedicationNames.length);
+
+  draft = fallbackDraft(patient, resolvedCandidate, availableMedicationNames);
   options?.onProgress?.('generating-content');
-  options?.onPartial?.(buildChronicRefillClinicalResult(patient, candidate, draft, [], {
+  options?.onPartial?.(buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, [], {
     status: 'streaming',
     readySections: ['record_core', 'history_context', 'diagnoses', 'review_plan'],
     message: '病历基础内容已就绪，正在生成复诊核查与用药方案',
   }));
 
+  const endPromptContextBuild = timing?.span('prompt_context_build');
+  const inventoryCandidateContext = buildInventoryCandidateContext(baseCandidate);
+  const inventoryCandidateTreatments = buildChronicRefillInventoryTreatments(
+    inventoryCandidateContext.medications,
+    inventoryContext.items,
+    standardizeMedicineName,
+    {
+      historicalMedicationOrders: inventoryCandidateContext.medicationOrders,
+      prescriptionHistoryVisits: baseCandidate.prescriptionHistoryVisits || baseCandidate.chronicVisits,
+    },
+  );
   const exactInventoryIds = new Set(
-    initialTreatments
+    inventoryCandidateTreatments
       .map((item) => item.matchedItem?.id)
       .filter((id): id is string => Boolean(id)),
   );
-  const inventoryPromptContext = candidate.medications.length > 0
-    ? formatAvailableMedicineInventoryPrompt(
-      inventoryContext.items.filter((item) => exactInventoryIds.has(item.productId)),
-    )
-    : inventoryContext.promptContext;
+  const useScopedInventoryPrompt = inventoryCandidateContext.medications.length > 0;
+  const inventoryPromptItems = useScopedInventoryPrompt
+    ? inventoryContext.items.filter((item) => exactInventoryIds.has(item.productId))
+    : inventoryContext.items;
+  const inventoryPromptContext = buildChronicRefillInventoryPromptContext(inventoryPromptItems);
+  const medicationScopeContext = buildChronicRefillMedicationScopePromptContext(baseCandidate);
+  const hasMedicationScope = medicationScopeContext.itemCount > 0;
+  const historyEvidence = buildCompactChronicRefillHistoryEvidence(baseCandidate);
+  timing?.mark(
+    useScopedInventoryPrompt ? 'inventory_prompt_scoped' : 'inventory_prompt_full',
+    inventoryPromptItems.length,
+  );
+  timing?.mark('inventory_prompt_chars', inventoryPromptContext.prompt.length);
+  timing?.mark('history_evidence_chars', historyEvidence.length);
+  timing?.mark('medication_scope_items', medicationScopeContext.itemCount);
+  timing?.mark('medication_scope_groups', medicationScopeContext.groupCount);
+  endPromptContextBuild?.(
+    inventoryPromptContext.prompt.length + medicationScopeContext.prompt.length + historyEvidence.length,
+  );
   const rawDraft: ChronicRefillDraft = { ...draft };
   const streamAccumulator = createChronicRefillRecordStreamAccumulator(rawDraft);
   let rawOutput = '';
   let receivedRecommendedMedicines = false;
 
+  const getResolvedAvailableMedicationNames = (): string[] => buildChronicRefillInventoryTreatments(
+    resolvedCandidate.medications,
+    inventoryContext.items,
+    standardizeMedicineName,
+    {
+      historicalMedicationOrders: resolvedCandidate.medicationOrders,
+      prescriptionHistoryVisits: resolvedCandidate.prescriptionHistoryVisits || resolvedCandidate.chronicVisits,
+    },
+  )
+    .filter((item) => item.matchStatus === 'exact')
+    .map((item) => item.name);
+
   const emitStreamPartial = (): void => {
+    const resolvedAvailableMedicationNames = getResolvedAvailableMedicationNames();
     draft = normalizeDraft(
       streamAccumulator.draft,
       patient,
-      candidate,
-      availableMedicationNames,
+      resolvedCandidate,
+      resolvedAvailableMedicationNames,
+      inventoryPromptContext.byRef,
     );
     receivedRecommendedMedicines = streamAccumulator.readySections.includes('recommended_medicines');
     const partialTreatments = receivedRecommendedMedicines
@@ -393,15 +491,15 @@ export async function generateChronicRefillRecord(
         inventoryContext.items,
         standardizeMedicineName,
         {
-          historicalMedications: candidate.medications,
-          historicalMedicationOrders: candidate.medicationOrders,
-          prescriptionHistoryVisits: candidate.prescriptionHistoryVisits || candidate.chronicVisits,
+          historicalMedications: resolvedCandidate.medications,
+          historicalMedicationOrders: resolvedCandidate.medicationOrders,
+          prescriptionHistoryVisits: resolvedCandidate.prescriptionHistoryVisits || resolvedCandidate.chronicVisits,
         },
       )
       : [];
     options?.onPartial?.(buildChronicRefillClinicalResult(
       patient,
-      candidate,
+      resolvedCandidate,
       draft,
       partialTreatments,
       {
@@ -414,71 +512,93 @@ export async function generateChronicRefillRecord(
     ));
   };
   const streamParser = createChronicRefillRecordStreamParser((event) => {
+    const sectionSize = JSON.stringify(event.data)?.length || 0;
+    timing?.mark(`section_${event.event}`, sectionSize);
     applyChronicRefillRecordStreamEvent(streamAccumulator, event);
+    if (event.event === 'medication_scope') {
+      resolvedCandidate = applyChronicRefillMedicationScope(
+        baseCandidate,
+        medicationScopeContext.decode(event.data),
+      );
+    }
     if (event.event !== 'done') emitStreamPartial();
   });
 
+  const endRequestBuild = timing?.span('llm_request_build');
+  const streamOrder = hasMedicationScope
+    ? 'record_core、medication_scope、review_plan、recommended_medicines、record_extra、done'
+    : 'record_core、review_plan、recommended_medicines、record_extra、done';
+  const patientTraits = [
+    getPatientContextGenderText(patient),
+    getPatientContextAgeText(patient),
+  ].filter(Boolean).join('，') || '未记录';
+  const messages: Parameters<typeof chatStream>[0] = [
+    {
+      role: 'system',
+      content: [
+        '你是基层门诊慢病复诊配药助手。病历核心、通用核查骨架和基础查体已由程序确定性生成；你只返回增量决策。',
+        '慢病范围已由医生确认。所有核查、用药、健康指导和查体补充只能围绕已选慢病，不得把历史共病扩入本次范围，也不得编造当前症状、监测结果、生命体征、依从性、控制程度或不良反应。',
+        ...(hasMedicationScope ? [
+          'medication_scope 输入使用请求内短引用。只返回与某个候选慢病有明确直接治疗关系、且置信度至少为medium的药品；未返回即视为低置信或未归类。只能使用输入中的M/C引用，不解释。',
+          'medication_scope.data格式为 {"accepted":[["M1","C1","h|m"]]}，第三项h=high、m=medium。只允许归入selected中的慢病。',
+        ] : []),
+        'recommended_medicines只生成药品，不生成检查、检验或处置。库存药必须返回库存ref，由程序恢复名称和规格；无合适库存时才返回规范通用名name。',
+        '每个药品结合已选慢病、历史处方摘要和库存规格给出临床目标一次剂量、频次和用法。包装规格不是一次剂量；不得统一写成一次1单位。',
+        '药品字段只允许ref或name、targetDose、targetDoseUnit、frequency、frequencyKey、route、routeKey、reason。不得输出dosage、dosageUnit、days、totalQty、totalUnit；这些由程序从可靠历史和药品详情计算。reason不超过40字，只写临床依据，不写剂量或包装算术。',
+        'review_plan只补充确定性核查骨架。patch id只允许control-status或current-symptoms；最多2项，每项只含id、question、description、basis，文本简短且不写处方属性。没有更具体内容时patches为空。',
+        'record_extra.healthEducation不超过160字，包含与已选慢病相关的规律用药、家庭监测、饮食和复诊提醒。不得写“注意休息”“1周内复诊”或笼统建议。',
+        '基础查体由程序补齐。physicalExamSuggestions最多2项，只补基础库之外、与已选慢病直接相关的重点专科查体；每项包含field="physicalExam"、question、negativeRecordText、rationale、priority。不得生成测量值，不得把候选当作当前事实或用药依据。没有必要补充时返回空数组。',
+        '逐行输出NDJSON，每行一个完整JSON对象，不输出markdown、解释或数组外壳。',
+        `严格按${streamOrder}顺序输出。`,
+        `record_core固定为{"event":"record_core","data":{}}。review_plan.data格式为{"patches":[{"id":"control-status","question":"...","description":"...","basis":"..."}]}。recommended_medicines.data为药品数组。record_extra.data包含healthEducation和physicalExamSuggestions。done.data为空对象。`,
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        `患者特征：${patientTraits}`,
+        `过敏史：${getPatientContextAllergyHistory(patient) || '未记录'}`,
+        `已选慢病：${baseCandidate.diagnoses.join('、')}`,
+        '历史处方摘要：',
+        historyEvidence,
+        ...(hasMedicationScope ? [
+          `待归类药品：${medicationScopeContext.prompt}`,
+        ] : []),
+        inventoryPromptContext.prompt,
+      ].join('\n'),
+    },
+  ];
+  const llmPromptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  timing?.mark('llm_prompt_chars', llmPromptChars);
+  endRequestBuild?.(llmPromptChars);
+
+  let streamChunkCount = 0;
+  let previousChunkAt: number | undefined;
+  let maxChunkGapMs = 0;
+  let streamMetricsRecorded = false;
+  const recordStreamMetrics = () => {
+    if (streamMetricsRecorded) return;
+    streamMetricsRecorded = true;
+    timing?.mark('llm_output_chars', rawOutput.length);
+    timing?.mark('llm_stream_chunks', streamChunkCount);
+    timing?.measure('llm_chunk_gap_max', maxChunkGapMs, streamChunkCount);
+  };
+  const endLlmStream = timing?.span('llm_stream_total');
+  timing?.mark('llm_stream_started');
   try {
-    await chatStream([
-      {
-        role: 'system',
-        content: [
-          '你是基层门诊慢性病复诊配药病历助手。',
-          PHYSICAL_EXAM_GUIDANCE_PROMPT,
-          '本次查体候选仅围绕已选慢病，写入record_extra.data.physicalExamSuggestions数组，field固定physicalExam；每项包含question、negativeRecordText、rationale、priority。没有本次明确查体依据，不得把历史查体作为当前事实；候选不能作为本次推荐药品依据。',
-          '慢病范围已由医生确认；主诉、现病史、诊断和推荐用药只能围绕已选慢病，不得加入患者其他慢病。',
-          '既往史不受本次配药范围限制。pastMedicalHistory 原样使用提供的患者既往史基线；其他历史慢病仅为既往事实，不得加入本次主诉、现病史、诊断、reviewPlan、健康指导或推荐药品。',
-          '根据患者近90天就诊中的慢病就诊记录和配药信息生成本次可编辑病历草稿，不得编造当前症状、生命体征、检查结果或病情稳定程度。历史处方仅用于当前用药史、用药推荐与复诊核查。',
-          '主诉应写明具体慢病和“复诊配药”目的。',
-          '本次尚未完成当前用药、依从性、控制情况、不适和不良反应核查；historyOfPresentIllness只能写医生已确认的慢病诊断和本次复诊配药目的，不得提前写规律服药、控制平稳、无不适或监测结果。',
-          'historyOfPresentIllness禁止写入任何历史药名、规格、剂量、频次、用法、疗程、总量，也禁止写入年龄、性别、当前库存、可续方药品、可参考药品、推荐药品、待医生核实或后续治疗方案；历史规范药名只能写入currentMedicationHistory，完整处方信息只能用于recommendedMedicines和reviewPlan。',
-          '正式病历字段不得写“待医生补充完善、建议询问、信息不足、未提供相关信息”等工作流提示；也不得写“对话中未提及、问诊中未说明、资料中未记录”等信息来源或缺失状态。没有有效临床事实时保持字段为空。currentMedicationHistory 的历史用药待核实占位是唯一例外。',
-          '禁止使用“未提供新发不适信息”等近义表达作为主诉或现病史主体，也不得把未提及自动改写为“无不适”或“病情稳定”。',
-          '药品按“库存同品 → 库存等效药 → 规范通用名兜底”选择；无库存通用名仅供医生参考。',
-          '若未获取到可确认的历史用药，仍需根据具体慢病诊断、患者信息和当前有效库存推荐合理的候选药品，不得返回空方案。',
-          '未获取到历史用药时，currentMedicationHistory只能写“历史用药方案待医生核实”等待核实表述，不得把本次推荐药品伪装成既往用药。',
-          'recommendedMedicines 必须返回结构化药品对象，不生成检查、检验或处置。',
-          '每个药品必须结合候选慢病、历史用药和库存规格给出合理的目标临床一次剂量、频次和用法；不得把包装规格直接当成一次剂量，也不得把所有药品统一写成一次1剂量单位。',
-          '目标剂量只写targetDose/targetDoseUnit，例如500mg写为targetDose="500"、targetDoseUnit="mg"；dosage/dosageUnit必须留空，由程序结合PHIS药品详情换算。frequencyKey优先使用QD/BID/TID/QID，routeKey口服优先使用PO。',
-          'days、totalQty、totalUnit必须留空；用药天数只允许程序沿用可靠关联的历史处方，包装总量由程序根据最终一次剂量、频次、天数和库存包装规格计算并校验库存。',
-          'reason只说明诊断、历史用药和适应证等临床推荐依据，不得复述或计算单次剂量、频次、疗程、总量和包装数量。',
-          '同一次返回reviewPlan，动态生成3到5个最少且必要的复诊核查项，覆盖当前实际用药、依从性、病情或监测控制、疾病相关不适和药物不良反应。',
-          'reviewPlan每项提供2到4个互斥选项、recommendedValue、confidence、evidence、basis和priority；推荐只用于界面提示，不代表医生已确认。',
-          '每个选项提供recordText；未知/未评估/未询问选项recordText必须为空。会影响续方安全的选项（用药调整或停用、控制波动或欠佳、存在相关不适或不良反应）必须设置treatmentReviewRequired=true。',
-          'priority只允许critical或general；当前用药、控制情况、相关不适和不良反应默认属于critical。',
-          'healthEducation必须针对患者的具体慢性病诊断和病情，给出具体的规律用药注意事项、自我指标监测、饮食调养和复诊提醒等个性化健康处方，严禁写入通用的“注意休息”、“1周内复诊”或“必要时上级医院进一步治疗”。',
-          '必须逐行输出 NDJSON；每行只包含一个完整 JSON 对象，不要输出数组外壳、markdown、代码块或解释。',
-          '严格按 record_core、review_plan、recommended_medicines、record_extra、done 的顺序输出。',
-          '格式为 {"event":"事件名","data":对应数据}。record_core.data包含chiefComplaint、historyOfPresentIllness、pastMedicalHistory、currentMedicationHistory；review_plan.data为完整reviewPlan；recommended_medicines.data为药品数组；record_extra.data包含healthEducation和physicalExamSuggestions；done.data可为空对象。',
-        ].join('\n'),
-      },
-      {
-        role: 'user',
-        content: [
-          `患者：${getPatientContextName(patient)}，${getPatientContextGenderText(patient)}，${getPatientContextAgeText(patient)}`,
-          `过敏史：${getPatientContextAllergyHistory(patient) || '未记录'}`,
-          `患者既往史基线（仅用于pastMedicalHistory）：${draft.pastMedicalHistory}`,
-          `医生已确认的本次慢病：${candidate.diagnoses.join('、')}`,
-          `慢病分类（仅用于场景识别）：${candidate.diagnosisGroups.join('、')}`,
-          `历史慢病配药：${candidate.medicationEvidenceText}`,
-          `当前库存内可续方药品：${buildMedicationSummary(availableMedicationNames)}`,
-          inventoryPromptContext,
-          '近90天内的慢病就诊依据：',
-          buildHistoryEvidence(candidate),
-          [
-            '请生成字段：chiefComplaint、historyOfPresentIllness、pastMedicalHistory、currentMedicationHistory、treatmentPlan、healthEducation、recommendedMedicines、reviewPlan。',
-            'recommendedMedicines格式：',
-            '[{"name":"库存中的完整药品名称","spec":"库存规格","targetDose":"目标临床一次剂量数值","targetDoseUnit":"mg/g/ml","frequency":"频次文本","frequencyKey":"频次编码","route":"用法文本","routeKey":"用法编码","days":"","reason":"推荐依据"}]',
-            'reviewPlan格式：',
-            '{"summary":"核查提示","items":[{"id":"stable-id","question":"核查问题","description":"简短说明","options":[{"value":"值","label":"选项","recordText":"确认后写入的事实","treatmentReviewRequired":false}],"recommendedValue":"值","confidence":"high|medium|low","evidence":"current-explicit|historical-consistent|model-inference|unknown","basis":"推荐依据","priority":"critical|general"}]}',
-          ].join('\n'),
-        ].join('\n'),
-      },
-    ], (chunk) => {
+    await chatStream(messages, (chunk) => {
+      const chunkAt = performance.now();
+      if (previousChunkAt !== undefined) {
+        maxChunkGapMs = Math.max(maxChunkGapMs, chunkAt - previousChunkAt);
+      }
+      previousChunkAt = chunkAt;
+      streamChunkCount += 1;
+      timing?.mark('llm_first_chunk');
       rawOutput += chunk;
       streamParser.push(chunk);
     }, undefined, undefined, undefined, {
       configProfile: 'fast',
+      temperature: 0,
       traceContext: {
         scene: 'reception-chronic-refill-record',
         sourceModule: 'reception_risk',
@@ -488,43 +608,61 @@ export async function generateChronicRefillRecord(
       },
     });
     streamParser.flush();
+    recordStreamMetrics();
+    timing?.mark('llm_stream_completed');
+    endLlmStream?.();
     if (streamAccumulator.eventCount === 0 && rawOutput.trim()) {
+      const parsedDraft = parseLLMJson<ChronicRefillDraft>(rawOutput);
+      if (parsedDraft.medicationScope !== undefined) {
+        resolvedCandidate = applyChronicRefillMedicationScope(
+          baseCandidate,
+          medicationScopeContext.decode(parsedDraft.medicationScope),
+        );
+      }
       draft = normalizeDraft(
-        parseLLMJson<ChronicRefillDraft>(rawOutput),
+        parsedDraft,
         patient,
-        candidate,
-        availableMedicationNames,
+        resolvedCandidate,
+        getResolvedAvailableMedicationNames(),
+        inventoryPromptContext.byRef,
       );
       receivedRecommendedMedicines = true;
     } else {
       draft = normalizeDraft(
         streamAccumulator.draft,
         patient,
-        candidate,
-        availableMedicationNames,
+        resolvedCandidate,
+        getResolvedAvailableMedicationNames(),
+        inventoryPromptContext.byRef,
       );
     }
   } catch (error) {
     streamParser.flush();
+    recordStreamMetrics();
+    timing?.mark('llm_stream_completed');
+    endLlmStream?.();
     console.warn('[ChronicRefill] Streaming draft stopped, retaining available partial result', error);
     draft = normalizeDraft(
       streamAccumulator.draft,
       patient,
-      candidate,
-      availableMedicationNames,
+      resolvedCandidate,
+      getResolvedAvailableMedicationNames(),
+      inventoryPromptContext.byRef,
     );
   }
   options?.onProgress?.('finalizing-result');
+  const endFinalTreatments = timing?.span('final_inventory_treatments');
   const treatments = buildChronicRefillInventoryTreatments(
     draft.recommendedMedicines,
     inventoryContext.items,
     standardizeMedicineName,
     {
-      historicalMedications: candidate.medications,
-      historicalMedicationOrders: candidate.medicationOrders,
-      prescriptionHistoryVisits: candidate.prescriptionHistoryVisits || candidate.chronicVisits,
+      historicalMedications: resolvedCandidate.medications,
+      historicalMedicationOrders: resolvedCandidate.medicationOrders,
+      prescriptionHistoryVisits: resolvedCandidate.prescriptionHistoryVisits || resolvedCandidate.chronicVisits,
     },
   );
+  endFinalTreatments?.(treatments.length);
 
-  return buildChronicRefillClinicalResult(patient, candidate, draft, treatments);
+  return buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, treatments);
 }
