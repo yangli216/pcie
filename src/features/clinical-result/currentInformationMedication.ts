@@ -84,10 +84,11 @@ patientRecord 为 HIS 病史，currentEncounter 为本次问诊；两者须综�
 ${symptomaticOnly ? '当前为症状性工作诊断，只允许 purpose=symptomatic 的对症方案；病因治疗一律暂缓，不得以推测的细菌感染等病因推荐抗菌药。' : '可以推荐现有信息已支持的病因治疗或对症方案，不得因缺少其他检查而暂停所有药品。'}
 逐药核对过敏、禁忌、合并症、相互作用及年龄/体重适用剂量，不能套用成人剂量。适应证、安全性或剂量仍依赖缺失的关键检验/检查或其他信息时 eligibility=requires_evidence，并列出 missingEvidence，不提供该药的剂量等处方字段。其他已有充分依据的药品可 eligibility=supported。
 若需紧急处置/转诊，disposition=urgent_referral，medicines=[]，summary 明确说明。否则 disposition=medication_options。允许零药品，不为满足数量凑药。
+summary 只说明评估结论或无药原因，不得出现任何具体药品名称、规格、剂量、频次或用法。所有 eligibility=supported 的可推荐药品必须逐项放入 medicines 数组，禁止只在 summary 中用自然语言列举药品；没有 supported 药品时不得在 summary 中写“可考虑”某种具体药品。
 本次输出下述 JSON 对象，取代普通用药请求的数组格式；不输出 Markdown：
 {"summary":"简洁说明本次可推荐范围或无药原因","disposition":"medication_options|urgent_referral","medicines":[{"type":"medicine","name":"规范药名","purpose":"symptomatic|etiologic","eligibility":"supported|requires_evidence","basis":"引用本次已提供的具体诊疗依据，不能编造结果","missingEvidence":[],"reason":"推荐理由或暂缓原因","spec":"制剂规格","targetDose":"一次剂量数值","targetDoseUnit":"剂量单位","frequency":"标准频次","frequencyKey":"","usage":"用法","usageKey":"","days":"疗程天数"}]}
 supported 必须有具体 basis、reason 且 missingEvidence 为空；requires_evidence 必须明确缺少的依据。不给出 totalQty/totalUnit，不设置选中状态。`,
-    buildUserPrompt: (params) => `${base.buildUserPrompt(params)}\n\n本次为医生主动请求的现有信息用药评估。请按 system 中的对象格式返回 summary、disposition、medicines；不得使用普通数组响应。`,
+    buildUserPrompt: (params) => `${base.buildUserPrompt(params)}\n\n本次为基于现有信息的用药评估。请按 system 中的对象格式返回 summary、disposition、medicines；不得使用普通数组响应，不得在 summary 中列举具体药品，所有可推荐药品必须进入 medicines。`,
   };
 }
 

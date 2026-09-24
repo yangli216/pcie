@@ -1557,13 +1557,13 @@ describe('useWindowManagement', () => {
 **最后更新**: 2026-02-10
 
 
-### 医生主动发起的现有信息用药评估
+### 现有信息用药评估
 
 用药评估的病例快照按来源同时保留 HIS 和本次问诊的过敏史、当前用药史，未知占位内容不得遮蔽另一来源的明确事实；来源冲突时不得自动认定无过敏或已停药。
 
-`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供 Prompt Builder、逐药失败关闭的响应校验及药品分支增量合并；现有 `voiceTreatmentRecommendationGeneration.ts` 在显式请求时只调用药品分支，以 `temperature=0` 复用签名 LLM 网关、库存匹配与定稿流程，并在库存上下文就绪和模型返回时上报阶段。普通自动请求继续原数组协议，显式请求使用单次结构化评估对象；关键证据缺失项和症状性诊断下的病因治疗项进入只读暂缓列表，无法识别的单项被丢弃但不拖垮同一响应的有效候选，根对象无法识别或紧急处置结论仍整体不产出药品。
+`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、自动启动资格、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供 Prompt Builder、逐药失败关闭的响应校验及药品分支增量合并；现有 `voiceTreatmentRecommendationGeneration.ts` 在现有信息请求时只调用药品分支，以 `temperature=0` 复用签名 LLM 网关、库存匹配与定稿流程，并在库存上下文就绪和模型返回时上报阶段。普通诊疗路由请求继续原数组协议，现有信息请求使用单次结构化评估对象；可推荐药品必须进入 `medicines` 数组，摘要不得以药名或处方参数代替结构化药品。关键证据缺失项和症状性诊断下的病因治疗项进入只读暂缓列表，无法识别的单项被丢弃但不拖垮同一响应的有效候选，根对象无法识别或紧急处置结论仍整体不产出药品。
 
-共享结果页仅注入病例快照、生成与审计副作用，新增能力不进入 App.vue 或 ConsultationPage.vue。不改原 recommendation plan 或 HIS Bridge 契约，不新增 store；检查建议与医生已有药品保持原样。入口稳定可见后异步预热当前药房库存上下文，点击请求复用库存缓存与 in-flight 合并。结构化临床结论解析成功后立即写入局部只读 assessment 并进入 `finalizing`，新增药品仍须在完整定稿和库存检查完成后原子追加且默认未选，医生选择与回写继续走既有门禁。患者/就诊/轮次/诊断/病例变化同时受原请求序列和新上下文身份校验，迟到阶段、结论和药品均不能覆盖新场景；错误不清空旧方案或已形成的只读结论，暂缓项不进入缓存药品和 orderList。一次请求的准备、模型评估、定稿和总耗时由结果页按数值阶段采集并通过 operation log 上报，只记录耗时、数量和技术状态，不记录病例文本。
+共享结果页仅注入病例快照、生成与审计副作用，新增能力不进入 App.vue 或 ConsultationPage.vue。不改原 recommendation plan 或 HIS Bridge 契约，不新增 store；检查建议与医生已有药品保持原样。入口稳定可见后异步预热当前药房库存上下文，点击请求复用库存缓存与 in-flight 合并。普通语音只有在结构化流完成、选中正式疾病诊断、`recommendNow` 为空、药品明确暂缓且当前没有任何已有治疗项目时，才按患者、就诊、轮次和主诊断自动尝试一次；自动失败不重放，症状性工作诊断及其他渠道继续只允许医生主动请求。结构化临床结论解析成功后立即写入局部只读 assessment 并进入 `finalizing`，新增药品仍须在完整定稿和库存检查完成后原子追加且默认未选，医生选择与回写继续走既有门禁。患者/就诊/轮次/诊断/病例变化同时受原请求序列和新上下文身份校验，迟到阶段、结论和药品均不能覆盖新场景；错误不清空旧方案或已形成的只读结论，暂缓项不进入缓存药品和 orderList。一次请求的准备、模型评估、定稿和总耗时由结果页按数值阶段采集并通过 operation log 上报，只记录耗时、数量和技术状态，不记录病例文本；自动启动与医生点击使用不同动作来源。
 
 ### 场景查体项目库与证据隔离
 

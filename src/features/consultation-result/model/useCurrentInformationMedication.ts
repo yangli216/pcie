@@ -10,7 +10,10 @@ export type CurrentInformationMedicationPhase =
   | 'completed'
   | 'failed';
 
+export type CurrentInformationMedicationRequestSource = 'doctor' | 'automatic';
+
 export interface CurrentInformationMedicationRequest {
+  source: CurrentInformationMedicationRequestSource;
   symptomaticOnly: boolean;
   isCurrent: () => boolean;
   reportPhase: (phase: Extract<CurrentInformationMedicationPhase, 'preparing' | 'assessing' | 'finalizing'>) => void;
@@ -23,15 +26,18 @@ export interface CurrentInformationMedicationContext {
   hasSelectedDiagnosis: boolean;
   symptomaticOnly: boolean;
   plan?: ClinicalResultRecommendationPlan;
+  hasTreatments: boolean;
   hasMedicines: boolean;
   blocked: boolean;
   allowTreatmentRefresh: boolean;
+  resultComplete: boolean;
+  automaticRequestKey: string;
 }
 
 export function useCurrentInformationMedication(options: {
   getContext: () => CurrentInformationMedicationContext;
   run: (request: CurrentInformationMedicationRequest) => Promise<boolean>;
-  onRequest: () => void;
+  onRequest: (source: CurrentInformationMedicationRequestSource) => void;
 }) {
   const phase = ref<CurrentInformationMedicationPhase>('idle');
   const error = ref('');
@@ -58,6 +64,20 @@ export function useCurrentInformationMedication(options: {
   const disabled = computed(() => context.value.blocked || pending.value || !eligible.value
     || assessment.value?.disposition === 'urgent_referral');
   const reason = computed(() => context.value.plan?.reason || '可基于当前病史、查体及已有结果评估用药。');
+  const automaticEligible = computed(() => (
+    context.value.channel === 'voice'
+    && context.value.resultComplete
+    && context.value.hasSelectedDiagnosis
+    && !context.value.symptomaticOnly
+    && context.value.allowTreatmentRefresh
+    && context.value.plan?.mode === 'diagnostic_first'
+    && context.value.plan.recommendNow.length === 0
+    && context.value.plan.defer.includes('medicine')
+    && !context.value.plan.skip.includes('medicine')
+    && !context.value.hasTreatments
+    && !context.value.hasMedicines
+  ));
+  const automaticAttempts = new Set<string>();
 
   watch(() => context.value.scopeKey, () => {
     sequence += 1;
@@ -66,7 +86,7 @@ export function useCurrentInformationMedication(options: {
     assessment.value = null;
   }, { flush: 'sync' });
 
-  async function request(): Promise<void> {
+  async function request(source: CurrentInformationMedicationRequestSource = 'doctor'): Promise<void> {
     if (!visible.value || disabled.value) return;
     const requestSequence = ++sequence;
     const scopeKey = context.value.scopeKey;
@@ -77,8 +97,9 @@ export function useCurrentInformationMedication(options: {
     error.value = '';
     let receivedAssessment = false;
     try {
-      options.onRequest();
+      options.onRequest(source);
       const succeeded = await options.run({
+        source,
         symptomaticOnly,
         isCurrent,
         reportPhase: (nextPhase) => {
@@ -100,6 +121,17 @@ export function useCurrentInformationMedication(options: {
       }
     }
   }
+
+  watch(
+    () => [context.value.automaticRequestKey, automaticEligible.value, context.value.blocked] as const,
+    ([automaticRequestKey, canRequestAutomatically, blocked]) => {
+      if (!automaticRequestKey || !canRequestAutomatically || blocked
+        || automaticAttempts.has(automaticRequestKey)) return;
+      automaticAttempts.add(automaticRequestKey);
+      void request('automatic');
+    },
+    { flush: 'post', immediate: true },
+  );
 
   return { visible, disabled, pending, phase, reason, assessment, error, request };
 }

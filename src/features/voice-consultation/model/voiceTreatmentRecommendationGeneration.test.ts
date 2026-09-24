@@ -62,7 +62,7 @@ describe('generateVoiceTreatmentRecommendations', () => {
         chiefComplaint: '咳嗽', clinicalContext: '过敏史和查体',
         // Deliberately include auxiliary types: the explicit action must isolate medicine.
         requestedTypes: ['medicine', 'lab_test', 'exam'],
-        currentInformationMedication: { symptomaticOnly: true },
+        currentInformationMedication: { symptomaticOnly: true, source: 'doctor' },
         explicitTreatments: [], pharmacies: [], consultationId: 'visit-1',
         normalize: (item) => item as never,
         onMedicationPhase: (phase) => { phases.push(phase); },

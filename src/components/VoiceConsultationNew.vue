@@ -649,15 +649,25 @@ const currentInformationMedication = useCurrentInformationMedication({
     symptomaticOnly: selectedDiagnosis.value?.diagnosisKind === 'symptom_working'
       || /^R\d/iu.test(selectedDiagnosis.value?.code || ''),
     plan: recommendationPolicy.value?.plan,
+    hasTreatments: treatments.value.length > 0,
     hasMedicines: treatments.value.some((item) => item.type === 'medicine'),
     blocked: isResultUnavailable.value || treatmentLoading.value || diagnosisLoading.value || isWritebackBusy.value,
     allowTreatmentRefresh: allowTreatmentRefresh.value,
+    resultComplete: props.intentResult?.generation?.status === 'complete',
+    automaticRequestKey: JSON.stringify([
+      resultChannel.value, patientAnchorId.value, getPatientContextVisitId(props.initialPatientData),
+      props.consultationRoundId, lastAppliedIntentKey.value, getDiagnosisIdentity(selectedDiagnosis.value),
+    ]),
   }),
   run: (request) => fetchAITreatment({ currentInformationMedication: request, requireAll: true, notifyOnError: false }),
-  onRequest: () => trackBusinessOperation({
-    module: 'consultation-result', action: 'request_current_information_medication',
-    operationName: 'request_current_information_medication',
-    title: '医生主动基于现有信息推荐用药', operationType: 'button_click',
+  onRequest: (source) => trackBusinessOperation({
+    module: 'consultation-result',
+    action: source === 'automatic'
+      ? 'auto_request_current_information_medication' : 'request_current_information_medication',
+    operationName: source === 'automatic'
+      ? 'auto_request_current_information_medication' : 'request_current_information_medication',
+    title: source === 'automatic' ? '普通语音空执行路由自动评估用药' : '医生主动基于现有信息推荐用药',
+    operationType: source === 'automatic' ? 'api_call' : 'button_click',
     sourceModule: `${resultChannel.value}_consultation_result`, success: true,
   }),
 });
@@ -1896,7 +1906,10 @@ async function fetchAITreatment(
       clinicalContext: options.currentInformationMedication
         ? currentMedicationClinicalContext.value : historyOfPresentIllness.value,
       currentInformationMedication: options.currentInformationMedication
-        ? { symptomaticOnly: options.currentInformationMedication.symptomaticOnly } : undefined,
+        ? {
+          symptomaticOnly: options.currentInformationMedication.symptomaticOnly,
+          source: options.currentInformationMedication.source,
+        } : undefined,
       requestedTypes,
       explicitTreatments: treatments.value.filter((item) => item.sourceType === 'explicit'),
       pharmacies: pharmacyOptions.value,

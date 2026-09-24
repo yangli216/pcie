@@ -5,6 +5,7 @@ import { explicitlyRequestsRestrictedMedicalItem } from '@/services/medicalCatal
 import type { PharmacyOption } from '@/services/his';
 import { PROMPTS } from '@/prompts';
 import type { TreatmentRecommendation } from '@/types/consultation';
+import type { CurrentInformationMedicationRequestSource } from '@features/consultation-result';
 import {
   alignMedicineRecommendationsToInventory,
   assessTreatmentCatalogMatch,
@@ -31,7 +32,10 @@ export interface VoiceTreatmentGenerationInput {
   diagnosisCode: string;
   chiefComplaint: string;
   clinicalContext: string;
-  currentInformationMedication?: { symptomaticOnly: boolean };
+  currentInformationMedication?: {
+    symptomaticOnly: boolean;
+    source: CurrentInformationMedicationRequestSource;
+  };
   requestedTypes: ClinicalResultRecommendationType[];
   explicitTreatments: TreatmentRecommendation[];
   pharmacies: PharmacyOption[];
@@ -97,7 +101,8 @@ export async function generateVoiceTreatmentRecommendations(
       }, input.currentInformationMedication ? {
         scene: 'current-information-medication',
         operationAction: 'assess_medication_with_current_information',
-        title: '医生主动基于现有信息评估用药',
+        title: input.currentInformationMedication.source === 'automatic'
+          ? '普通语音空执行路由自动评估用药' : '医生主动基于现有信息评估用药',
       } : undefined);
       const endModel = input.timing?.span('medicine_model');
       const response = await chat(

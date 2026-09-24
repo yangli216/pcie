@@ -176,5 +176,8 @@ describe('current information medication assessment', () => {
     expect(prompt.system).toContain('不能套用成人剂量');
     expect(prompt.system).toContain('只允许 purpose=symptomatic');
     expect(prompt.system).toContain('不表示患者拒绝检查');
+    expect(prompt.system).toContain('summary 只说明评估结论或无药原因');
+    expect(prompt.system).toContain('所有 eligibility=supported 的可推荐药品必须逐项放入 medicines 数组');
+    expect(user).toContain('不得在 summary 中列举具体药品');
   });
 });
