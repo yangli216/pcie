@@ -31,9 +31,15 @@ vi.mock('@features/clinical-result', async () => {
 });
 
 describe('generateChronicRefillRecord', () => {
-  it.each(['女性', '男性'])('retains applicable existing histories in initial and final chronic records for %s', async (gender) => {
+  it.each([
+    { gender: '女性', ageText: '35岁', expected: true },
+    { gender: '女性', ageText: '13岁', expected: false },
+    { gender: '女性', ageText: '60岁', expected: false },
+    { gender: '男性', ageText: '35岁', expected: false },
+  ])('retains applicable existing histories in chronic records for $gender $ageText', async ({ gender, ageText, expected }) => {
     const patient = buildPatientContext({ payload: {
       patientId: 'history-patient', visitId: 'history-visit', gender,
+      ageText,
       menstrualHistory: '周期28天，经期5天。', maritalReproductiveHistory: '已婚已育；目前未孕。',
     } })!;
     const candidate = assessChronicRefillCandidate({ patientId: 'history-patient', visits: [
@@ -43,8 +49,8 @@ describe('generateChronicRefillRecord', () => {
     const result = await generateChronicRefillRecord(patient, candidate, { onPartial: (record) => partials.push(record) });
     expect(partials.length).toBeGreaterThan(0);
     for (const record of [...partials, result]) {
-      expect(record.outpatientRecord?.menstrualHistory || '').toBe(gender === '女性' ? '周期28天，经期5天。' : '');
-      expect(record.outpatientRecord?.maritalReproductiveHistory || '').toBe(gender === '女性' ? '已婚已育；目前未孕。' : '');
+      expect(record.outpatientRecord?.menstrualHistory || '').toBe(expected ? '周期28天，经期5天。' : '');
+      expect(record.outpatientRecord?.maritalReproductiveHistory || '').toBe(expected ? '已婚已育；目前未孕。' : '');
     }
     expect(chatStream).toHaveBeenCalledTimes(1);
   });

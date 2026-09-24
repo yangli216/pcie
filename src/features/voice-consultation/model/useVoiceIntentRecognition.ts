@@ -21,6 +21,7 @@ import {
   mergeStructuredNegativeSymptoms,
   normalizeClinicalRecordFactSuggestions,
   completePhysicalExamSuggestions,
+  isFemaleHistoryEligible,
   normalizeGeneratedClinicalRecordNarrative,
   type ClinicalResultGenerationSection,
   type ClinicalResultInput,
@@ -907,9 +908,12 @@ export function useVoiceIntentRecognition() {
       const ctxPmh = cleanCtx(patientCtx?.pastMedicalHistory);
       const ctxMed = cleanCtx(patientCtx?.currentMedicationHistory);
       const ctxPersonal = cleanCtx(patientCtx?.personalHistory);
-      const isFemalePatient = /^(?:F|2|女)/iu.test((patientCtx?.gender || '').trim());
-      const ctxMenstrual = isFemalePatient ? cleanCtx(patientCtx?.menstrualHistory) : '';
-      const ctxMarital = isFemalePatient ? cleanCtx(patientCtx?.maritalReproductiveHistory) : '';
+      const includeFemaleHistory = isFemaleHistoryEligible({
+        gender: patientCtx?.gender,
+        ageText: patientCtx?.ageText,
+      });
+      const ctxMenstrual = includeFemaleHistory ? cleanCtx(patientCtx?.menstrualHistory) : '';
+      const ctxMarital = includeFemaleHistory ? cleanCtx(patientCtx?.maritalReproductiveHistory) : '';
       const ctxFamily = cleanCtx(patientCtx?.familyHistory);
       if (ctxAllergy || ctxPmh || ctxMed || ctxPersonal || ctxMenstrual || ctxMarital || ctxFamily) {
         patientContextLines.push('【患者已有档案信息】');
@@ -930,8 +934,8 @@ export function useVoiceIntentRecognition() {
         normalized.recordDraft.allergyHistory ||= ctxAllergy;
         normalized.recordDraft.currentMedicationHistory ||= ctxMed;
         normalized.recordDraft.personalHistory ||= ctxPersonal;
-        normalized.recordDraft.menstrualHistory = isFemalePatient ? normalized.recordDraft.menstrualHistory || ctxMenstrual : '';
-        normalized.recordDraft.maritalReproductiveHistory = isFemalePatient ? normalized.recordDraft.maritalReproductiveHistory || ctxMarital : '';
+        normalized.recordDraft.menstrualHistory = includeFemaleHistory ? normalized.recordDraft.menstrualHistory || ctxMenstrual : '';
+        normalized.recordDraft.maritalReproductiveHistory = includeFemaleHistory ? normalized.recordDraft.maritalReproductiveHistory || ctxMarital : '';
         normalized.recordDraft.familyHistory ||= ctxFamily;
         normalized.diagnosisHints = guardOrdinaryVoiceDiagnosisHints(
           normalized.diagnosisHints,

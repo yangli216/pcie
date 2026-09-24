@@ -47,6 +47,14 @@ export type {
 } from './clinicalResultContract';
 
 export {
+  FEMALE_HISTORY_MAX_AGE_YEARS_EXCLUSIVE,
+  FEMALE_HISTORY_MIN_AGE_YEARS,
+  isFemaleHistoryEligible,
+  resolveFemaleHistoryAgeYears,
+} from './lib/femaleHistoryEligibility';
+export type { FemaleHistoryEligibilityInput } from './lib/femaleHistoryEligibility';
+
+export {
   buildMutualRecognitionDecisionPayload,
   normalizeMutualRecognitionItems,
 } from './mutualRecognition';

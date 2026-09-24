@@ -13,14 +13,14 @@ describe('female history editor fields', () => {
     expect(fields.maritalReproductiveHistory.value).toBe('已婚已育；未孕');
   });
 
-  it('clears absent cache fields and both histories for a male patient', () => {
-    const female = ref(true);
-    const fields = useFemaleHistoryFields(female);
+  it('clears absent cache fields and both histories when the patient becomes ineligible', () => {
+    const eligible = ref(true);
+    const fields = useFemaleHistoryFields(eligible);
     fields.restore({ menstrualHistory: '周期28天', maritalReproductiveHistory: '已婚已育' });
     fields.restore({ menstrualHistory: '周期30天' });
     expect(fields.maritalReproductiveHistory.value).toBe('');
-    female.value = false;
-    fields.captureBaseline();
+    eligible.value = false;
+    expect(fields.menstrualHistory.value).toBe('');
     fields.applyProgressive({ menstrualHistory: '迟到月经史', maritalReproductiveHistory: '迟到婚育史' });
     expect(fields.menstrualHistory.value).toBe('');
     expect(fields.maritalReproductiveHistory.value).toBe('');

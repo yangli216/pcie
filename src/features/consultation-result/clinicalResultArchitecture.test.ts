@@ -101,8 +101,9 @@ describe('clinical result architecture boundary', () => {
     expect(clinicalResultSupplementDialogSource).toContain('waveformLevels');
   });
 
-  it('shows an independent menstrual history field only for female patients below personal history', () => {
-    expect(resultImplementationSource).toContain('v-if="isFemalePatient"');
+  it('shows independent female history fields only within the eligible age range below personal history', () => {
+    expect(resultImplementationSource).toContain('v-if="hasFemaleHistoryFields"');
+    expect(resultImplementationSource).toContain('isFemaleHistoryEligible');
     expect(resultImplementationSource).toContain('v-model="menstrualHistory"');
     expect(resultImplementationSource).toContain('title="月经史"');
     expect(resultImplementationSource.indexOf('v-model="personalHistory"')).toBeLessThan(

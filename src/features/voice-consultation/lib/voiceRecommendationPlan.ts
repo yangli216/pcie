@@ -11,7 +11,7 @@ export const VOICE_ROUTING_RULES = '【运行诊断与路由门禁】diagnoses�
   + 'history_only/risk_modifier不得输出。有当前证据的初步病因诊断可formal，不要求先排除全部其他疾病；否则本次明确症状最多输出1项symptom_working formal，并使用diagnostic_first，仅推荐exam/lab_test、defer medicine。'
   + '先判断urgent_referral和explicit_only；置信度不得扩大推荐范围；recommendNow/defer/skip互斥且允许为空。'
   + 'explicit_orders只含医生本次明确决定，name非空，type限medicine/examination/labTest/procedure。'
-  + 'history_context必须分别包含menstrualHistory和maritalReproductiveHistory；非女性均为空，女性只写明确事实且不得推断当前妊娠。';
+  + 'history_context必须分别包含menstrualHistory和maritalReproductiveHistory；仅女性且14≤周岁年龄<60时可写明确事实，其余患者均为空，且不得推断当前妊娠。';
 
 export function normalizeRecommendationPlan(value: VoiceRecommendationPlan | undefined): VoiceRecommendationPlan {
   const mode = value && MODES.includes(value.mode) ? value.mode : 'parallel';

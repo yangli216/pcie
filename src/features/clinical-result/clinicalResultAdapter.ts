@@ -9,6 +9,7 @@ import type {
 } from './clinicalResultContract';
 import {
   getPatientContextAllergyHistory,
+  getPatientContextAgeText,
   getPatientContextGenderText,
   getPatientContextMenstrualHistory,
   getPatientContextMaritalReproductiveHistory,
@@ -16,6 +17,7 @@ import {
 } from '@/utils/patientContext';
 import { getDiagnosisKey, getStandardDiagnosisId } from './recordConfirmedPayload';
 import { buildOutpatientRecord } from './outpatientRecord';
+import { isFemaleHistoryEligible } from './lib/femaleHistoryEligibility';
 
 export interface ClinicalResultRecordInput {
   chiefComplaint: string;
@@ -140,13 +142,18 @@ export function buildSymptomClinicalResultInput(input: SymptomClinicalResultInpu
     || getPatientContextAllergyHistory(input.patient)
     || '';
   const familyHistory = record.familyHistory || '';
-  const menstrualHistory = record.menstrualHistory
-    || getPatientContextMenstrualHistory(input.patient)
-    || '';
-  const maritalReproductiveHistory = record.maritalReproductiveHistory
-    || getPatientContextMaritalReproductiveHistory(input.patient)
-    || '';
   const patientGender = getPatientContextGenderText(input.patient);
+  const includeFemaleHistory = isFemaleHistoryEligible({
+    gender: patientGender,
+    ageText: getPatientContextAgeText(input.patient),
+    ageYears: input.patient?.ageYears ?? input.patient?.demographics?.ageYears,
+  });
+  const menstrualHistory = includeFemaleHistory
+    ? record.menstrualHistory || getPatientContextMenstrualHistory(input.patient) || ''
+    : '';
+  const maritalReproductiveHistory = includeFemaleHistory
+    ? record.maritalReproductiveHistory || getPatientContextMaritalReproductiveHistory(input.patient) || ''
+    : '';
   return {
     chiefComplaint,
     historyOfPresentIllness,

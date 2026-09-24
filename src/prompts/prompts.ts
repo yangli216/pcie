@@ -255,7 +255,7 @@ export const VoiceIntentRecognitionPrompt = {
 
 为了让客户端分区渐进展示，你必须严格按下列顺序输出 NDJSON：每行只能包含一个完整 JSON 对象，不要输出 JSON 数组外壳、markdown、代码块或解释文字。
 {"event":"record_core","data":{"chiefComplaint":"主诉，尽量写成主要症状+持续时间","historyOfPresentIllness":"按临床书写逻辑整理的现病史","symptoms":[],"negativeSymptoms":[]}}
-{"event":"history_context","data":{"pastMedicalHistory":"既往史","allergyHistory":"过敏史","currentMedicationHistory":"长期或当前用药史","personalHistory":"个人史","menstrualHistory":"女性月经史，仅有明确内容时填写","maritalReproductiveHistory":"女性婚育史，仅有明确内容时填写"}}
+{"event":"history_context","data":{"pastMedicalHistory":"既往史","allergyHistory":"过敏史","currentMedicationHistory":"长期或当前用药史","personalHistory":"个人史","menstrualHistory":"仅女性且14≤周岁年龄<60时填写明确月经史","maritalReproductiveHistory":"仅女性且14≤周岁年龄<60时填写明确婚育史"}}
 {"event":"explicit_orders","data":[]}
 {"event":"diagnoses","data":[]}
 {"event":"recommendation_plan","data":{"mode":"parallel","recommendNow":["medicine","exam","lab_test"],"defer":[],"skip":[],"reason":"路由依据","resumeCondition":"","confidence":"high"}}
@@ -271,8 +271,8 @@ export const VoiceIntentRecognitionPrompt = {
     "allergyHistory": "过敏史，只写对话已明确内容，未提及则留空",
     "currentMedicationHistory": "长期或当前用药史，只写对话已明确内容，未提及则留空",
     "personalHistory": "个人史，只写对话已明确内容，未提及则留空",
-    "menstrualHistory": "女性月经史，只写对话或患者既有病历中的明确内容，非女性或无依据时留空",
-    "maritalReproductiveHistory": "女性婚育史，只写明确婚育状况、当前妊娠和生育事实，无依据留空",
+    "menstrualHistory": "仅女性且14≤周岁年龄<60时填写，只写对话或患者既有病历中的明确月经史；其余患者或无依据时留空",
+    "maritalReproductiveHistory": "仅女性且14≤周岁年龄<60时填写，只写明确婚育状况、当前妊娠和生育事实；其余患者或无依据时留空",
     "familyHistory": "家族史，只写对话已明确内容，未提及则留空",
     "physicalExam": "查体与生命体征，只写对话明确内容；体温、脉搏/心率、呼吸、血压必须保留数值，未提及则留空",
     "symptoms": ["症状1", "症状2"],
@@ -354,8 +354,8 @@ export const VoiceIntentRecognitionPrompt = {
 6.2 pastMedicalHistory 不要写入历次门诊就诊流水（如"2026-05-13 诊断急性上呼吸道感染"），门诊就诊记录属于就诊历史而非既往史。既往史应提炼为疾病名称+病程（如"高血压3年""2年前阑尾切除术"），而非按就诊日期逐条罗列。
 6.3 personalHistory 记录吸烟、饮酒、职业或环境暴露、疫水疫源接触等患者本人的生活与暴露事实；若对话未提及，必须留空，不得自动补“否认吸烟饮酒史”。
 6.4 familyHistory 记录直系亲属（父母、兄弟姐妹、子女）的遗传性、过敏性或慢性疾病；如"父亲有皮肤过敏史""母亲有高血压"。若对话未提及家族成员健康状况，必须留空。不要把患者本人的既往史、过敏史混入家族史。
-6.5 menstrualHistory 仅适用于女性患者，记录初潮年龄、周期、经期、经量、痛经、末次月经或绝经等明确事实；优先采用本次对话明确内容，本次对话未修订时可保留输入患者病历中的既有月经史。不得根据年龄或性别推断，不得自动补“月经规律”。
-6.6 maritalReproductiveHistory 为独立女性婚育史，记录明确婚育状况、当前妊娠状态和孕产事实。本次对话优先，未修订时保留既有婚育史；不得根据年龄、月经、已婚或历史孕产次数推断当前已孕/未孕或已婚已育。非女性或无依据时留空，不混入月经史或个人史。
+6.5 menstrualHistory 仅适用于女性且14≤周岁年龄<60的患者，记录初潮年龄、周期、经期、经量、痛经、末次月经或绝经等明确事实；优先采用本次对话明确内容，本次对话未修订时可保留输入患者病历中的既有月经史。年龄不明、月龄/日龄、未满14岁、已满60岁或非女性必须留空。不得根据年龄或性别推断，不得自动补“月经规律”。
+6.6 maritalReproductiveHistory 为独立女性婚育史，也仅适用于女性且14≤周岁年龄<60的患者，记录明确婚育状况、当前妊娠状态和孕产事实。本次对话优先，未修订时保留既有婚育史；不得根据年龄、月经、已婚或历史孕产次数推断当前已孕/未孕或已婚已育。年龄不明、月龄/日龄、未满14岁、已满60岁、非女性或无依据时留空，不混入月经史或个人史。
 6.7 recordDraft 各字段只能写临床事实正文；没有有效内容时写空字符串，禁止写“待医生补充完善、待医生核实、建议询问、信息不足、未提供相关信息”等工作流提示。
 7. diagnosisHints 允许在病例事实基础上做合理补全，推断项必须把 sourceType 标记为 inferred，对话明确提到的内容标记为 explicit；信息不足但仍给出谨慎提示时标记为 uncertain。
 7.1 diagnosisHints 中 suggestionType=formal 的正式诊断最多 3 条，并按置信度从高到低排列；病例只支持 1-2 条时不得凑数。
@@ -411,7 +411,7 @@ export const VoiceIntentRecognitionStreamPrompt = {
 病历规则：
 1. 先理解完整病例再组织字段。主诉不写诊断；现病史按起病/诱因、核心症状、伴随与重要阴性、已处理或关键检查组织，删除问答过程、缴费流程和重复内容。
 2. negativeSymptoms 只写症状名，不带“否认/无”。各病史字段只写临床正文，不写“未提及、待补充、建议询问、信息不足”等过程提示。
-3. 对话和既有档案没有明确事实时，过敏、长期用药、个人史、月经史、家族史留空；不得把未采集改写成阴性。既有档案未被本次明确修订时保留。既往史只写长期健康事实，不写门诊流水；个人史、家族史分别归类。月经史和 maritalReproductiveHistory（婚育史）只用于女性且不得推断；婚育史只写明确婚育状况、当前妊娠和生育事实，两字段独立。
+3. 对话和既有档案没有明确事实时，过敏、长期用药、个人史、月经史、家族史留空；不得把未采集改写成阴性。既有档案未被本次明确修订时保留。既往史只写长期健康事实，不写门诊流水；个人史、家族史分别归类。月经史和 maritalReproductiveHistory（婚育史）只用于女性且14≤周岁年龄<60的患者；其余患者均留空。婚育史只写明确婚育状况、当前妊娠和生育事实，两字段独立且不得推断。
 4. physicalExam 只写明确查体与生命体征，T/P/R/BP 数值原样保留，不得臆造。healthEducation 必须针对当前病例，避免“多休息、多喝水”等空泛套话。
 5. record_suggestions 是带 AI 来源标记的可编辑候选，不代表已经问诊或查体确认。非查体最多 8 项，只输出与当前病例/正式诊断相关的必要阴性问诊；不得重复 record_core、history_context 或既有模板已明确内容。negativeRecordText 必须是简短规范病历文字，不得出现来源和流程措辞。critical 仅用于急危重症排除、关键过敏/禁忌或重大鉴别风险。
 
@@ -435,7 +435,7 @@ ${VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT}
 };
 
 export const VoiceIntentRepairPrompt = {
-  system: `月经史 menstrualHistory 与婚育史 maritalReproductiveHistory 独立保留明确事实；无依据留空，不根据年龄、月经或历史孕产次数推断当前妊娠或婚育状况。
+  system: `月经史 menstrualHistory 与婚育史 maritalReproductiveHistory 仅在女性且14≤周岁年龄<60时独立保留明确事实；其余患者或无依据时留空，不根据年龄、月经或历史孕产次数推断当前妊娠或婚育状况。
 你是一名医疗结构化结果修复助手。你的任务不是重新理解病例，也不是新增诊断或处方，而是在尽量保持原始语义不变的前提下，把一段“接近正确但格式不合法或缺少关键结构”的模型输出修复为合法 JSON。
 
 修复规则：

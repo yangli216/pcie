@@ -26,6 +26,7 @@ import {
 } from './historyRecordTemplates';
 import { collectPhysicalExamVitalSigns } from './physicalExamVitalTemplate';
 import { buildRecordConfirmedEmrFieldValues } from './recordConfirmedEmrFieldValues';
+import { isFemaleHistoryEligible } from './lib/femaleHistoryEligibility';
 
 // ===== 通用小工具（与语音侧 readFirstString / toPositiveNumber 同源） =====
 
@@ -423,6 +424,8 @@ export interface BuildRecordConfirmedPayloadInput {
   precautions?: string;
   vitals?: string;
   patientGender?: string;
+  patientAgeText?: string;
+  patientAgeYears?: number;
   /** 已构造好的 diagList（调用 buildDiagList 得到） */
   diagList: Array<Record<string, string>>;
   /** 已构造好的 orderList（调用 buildOrderListItem 得到） */
@@ -457,6 +460,8 @@ export function buildRecordConfirmedPayload(
     precautions,
     vitals,
     patientGender,
+    patientAgeText,
+    patientAgeYears,
     diagList,
     orderList,
     treatmentPlan,
@@ -466,14 +471,23 @@ export function buildRecordConfirmedPayload(
   } = input;
 
   const resolvedFamilyHistory = familyHistory || outpatientRecord?.familyHistory || '';
+  const includeFemaleHistory = isFemaleHistoryEligible({
+    gender: patientGender,
+    ageText: patientAgeText,
+    ageYears: patientAgeYears,
+  });
   const fullOutpatientRecord = resultType === 'record-confirmed'
     ? buildOutpatientRecord({
         chiefComplaint: outpatientRecord?.chiefComplaint || chiefComplaint,
         historyOfPresentIllness: outpatientRecord?.historyOfPresentIllness || historyOfPresentIllness,
         pastMedicalHistory: outpatientRecord?.pastMedicalHistory || pastMedicalHistory,
         personalHistory: outpatientRecord?.personalHistory || personalHistory,
-        menstrualHistory: outpatientRecord?.menstrualHistory || menstrualHistory,
-        maritalReproductiveHistory: outpatientRecord?.maritalReproductiveHistory || maritalReproductiveHistory,
+        menstrualHistory: includeFemaleHistory
+          ? outpatientRecord?.menstrualHistory || menstrualHistory
+          : '',
+        maritalReproductiveHistory: includeFemaleHistory
+          ? outpatientRecord?.maritalReproductiveHistory || maritalReproductiveHistory
+          : '',
         familyHistory: resolvedFamilyHistory,
         physicalExam: outpatientRecord?.physicalExam || physicalExam,
         precautions: outpatientRecord?.precautions || precautions,

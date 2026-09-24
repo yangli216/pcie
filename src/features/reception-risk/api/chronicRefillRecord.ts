@@ -13,6 +13,7 @@ import {
   loadAvailableMedicineInventoryContext,
   buildOutpatientRecord,
   completePhysicalExamSuggestions,
+  isFemaleHistoryEligible,
   normalizeClinicalRecordFactSuggestions,
   type ClinicalRecordFactSuggestionResponse,
   type ClinicalRecordFactSuggestion,
@@ -337,13 +338,19 @@ function buildChronicRefillClinicalResult(
   treatments: ClinicalResultInput['treatments'],
   generation?: ClinicalResultInput['generation'],
 ): ClinicalResultInput {
+  const patientGender = getPatientContextGenderText(patient);
+  const includeFemaleHistory = isFemaleHistoryEligible({
+    gender: patientGender,
+    ageText: getPatientContextAgeText(patient),
+    ageYears: patient.ageYears ?? patient.demographics?.ageYears,
+  });
   const outpatientRecord = buildOutpatientRecord({
     chiefComplaint: draft.chiefComplaint, historyOfPresentIllness: draft.historyOfPresentIllness,
     pastMedicalHistory: draft.pastMedicalHistory, precautions: draft.healthEducation,
     diagnosisNames: candidate.diagnoses, chronicFollowUp: true,
-    patientGender: getPatientContextGenderText(patient),
-    menstrualHistory: getPatientContextMenstrualHistory(patient),
-    maritalReproductiveHistory: getPatientContextMaritalReproductiveHistory(patient),
+    patientGender,
+    menstrualHistory: includeFemaleHistory ? getPatientContextMenstrualHistory(patient) : '',
+    maritalReproductiveHistory: includeFemaleHistory ? getPatientContextMaritalReproductiveHistory(patient) : '',
   });
   const factSuggestions = completePhysicalExamSuggestions(outpatientRecord, candidate.diagnoses, draft.physicalExamSuggestions);
   return {

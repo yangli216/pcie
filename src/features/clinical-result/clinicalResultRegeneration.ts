@@ -50,8 +50,8 @@ const USER_INSTRUCTIONS = [
   '2. 现病史按时间线整合起病、演变、伴随症状、关键阴性和已明确诊疗经过。',
   '3. 未被补充信息影响的有效内容应保留，不得因重写而丢失。',
   '4. 既往史、个人史、家族史、体格检查、注意事项仅在有依据时更新；没有新依据则保留原值。',
-  '4.1 月经史仅适用于女性患者，只能使用医生补充或当前病历中的明确内容；非女性或无依据时输出空字符串，不得默认生成“月经规律”。',
-  '4.2 婚育史 maritalReproductiveHistory 与月经史独立，仅记录明确婚育状况、当前妊娠状态和生育事实；不得根据年龄、月经或既往孕产次数推断已婚已育、未孕或已孕。未知留空。',
+  '4.1 月经史仅适用于女性且14≤周岁年龄<60的患者，只能使用医生补充或当前病历中的明确内容；其余患者或无依据时输出空字符串，不得默认生成“月经规律”。',
+  '4.2 月经史 menstrualHistory 与婚育史 maritalReproductiveHistory 仅适用于女性且14≤周岁年龄<60的患者；其余患者均留空。婚育史与月经史独立，仅记录明确婚育状况、当前妊娠状态和生育事实；不得根据年龄、月经或既往孕产次数推断已婚已育、未孕或已孕。未知留空。',
   '5. 不在病例字段中输出诊断建议、药品推荐或模型分析过程。',
   '6. 输出全部字段：chiefComplaint、historyOfPresentIllness、pastMedicalHistory、personalHistory、menstrualHistory、maritalReproductiveHistory、familyHistory、physicalExam、precautions。',
 ].join('\n');

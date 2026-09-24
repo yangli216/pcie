@@ -34,7 +34,12 @@ vi.mock('@/utils/patientContext', () => ({
   getPatientContextPersonalHistory: mocks.getPatientContextPersonalHistory,
 }));
 vi.mock('@shared/lib/errorMessages', () => ({ formatUserFacingError: vi.fn(() => 'error') }));
-vi.mock('@features/clinical-result', () => ({ cloneClinicalResultInput: vi.fn((value) => value) }));
+vi.mock('@features/clinical-result', () => ({
+  cloneClinicalResultInput: vi.fn((value) => value),
+  isFemaleHistoryEligible: vi.fn(({ gender, ageText }) => (
+    gender === '女性' && Number.parseFloat(ageText) >= 14 && Number.parseFloat(ageText) < 60
+  )),
+}));
 vi.mock('@features/voice-consultation', () => ({
   voiceTimingTracker: { start: vi.fn(() => mocks.timing) },
   clearVoiceConsultationCacheById: mocks.clearCache,
@@ -96,8 +101,8 @@ describe('useVoiceConsultation result navigation ordering', () => {
     expect(mocks.processTranscript).toHaveBeenCalledWith('真实语音文本', expect.objectContaining({
       patientContext: expect.objectContaining({
         personalHistory: '吸烟20年。',
-        menstrualHistory: '周期28天。',
-        maritalReproductiveHistory: '已婚已育；未孕。',
+        menstrualHistory: null,
+        maritalReproductiveHistory: null,
         familyHistory: '父亲有高血压病史。',
         gender: '女性',
         ageText: '8岁',

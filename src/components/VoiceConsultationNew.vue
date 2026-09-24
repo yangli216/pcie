@@ -78,6 +78,7 @@ import {
   hasProbableMatch,
   initClinicalDiagnoses,
   initClinicalTreatments,
+  isFemaleHistoryEligible,
   mapClinicalResultAiDiagnoses,
   mergeClinicalRecordSuggestionIntoText,
   parseLLMJson,
@@ -360,8 +361,13 @@ const {
   patientName,
   patientTetId,
 } = patientContext;
-const isFemalePatient = computed(() => /^(?:F|2|女)/iu.test(patientGender.value.trim()));
-const femaleHistoryFields = useFemaleHistoryFields(isFemalePatient);
+const hasFemaleHistoryFields = computed(() => isFemaleHistoryEligible({
+  gender: patientGender.value,
+  ageText: patientAge.value,
+  ageYears: props.initialPatientData?.ageYears
+    ?? props.initialPatientData?.demographics?.ageYears,
+}));
+const femaleHistoryFields = useFemaleHistoryFields(hasFemaleHistoryFields);
 const { menstrualHistory, maritalReproductiveHistory } = femaleHistoryFields;
 
 const diagnosisChecklist = useClinicalResultDiagnosisChecklist({
@@ -533,8 +539,8 @@ function getFactRecord() {
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
-    menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
+    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
   };
@@ -690,8 +696,8 @@ const writebackScopeController = useClinicalResultWritebackScope({
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
-    menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
+    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -766,8 +772,8 @@ const editorSnapshotPersistence = useVoiceEditorSnapshotPersistence({
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
-    menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
+    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -1083,8 +1089,8 @@ function buildVoiceUserLogSnapshot() {
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
-    menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
+    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -2053,8 +2059,8 @@ function getCurrentRegenerationRecord(): ClinicalResultRegenerationRecord {
     historyOfPresentIllness: historyOfPresentIllness.value,
     pastMedicalHistory: pastMedicalHistory.value,
     personalHistory: personalHistory.value,
-    menstrualHistory: isFemalePatient.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: isFemalePatient.value ? maritalReproductiveHistory.value : '',
+    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
+    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
     familyHistory: familyHistory.value,
     physicalExam: physicalExam.value,
     precautions: precautions.value,
@@ -2066,8 +2072,8 @@ function applyRegenerationRecord(record: ClinicalResultRegenerationRecord): void
   historyOfPresentIllness.value = record.historyOfPresentIllness;
   pastMedicalHistory.value = record.pastMedicalHistory;
   personalHistory.value = record.personalHistory;
-  menstrualHistory.value = isFemalePatient.value ? record.menstrualHistory : '';
-  maritalReproductiveHistory.value = isFemalePatient.value ? record.maritalReproductiveHistory || '' : '';
+  menstrualHistory.value = hasFemaleHistoryFields.value ? record.menstrualHistory : '';
+  maritalReproductiveHistory.value = hasFemaleHistoryFields.value ? record.maritalReproductiveHistory || '' : '';
   familyHistory.value = record.familyHistory;
   physicalExam.value = record.physicalExam;
   precautions.value = record.precautions;
@@ -3229,10 +3235,10 @@ async function handleBatchWriteBack(): Promise<void> {
         historyOfPresentIllness: historyOfPresentIllness.value,
         pastMedicalHistory: pastMedicalHistory.value,
         personalHistory: personalHistory.value,
-        ...(isFemalePatient.value && menstrualHistory.value.trim()
+        ...(hasFemaleHistoryFields.value && menstrualHistory.value.trim()
           ? { menstrualHistory: menstrualHistory.value }
           : {}),
-        ...(isFemalePatient.value && maritalReproductiveHistory.value.trim()
+        ...(hasFemaleHistoryFields.value && maritalReproductiveHistory.value.trim()
           ? { maritalReproductiveHistory: maritalReproductiveHistory.value }
           : {}),
         familyHistory: familyHistory.value,
@@ -3240,6 +3246,9 @@ async function handleBatchWriteBack(): Promise<void> {
         precautions: precautions.value,
       },
       patientGender: patientGender.value,
+      patientAgeText: patientAge.value,
+      patientAgeYears: props.initialPatientData?.ageYears
+        ?? props.initialPatientData?.demographics?.ageYears,
       diagList,
       orderList,
       treatmentPlan,
@@ -3652,7 +3661,7 @@ useChronicRefillTimingPresentation(() => ({
               @dismiss-fact-suggestion="dismissFactSuggestion"
             />
             <VoiceRecordFieldEditor
-              v-if="isFemalePatient"
+              v-if="hasFemaleHistoryFields"
               v-model="menstrualHistory"
               title="月经史"
               presentation="document"
@@ -3660,7 +3669,7 @@ useChronicRefillTimingPresentation(() => ({
               placeholder="请输入月经史..."
             />
             <VoiceRecordFieldEditor
-              v-if="isFemalePatient"
+              v-if="hasFemaleHistoryFields"
               v-model="maritalReproductiveHistory"
               title="婚育史"
               presentation="document"

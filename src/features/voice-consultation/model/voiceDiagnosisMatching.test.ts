@@ -46,7 +46,13 @@ beforeEach(() => {
 });
 
 describe('voice diagnosis catalog assessment reuse', () => {
-  it.each(['女性', '男性'])('keeps female histories separate in the same stream and guards %s', async (gender) => {
+  it.each([
+    { gender: '女性', ageText: '35岁', expected: true },
+    { gender: '女性', ageText: '13岁', expected: false },
+    { gender: '女性', ageText: '60岁', expected: false },
+    { gender: '女性', ageText: '6个月', expected: false },
+    { gender: '男性', ageText: '35岁', expected: false },
+  ])('keeps female histories only for eligible patients: $gender $ageText', async ({ gender, ageText, expected }) => {
     vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
       for (const event of events()) {
         const data = event.event === 'history_context'
@@ -58,15 +64,15 @@ describe('voice diagnosis catalog assessment reuse', () => {
     const result = await useVoiceIntentRecognition().processTranscript('咳嗽2天', {
       patientContext: {
         gender,
-        ageText: '6个月',
+        ageText,
         menstrualHistory: '旧月经史',
         maritalReproductiveHistory: '旧婚育史',
       },
     });
-    expect(result?.outpatientRecord?.menstrualHistory || '').toBe(gender === '女性' ? '本次末次月经9月1日' : '');
-    expect(result?.outpatientRecord?.maritalReproductiveHistory || '').toBe(gender === '女性' ? '已婚已育；目前未孕' : '');
+    expect(result?.outpatientRecord?.menstrualHistory || '').toBe(expected ? '本次末次月经9月1日' : '');
+    expect(result?.outpatientRecord?.maritalReproductiveHistory || '').toBe(expected ? '已婚已育；目前未孕' : '');
     const messages = vi.mocked(chatStream).mock.calls[0][0];
-    expect(messages[1].content).toContain(`【患者特征】性别：${gender}；年龄：6个月`);
+    expect(messages[1].content).toContain(`【患者特征】性别：${gender}；年龄：${ageText}`);
     expect(messages[1].content).not.toContain('【本次输出协议】');
     expect(messages[1].content).not.toContain('recordDraft');
     expect(messages.reduce((sum, message) => sum + message.content.length, 0)).toBeLessThan(6_500);

@@ -31,7 +31,7 @@ describe('clinical result regeneration', () => {
     expect(spec.messages[1]?.content).toContain('患者补充昨晚发热，最高38.6℃。');
     expect(spec.messages[1]?.content).toContain('咳嗽3天');
     expect(spec.messages[0]?.content).toContain('不得编造');
-    expect(spec.messages[1]?.content).toContain('月经史仅适用于女性患者');
+    expect(spec.messages[1]?.content).toContain('月经史仅适用于女性且14≤周岁年龄<60的患者');
     expect(spec.config.traceContext).toMatchObject({
       scene: 'clinical-result-regeneration',
       sourceModule: 'symptom_consultation_result',

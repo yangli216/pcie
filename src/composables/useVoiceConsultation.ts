@@ -29,6 +29,7 @@ import {
 import {
   cloneClinicalResultInput,
   formatPhysicalExamVitalTemplate,
+  isFemaleHistoryEligible,
   type ClinicalResultInput,
 } from '@features/clinical-result';
 import { submitConsultationUserLog } from '@services/consultationUserLog';
@@ -368,6 +369,11 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       const patientAllergyHistory = getPatientContextAllergyHistory(patient) || '';
       const patientPastMedicalHistory = getPatientContextPastMedicalHistory(patient) || '';
       const patientMedicationHistory = getPatientContextCurrentMedicationHistory(patient) || '';
+      const includeFemaleHistory = isFemaleHistoryEligible({
+        gender: getPatientContextGenderText(patient),
+        ageText: getPatientContextAgeText(patient),
+        ageYears: patient?.ageYears ?? patient?.demographics?.ageYears,
+      });
       const result = await intentRecognition.processTranscript(transcribedText, {
         consultationId,
         timing,
@@ -381,8 +387,10 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
           allergyHistory: patientAllergyHistory || null,
           currentMedicationHistory: patientMedicationHistory || null,
           personalHistory: getPatientContextPersonalHistory(patient) || null,
-          menstrualHistory: getPatientContextMenstrualHistory(patient) || null,
-          maritalReproductiveHistory: getPatientContextMaritalReproductiveHistory(patient) || null,
+          menstrualHistory: includeFemaleHistory ? getPatientContextMenstrualHistory(patient) || null : null,
+          maritalReproductiveHistory: includeFemaleHistory
+            ? getPatientContextMaritalReproductiveHistory(patient) || null
+            : null,
           familyHistory: getPatientContextFamilyHistory(patient) || null,
           gender: getPatientContextGenderText(patient) || null,
           ageText: getPatientContextAgeText(patient) || null,

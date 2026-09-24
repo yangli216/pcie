@@ -404,6 +404,7 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
       pastMedicalHistory: '平素体健。',
       menstrualHistory: '周期28天，经期5天，末次月经2026-08-05。',
       patientGender: '女性',
+      patientAgeText: '35岁',
       diagList: [],
       orderList: [],
       writebackScope: {
