@@ -1603,3 +1603,7 @@ describe('useWindowManagement', () => {
 `recordConfirmedEmrFieldValues.ts` 将有内容且被选中的两类正文分别映射到“月经史文本”“婚育史文本”；婚育史字典映射由 `clinical-result/lib/maritalReproductiveHistory.ts` 仅从明确无冲突的字典事实构造“婚育状况”(1–5)、“怀孕标志”(0/1)，未知省略，不清空 HIS 原值。PHIS 使用真实 data-id 回填；动态模板仍只处理上游显式 targetFieldIds，不因为静态 HIDDEN 或患者性别自行扩大范围。
 
 两类女性病史的编辑状态由 `useFemaleHistoryFields.ts`（Composable Controller）管理，独立比较各字段生成基线，避免流式后到分区覆盖医生修改；快照缺失字段清空，不继承上次患者内容。现有 `useClinicalResultIntentReset.ts` 继续统一结果切换，两者不维护第二份权威病历状态。
+
+### 体格检查结构化回写
+
+`recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，剩余查体正文同时投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。

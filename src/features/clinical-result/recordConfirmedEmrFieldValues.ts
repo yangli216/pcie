@@ -4,7 +4,10 @@ import type {
   HistoryRecordTemplateChanges,
   HistoryRecordTemplateSlotValue,
 } from './historyRecordTemplates';
-import type { PhysicalExamVitalSigns } from './physicalExamVitalTemplate';
+import {
+  stripPhysicalExamVitalNarrative,
+  type PhysicalExamVitalSigns,
+} from './physicalExamVitalTemplate';
 import type { RecordConfirmedWritebackField } from './recordConfirmedPayload';
 
 export const HISTORY_DATA_ID_BY_SLOT: Readonly<Record<string, string>> = Object.freeze({
@@ -59,6 +62,8 @@ const RECORD_DATA_IDS: Readonly<Record<RecordConfirmedWritebackField, readonly s
   precautions: ['注意事项文本'],
 };
 
+const OTHER_PHYSICAL_EXAM_DATA_IDS = ['其他体格检查', '其他体格检查文本'] as const;
+
 export interface BuildRecordConfirmedEmrFieldValuesInput {
   record: Partial<OutpatientRecord>;
   selectedRecordFields: ReadonlySet<RecordConfirmedWritebackField>;
@@ -111,6 +116,14 @@ export function buildRecordConfirmedEmrFieldValues(
   });
 
   if (input.selectedRecordFields.has('physicalExam')) {
+    const otherPhysicalExam = stripPhysicalExamVitalNarrative(
+      input.record.physicalExam || '',
+    );
+    if (otherPhysicalExam) {
+      OTHER_PHYSICAL_EXAM_DATA_IDS.forEach((dataId) => {
+        values[dataId] = otherPhysicalExam;
+      });
+    }
     input.physicalExamVitalSigns?.items.forEach((item) => {
       const dataId = PHYSICAL_EXAM_DATA_ID_BY_SLOT[item.slotKey];
       if (dataId) values[dataId] = item.value;

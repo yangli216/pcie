@@ -4,7 +4,7 @@
 >
 > **维护规则**：模块职责、文件路径、依赖关系发生变更时，必须同步更新本文件。
 
-动态模板体格检查专用回写：`features/outpatient-emr/lib/outpatientEmrStructuredProjection.ts` 将“其他体格检查”字段映射为体格检查正文去除固定生命体征后的剩余内容；固定体征仍由 `recordConfirmedEmrFieldValues.ts` 和 `physicalExamVitalSigns` 结构化回写。
+体格检查回写：`features/clinical-result/recordConfirmedEmrFieldValues.ts` 同时投影整体“体格检查”和模板常见的“其他体格检查/其他体格检查文本”自由文本字段；后者使用体格检查正文去除固定生命体征后的剩余内容，固定体征仍由 `physicalExamVitalSigns` 结构化回写。动态模板入口继续由 `features/outpatient-emr/lib/outpatientEmrStructuredProjection.ts` 按当前目标字段投影。
 
 门诊病历正式入口使用 `requestId + templateHtml + templateDefinition + targetFieldIds + recordContext`：同一模板的 HTML/定义原文必须成对提供，HTML 提供渲染实例，JSON 提供结构与字典定义，解析器按章节/字段稳定 ID 严格合并；`requestId` 必须由 HIS 显式生成，目标字段必须是上游渲染器给出的当前实际显示且需要分析的可写字段非空、无空白、无重复白名单。SDK、Bridge 和解析器只校验原值，不代生成、修剪或去重。独立 `analyzeOutpatientEmr` 只回填模板字段；语音一体化入口由 `startVoice.patient.outpatientEmr` 固定模板规格，在共享结果页确认后经 `useVoiceOutpatientEmrWorkflow` 生成 `recordContext`，最终把模板参数与已选病例、诊断、医嘱合并成同一条回写。`outpatient-emr` 属于正式接入前实验能力，未经用户明确要求不得保留旧 `templateSource/sourceFormat/htmlContent`、解析别名、单源解析、自动范围推断或旧路径兜底；桌面端不提供本地模板实验台，模板与字段范围只能来自正式 HIS Bridge/SDK 调用。
 

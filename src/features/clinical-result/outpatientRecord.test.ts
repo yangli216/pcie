@@ -584,6 +584,8 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
     });
     expect(selectedPayload.emrFieldValues).toEqual({
       体格检查: 'T:{36.6}℃ P:{76}次/分 R:{18}次/分 Bp:{128}/{82}mmHg。神志清。',
+      其他体格检查: '神志清。',
+      其他体格检查文本: '神志清。',
       体温: '36.6',
       脉搏: '76',
       呼吸: '18',

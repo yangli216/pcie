@@ -83,4 +83,29 @@ describe('buildRecordConfirmedEmrFieldValues', () => {
       个人史文本: '否认吸烟史。',
     });
   });
+
+  it('projects free-text physical exam into the PHIS other-exam fields after removing vital signs', () => {
+    const values = buildRecordConfirmedEmrFieldValues({
+      record: {
+        physicalExam: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。神清，双肺呼吸音粗。',
+      },
+      selectedRecordFields: new Set(['physicalExam']),
+    });
+
+    expect(values).toMatchObject({
+      体格检查: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。神清，双肺呼吸音粗。',
+      其他体格检查: '神清，双肺呼吸音粗。',
+      其他体格检查文本: '神清，双肺呼吸音粗。',
+    });
+  });
+
+  it('does not emit an empty other-exam value when the record only has vital signs', () => {
+    const values = buildRecordConfirmedEmrFieldValues({
+      record: { physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:110/77mmHg。' },
+      selectedRecordFields: new Set(['physicalExam']),
+    });
+
+    expect(values).not.toHaveProperty('其他体格检查');
+    expect(values).not.toHaveProperty('其他体格检查文本');
+  });
 });
