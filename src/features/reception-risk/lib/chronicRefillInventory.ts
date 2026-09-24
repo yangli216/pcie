@@ -127,6 +127,23 @@ function normalizeMedicineAttribute(value: string | undefined): string {
     .toLowerCase();
 }
 
+function removeRedundantUnmatchedMedicineTreatments(
+  treatments: ClinicalResultTreatment[],
+): ClinicalResultTreatment[] {
+  const matchedMedicineNames = new Set(
+    treatments
+      .filter((item) => Boolean(item.matchedItem))
+      .map((item) => normalizeMedicineName(item.matchedItem?.name || item.name))
+      .filter(Boolean),
+  );
+  if (matchedMedicineNames.size === 0) return treatments;
+
+  return treatments.filter((item) => (
+    Boolean(item.matchedItem)
+    || !matchedMedicineNames.has(normalizeMedicineName(item.name))
+  ));
+}
+
 function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -379,5 +396,5 @@ export function buildChronicRefillInventoryTreatments(
     });
   });
 
-  return treatments;
+  return removeRedundantUnmatchedMedicineTreatments(treatments);
 }

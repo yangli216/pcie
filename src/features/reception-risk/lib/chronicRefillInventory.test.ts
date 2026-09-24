@@ -188,6 +188,77 @@ describe('buildChronicRefillInventoryTreatments', () => {
     });
   });
 
+  it.each([
+    ['unmatched first', [
+      { name: '盐酸二甲双胍片' },
+      { name: '盐酸二甲双胍片', spec: '0.25g*60片/瓶' },
+    ]],
+    ['matched first', [
+      { name: '盐酸二甲双胍片', spec: '0.25g*60片/瓶' },
+      { name: '盐酸二甲双胍片' },
+    ]],
+  ] as const)('removes the redundant unmatched generic-name item when an inventory item is matched (%s)', (_label, inputs) => {
+    const treatments = buildChronicRefillInventoryTreatments([
+      ...inputs,
+      { name: '厄贝沙坦片' },
+    ], [{
+      productId: 'metformin-025',
+      productName: '盐酸二甲双胍片',
+      spec: '0.25g*60片/瓶',
+      availableQuantity: 20,
+      storeIds: ['1760'],
+      storeNames: ['西药房'],
+    }, {
+      productId: 'metformin-05',
+      productName: '盐酸二甲双胍片',
+      spec: '0.5g*60片/瓶',
+      availableQuantity: 20,
+      storeIds: ['1760'],
+      storeNames: ['西药房'],
+    }]);
+
+    expect(treatments).toHaveLength(2);
+    expect(treatments[0]).toMatchObject({
+      name: '盐酸二甲双胍片',
+      matchStatus: 'exact',
+      matchedItem: { id: 'metformin-025' },
+    });
+    expect(treatments[1]).toMatchObject({
+      name: '厄贝沙坦片',
+      matchStatus: 'unmatched',
+      matchedItem: null,
+    });
+  });
+
+  it('keeps distinct matched products even when they share the same normalized name', () => {
+    const treatments = buildChronicRefillInventoryTreatments([{
+      name: '盐酸二甲双胍片',
+      spec: '0.25g*60片/瓶',
+    }, {
+      name: '盐酸二甲双胍片',
+      spec: '0.5g*60片/瓶',
+    }], [{
+      productId: 'metformin-025',
+      productName: '盐酸二甲双胍片',
+      spec: '0.25g*60片/瓶',
+      availableQuantity: 20,
+      storeIds: ['1760'],
+      storeNames: ['西药房'],
+    }, {
+      productId: 'metformin-05',
+      productName: '盐酸二甲双胍片',
+      spec: '0.5g*60片/瓶',
+      availableQuantity: 20,
+      storeIds: ['1760'],
+      storeNames: ['西药房'],
+    }]);
+
+    expect(treatments.map((item) => item.matchedItem?.id)).toEqual([
+      'metformin-025',
+      'metformin-05',
+    ]);
+  });
+
   it('uses AI dose and usage hints but rejects model days when history has no duration', () => {
     const treatments = buildChronicRefillInventoryTreatments([{
       name: '盐酸二甲双胍片',
