@@ -1561,7 +1561,7 @@ describe('useWindowManagement', () => {
 
 用药评估的病例快照按来源同时保留 HIS 和本次问诊的过敏史、当前用药史，未知占位内容不得遮蔽另一来源的明确事实；来源冲突时不得自动认定无过敏或已停药。
 
-`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供 Prompt Builder、严格响应校验及药品分支增量合并；现有 `voiceTreatmentRecommendationGeneration.ts` 在显式请求时只调用药品分支，复用签名 LLM 网关、库存匹配与定稿流程，并在库存上下文就绪和模型返回时上报阶段。普通自动请求继续原数组协议，显式请求使用单次结构化评估对象；关键证据缺失项、症状性诊断下的病因治疗项、协议不完整项不进入标准药品映射，紧急处置结论整体不产出药品。
+`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供 Prompt Builder、逐药失败关闭的响应校验及药品分支增量合并；现有 `voiceTreatmentRecommendationGeneration.ts` 在显式请求时只调用药品分支，以 `temperature=0` 复用签名 LLM 网关、库存匹配与定稿流程，并在库存上下文就绪和模型返回时上报阶段。普通自动请求继续原数组协议，显式请求使用单次结构化评估对象；关键证据缺失项和症状性诊断下的病因治疗项进入只读暂缓列表，无法识别的单项被丢弃但不拖垮同一响应的有效候选，根对象无法识别或紧急处置结论仍整体不产出药品。
 
 共享结果页仅注入病例快照、生成与审计副作用，新增能力不进入 App.vue 或 ConsultationPage.vue。不改原 recommendation plan 或 HIS Bridge 契约，不新增 store；检查建议与医生已有药品保持原样。入口稳定可见后异步预热当前药房库存上下文，点击请求复用库存缓存与 in-flight 合并。结构化临床结论解析成功后立即写入局部只读 assessment 并进入 `finalizing`，新增药品仍须在完整定稿和库存检查完成后原子追加且默认未选，医生选择与回写继续走既有门禁。患者/就诊/轮次/诊断/病例变化同时受原请求序列和新上下文身份校验，迟到阶段、结论和药品均不能覆盖新场景；错误不清空旧方案或已形成的只读结论，暂缓项不进入缓存药品和 orderList。一次请求的准备、模型评估、定稿和总耗时由结果页按数值阶段采集并通过 operation log 上报，只记录耗时、数量和技术状态，不记录病例文本。
 

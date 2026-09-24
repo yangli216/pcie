@@ -100,7 +100,15 @@ export async function generateVoiceTreatmentRecommendations(
         title: '医生主动基于现有信息评估用药',
       } : undefined);
       const endModel = input.timing?.span('medicine_model');
-      const response = await chat(spec.messages, undefined, undefined, undefined, spec.config);
+      const response = await chat(
+        spec.messages,
+        undefined,
+        undefined,
+        undefined,
+        input.currentInformationMedication
+          ? { ...spec.config, temperature: 0 }
+          : spec.config,
+      );
       endModel?.();
       const assessment = input.currentInformationMedication
         ? parseCurrentInformationMedicationResult(

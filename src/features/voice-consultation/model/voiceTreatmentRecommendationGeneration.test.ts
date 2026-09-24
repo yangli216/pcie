@@ -76,6 +76,10 @@ describe('generateVoiceTreatmentRecommendations', () => {
         expect.objectContaining({ system: expect.stringContaining('只允许 purpose=symptomatic') }),
         expect.anything(), expect.objectContaining({ operationAction: 'assess_medication_with_current_information' }),
       );
+      expect(chat).toHaveBeenCalledWith(
+        expect.anything(), undefined, undefined, undefined,
+        expect.objectContaining({ temperature: 0 }),
+      );
       if (scenario === 'malformed') {
         expect(results[0].error).toBeDefined();
         expect(alignMedicineRecommendationsToInventory).not.toHaveBeenCalled();

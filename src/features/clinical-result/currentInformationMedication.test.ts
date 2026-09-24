@@ -116,13 +116,29 @@ describe('current information medication assessment', () => {
     });
   });
 
+  it('accepts omitted empty evidence for a supported medicine and isolates malformed candidates', () => {
+    const result = parseCurrentInformationMedicationResult(response([
+      { ...candidate, missingEvidence: undefined },
+      { ...candidate, name: '缺少依据药品', basis: '', missingEvidence: undefined },
+      { ...candidate, name: '需补证据药品', eligibility: 'requires_evidence', missingEvidence: undefined },
+      { ...candidate, name: '错误证据格式药品', missingEvidence: { item: '肾功能' } },
+      { ...candidate, name: '未知资格药品', eligibility: 'unknown' },
+      null,
+    ]), false);
+
+    expect(result.recommendations.map((item) => item.name)).toEqual(['测试药品']);
+    expect(result.deferred).toEqual([
+      { name: '缺少依据药品', reason: '缓解症状；缺少当前病例用药依据' },
+      { name: '需补证据药品', reason: '缓解症状' },
+      { name: '错误证据格式药品', reason: '缓解症状；缺失证据字段格式不完整' },
+    ]);
+  });
+
   it.each([
-    [], {}, response([{ ...candidate, eligibility: undefined }]),
-    response([{ ...candidate, missingEvidence: undefined }]),
-    response([{ ...candidate, missingEvidence: [''] }]),
-    response([{ ...candidate, basis: '' }]),
-    response([{ ...candidate, purpose: 'unknown' }]),
-  ])('fails closed on malformed or unsupported response %j', (raw) => {
+    [], {}, { summary: '', disposition: 'medication_options', medicines: [] },
+    { summary: '评估', disposition: 'unknown', medicines: [] },
+    { summary: '评估', disposition: 'medication_options', medicines: null },
+  ])('fails closed when the root assessment is malformed %j', (raw) => {
     expect(() => parseCurrentInformationMedicationResult(raw, false)).toThrow();
   });
 

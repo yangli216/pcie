@@ -120,25 +120,35 @@ export function parseCurrentInformationMedicationResult(
 
   for (const raw of root.medicines) {
     const item = record(raw);
-    if (!item || !text(item.name) || !text(item.reason)
-      || !['symptomatic', 'etiologic'].includes(text(item.purpose))
-      || !['supported', 'requires_evidence'].includes(text(item.eligibility))
-      || !Array.isArray(item.missingEvidence)
-      || !item.missingEvidence.every((entry) => Boolean(text(entry)))) {
-      throw new Error('药品缺少有效的用药依据评估');
-    }
-    const missing = item.missingEvidence.map(text);
+    const name = text(item?.name);
+    const purpose = text(item?.purpose);
+    const eligibility = text(item?.eligibility);
+    if (!item || !name
+      || !['symptomatic', 'etiologic'].includes(purpose)
+      || !['supported', 'requires_evidence'].includes(eligibility)) continue;
+
+    const missingEvidenceWasOmitted = item.missingEvidence === undefined;
+    const missingEvidenceIsValid = missingEvidenceWasOmitted
+      || (Array.isArray(item.missingEvidence)
+        && item.missingEvidence.every((entry) => Boolean(text(entry))));
+    const missing = Array.isArray(item.missingEvidence)
+      ? item.missingEvidence.map(text).filter(Boolean)
+      : [];
+    const reason = text(item.reason);
+    const basis = text(item.basis);
     if (item.eligibility === 'requires_evidence' || missing.length > 0
-      || (symptomaticOnly && item.purpose !== 'symptomatic')) {
+      || !missingEvidenceIsValid || !reason || !basis
+      || (symptomaticOnly && purpose !== 'symptomatic')) {
       result.deferred.push({
-        name: text(item.name),
-        reason: [text(item.reason), ...missing,
-          symptomaticOnly && item.purpose !== 'symptomatic' ? '症状性工作诊断尚不支持病因治疗' : '',
-        ].filter(Boolean).join('；'),
+        name,
+        reason: [reason, ...missing,
+          !missingEvidenceIsValid ? '缺失证据字段格式不完整' : '',
+          !basis ? '缺少当前病例用药依据' : '',
+          symptomaticOnly && purpose !== 'symptomatic' ? '症状性工作诊断尚不支持病因治疗' : '',
+        ].filter(Boolean).join('；') || '用药依据不完整，暂不推荐',
       });
       continue;
     }
-    if (!text(item.basis)) throw new Error('药品缺少当前病例用药依据');
     // Keep only clinical fields: model selection, matching IDs and package totals are not trusted.
     const fields = Object.fromEntries([
       'name', 'spec', 'targetDose', 'targetDoseUnit', 'frequency', 'frequencyKey', 'usage', 'usageKey', 'days',
@@ -146,8 +156,8 @@ export function parseCurrentInformationMedicationResult(
     result.recommendations.push({
       ...fields,
       type: 'medicine',
-      name: text(item.name),
-      reason: `${text(item.reason)}；依据：${text(item.basis)}`,
+      name,
+      reason: `${reason}；依据：${basis}`,
     });
   }
   return result;
