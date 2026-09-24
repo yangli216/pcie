@@ -87,13 +87,13 @@ describe('buildRecordConfirmedEmrFieldValues', () => {
   it('projects free-text physical exam into the PHIS other-exam fields after removing vital signs', () => {
     const values = buildRecordConfirmedEmrFieldValues({
       record: {
-        physicalExam: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。神清，双肺呼吸音粗。',
+        physicalExam: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。身高:{身高}cm，体重:{体重}kg，腰围:{腰围}cm。神清，双肺呼吸音粗。',
       },
       selectedRecordFields: new Set(['physicalExam']),
     });
 
     expect(values).toMatchObject({
-      体格检查: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。神清，双肺呼吸音粗。',
+      体格检查: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。身高:{身高}cm，体重:{体重}kg，腰围:{腰围}cm。神清，双肺呼吸音粗。',
       其他体格检查: '神清，双肺呼吸音粗。',
       其他体格检查文本: '神清，双肺呼吸音粗。',
     });
@@ -101,7 +101,7 @@ describe('buildRecordConfirmedEmrFieldValues', () => {
 
   it('does not emit an empty other-exam value when the record only has vital signs', () => {
     const values = buildRecordConfirmedEmrFieldValues({
-      record: { physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:110/77mmHg。' },
+      record: { physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:110/77mmHg。身高:168cm，体重:55kg，腰围:80cm。' },
       selectedRecordFields: new Set(['physicalExam']),
     });
 

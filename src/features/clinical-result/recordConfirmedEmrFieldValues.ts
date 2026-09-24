@@ -5,7 +5,7 @@ import type {
   HistoryRecordTemplateSlotValue,
 } from './historyRecordTemplates';
 import {
-  stripPhysicalExamVitalNarrative,
+  stripPhysicalExamStructuredNarrative,
   type PhysicalExamVitalSigns,
 } from './physicalExamVitalTemplate';
 import type { RecordConfirmedWritebackField } from './recordConfirmedPayload';
@@ -116,7 +116,7 @@ export function buildRecordConfirmedEmrFieldValues(
   });
 
   if (input.selectedRecordFields.has('physicalExam')) {
-    const otherPhysicalExam = stripPhysicalExamVitalNarrative(
+    const otherPhysicalExam = stripPhysicalExamStructuredNarrative(
       input.record.physicalExam || '',
     );
     if (otherPhysicalExam) {

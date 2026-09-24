@@ -126,6 +126,7 @@ export {
   extractPhysicalExamVitalValues,
   formatPhysicalExamVitalTemplate,
   PHYSICAL_EXAM_VITAL_SCHEMA_VERSION,
+  stripPhysicalExamStructuredNarrative,
 } from './physicalExamVitalTemplate';
 export {
   buildRecordConfirmedEmrFieldValues,

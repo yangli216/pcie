@@ -175,7 +175,7 @@ describe('outpatient EMR structured projection', () => {
     const values = resolveOutpatientEmrStructuredFieldValues({
       recordContext: {
         sections: {
-          physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:128/82mmHg。双肺呼吸音粗，腹部柔软。',
+          physicalExam: 'T:36.5℃ P:76次/分 R:18次/分 Bp:128/82mmHg。身高:168cm，体重:55kg，腰围:80cm。双肺呼吸音粗，腹部柔软。',
         },
       },
       fields: [

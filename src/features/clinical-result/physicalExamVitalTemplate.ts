@@ -135,6 +135,23 @@ export function stripPhysicalExamVitalNarrative(value: string): string {
     .trim();
 }
 
+/**
+ * Returns only descriptive examination text for PHIS "other physical exam" fields.
+ * The complete physical-exam record keeps these measurements; this projection removes
+ * them because PHIS templates may bind them to dedicated fields.
+ */
+export function stripPhysicalExamStructuredNarrative(value: string): string {
+  return stripPhysicalExamVitalNarrative(value)
+    .replace(/身高\s*[:：]?\s*\{?(?:身高|\d+(?:\.\d+)?)\}?\s*(?:cm|厘米)[，,；;。]?/giu, '')
+    .replace(/体重\s*[:：]?\s*\{?(?:体重|\d+(?:\.\d+)?)\}?\s*(?:kg|公斤|千克)[，,；;。]?/giu, '')
+    .replace(/腰围\s*[:：]?\s*\{?(?:腰围|\d+(?:\.\d+)?)\}?\s*(?:cm|厘米)[，,；;。]?/giu, '')
+    .replace(/([。])[，,；;]+/gu, '$1')
+    .replace(/[，,；;]+(?=[。])/gu, '')
+    .replace(/^[\s，,；;。]+/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 export function buildPhysicalExamWithVitalTemplate(input: {
   physicalExam?: string;
   vitals?: string;

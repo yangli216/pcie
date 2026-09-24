@@ -4,7 +4,7 @@
 >
 > **维护规则**：模块职责、文件路径、依赖关系发生变更时，必须同步更新本文件。
 
-体格检查回写：`features/clinical-result/recordConfirmedEmrFieldValues.ts` 同时投影整体“体格检查”和模板常见的“其他体格检查/其他体格检查文本”自由文本字段；后者使用体格检查正文去除固定生命体征后的剩余内容，固定体征仍由 `physicalExamVitalSigns` 结构化回写。动态模板入口继续由 `features/outpatient-emr/lib/outpatientEmrStructuredProjection.ts` 按当前目标字段投影。
+体格检查回写：`features/clinical-result/recordConfirmedEmrFieldValues.ts` 同时投影整体“体格检查”和模板常见的“其他体格检查/其他体格检查文本”自由文本字段；后者使用体格检查正文去除固定生命体征及身高、体重、腰围测量槽位后的描述性内容，固定体征仍由 `physicalExamVitalSigns` 结构化回写。动态模板入口继续由 `features/outpatient-emr/lib/outpatientEmrStructuredProjection.ts` 按当前目标字段投影。
 
 女性病史年龄门禁：`features/clinical-result/lib/femaleHistoryEligibility.ts` 统一判定“女性且 14≤周岁年龄<60”；普通语音上下文、症状结果适配、慢病结果、共享结果页缓存与回写均复用该纯规则，月龄、日龄和年龄不明不开放月经史/婚育史。
 

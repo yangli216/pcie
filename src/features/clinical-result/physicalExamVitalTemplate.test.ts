@@ -4,6 +4,7 @@ import {
   collectPhysicalExamVitalSigns,
   DEFAULT_PHYSICAL_EXAM_VITAL_TEMPLATE,
   extractPhysicalExamVitalValues,
+  stripPhysicalExamStructuredNarrative,
   stripPhysicalExamVitalNarrative,
 } from './physicalExamVitalTemplate';
 
@@ -38,6 +39,16 @@ describe('physicalExamVitalTemplate', () => {
     expect(stripPhysicalExamVitalNarrative(
       'T:36.5℃ P:76次/分 R:18次/分 Bp:128/82mmHg。收缩压：128mmHg，舒张压：82mmHg。双肺呼吸音粗。',
     )).toBe('双肺呼吸音粗。');
+  });
+
+  it('keeps only descriptive text when projecting the other physical exam field', () => {
+    expect(stripPhysicalExamStructuredNarrative(
+      'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。意识清楚，精神佳；{无病容}，身高：{身高}cm，体重：{体重}kg，腰围：{腰围}cm。神清。双下肢无水肿。',
+    )).toBe('意识清楚，精神佳；{无病容}，神清。双下肢无水肿。');
+
+    expect(stripPhysicalExamStructuredNarrative(
+      '身高168cm，体重55kg，腰围80cm。体重下降3kg，双足皮肤完整。',
+    )).toBe('体重下降3kg，双足皮肤完整。');
   });
 
   it('returns only filled slots as writeback metadata', () => {

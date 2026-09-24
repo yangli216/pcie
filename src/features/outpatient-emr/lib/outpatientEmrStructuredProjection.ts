@@ -6,7 +6,7 @@ import {
   HISTORY_DATA_ID_BY_SLOT,
   PHYSICAL_EXAM_DATA_ID_BY_SLOT,
 } from '@features/clinical-result/recordConfirmedEmrFieldValues';
-import { stripPhysicalExamVitalNarrative } from '@features/clinical-result/physicalExamVitalTemplate';
+import { stripPhysicalExamStructuredNarrative } from '@features/clinical-result/physicalExamVitalTemplate';
 
 interface StructuredHistoryChange {
   field: string;
@@ -151,7 +151,7 @@ export function resolveOutpatientEmrStructuredFieldValues(input: {
   const physicalExamSection = readPhysicalExamSection(input.recordContext);
   const otherPhysicalExamValue = physicalExamSection === undefined
     ? undefined
-    : stripPhysicalExamVitalNarrative(physicalExamSection);
+    : stripPhysicalExamStructuredNarrative(physicalExamSection);
   const fieldsById = new Map(input.fields.map((field) => [field.id, field]));
   const values: Record<string, string> = {};
 
