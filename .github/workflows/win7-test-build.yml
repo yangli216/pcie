@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '技术验证候选版本号（稳定 X.Y.Z，例如 1.4.4）'
+        description: 'Win7 候选版本（X.Y.Z-win7[.N]，例如 1.4.8-win7.1）'
         required: true
         type: string
 
@@ -56,7 +56,7 @@ jobs:
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}
         run: |
-          node scripts/test-release.mjs --version "$env:CANDIDATE_VERSION" --dry-run
+          node scripts/test-release.mjs --win7 --version "$env:CANDIDATE_VERSION" --dry-run
           yarn test:win7-build
           yarn test:release
           $targets = rustc --print target-list
@@ -92,7 +92,7 @@ jobs:
           try {
             cargo --version
             rustc --version
-            node scripts/test-release.mjs --version "$env:CANDIDATE_VERSION" -- --config src-tauri/tauri.win7.conf.json --target "$env:WIN7_TARGET"
+            node scripts/test-release.mjs --win7 --version "$env:CANDIDATE_VERSION" -- --config src-tauri/tauri.win7.conf.json --target "$env:WIN7_TARGET"
           }
           finally {
             Move-Item $hiddenRustupPath $rustupPath

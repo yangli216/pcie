@@ -1,7 +1,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compareSemver, parseSemver } from './release-preflight.mjs';
+import { parseSemver } from './release-preflight.mjs';
 import { assertProjectVersionsAligned, readProjectVersionState } from './release-version.mjs';
+import {
+  compareWin7ChannelVersions,
+  resolveWin7TargetVersion,
+} from './win7-version.mjs';
 
 export const WIN7_RELEASE_CHANNELS = ['win7-testing', 'win7-production'];
 
@@ -42,13 +46,9 @@ export function validateWin7ReleasePreflight({
   referenceDate = new Date(),
 }) {
   parseSemver(sourceVersion, 'source version');
-  parseSemver(version, 'Win7 release version');
-  if (compareSemver(version, sourceVersion) <= 0) {
-    throw new Error(`Win7 release ${version} must be newer than source version ${sourceVersion}`);
-  }
+  resolveWin7TargetVersion(sourceVersion, version);
   if (previousVersion) {
-    parseSemver(previousVersion, 'previous Win7 release version');
-    if (compareSemver(version, previousVersion) <= 0) {
+    if (compareWin7ChannelVersions(version, previousVersion) <= 0) {
       throw new Error(`Win7 release ${version} must be newer than channel version ${previousVersion}`);
     }
   }

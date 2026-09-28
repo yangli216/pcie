@@ -89,6 +89,7 @@ export function validateWin7Configuration({
     'Win7 workflow must bypass and restore the Tauri rustup-only target check',
   );
   assert(workflow.includes('actions/upload-artifact@'), 'Win7 workflow must upload an Actions Artifact');
+  assert(workflow.includes('test-release.mjs --win7'), 'Win7 validation workflow must use the isolated Win7 version policy');
 
   const forbidden = [
     'tauri-apps/tauri-action',
@@ -127,6 +128,7 @@ export function validateWin7Configuration({
   for (const marker of requiredReleaseMarkers) {
     assert(releaseWorkflow.includes(marker), `Win7 release workflow is missing isolation marker: ${marker}`);
   }
+  assert(releaseWorkflow.includes('test-release.mjs --win7'), 'Win7 release workflow must use the isolated Win7 version policy');
   for (const marker of [
     'tauri-apps/tauri-action',
     'secrets.TAURI_SIGNING_PRIVATE_KEY',

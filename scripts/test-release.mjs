@@ -8,6 +8,7 @@ import {
   restoreProjectVersionState,
   writeProjectVersion,
 } from './release-version.mjs';
+import { parseWin7Version, resolveWin7TargetVersion } from './win7-version.mjs';
 
 function parseArgs(argv) {
   const separatorIndex = argv.indexOf('--');
@@ -16,20 +17,23 @@ function parseArgs(argv) {
   let explicitVersion;
   let type = 'patch';
   let dryRun = false;
+  let versionPolicy = 'stable';
 
   for (let index = 0; index < scriptArgs.length; index += 1) {
     const value = scriptArgs[index];
     if (value === '--version') {
       const nextValue = scriptArgs[index + 1];
       if (!nextValue || nextValue.startsWith('--')) {
-        throw new Error('--version requires a stable X.Y.Z value');
+        throw new Error('--version requires a version value');
       }
       explicitVersion = nextValue;
       index += 1;
     } else if (value === '--dry-run') {
       dryRun = true;
+    } else if (value === '--win7') {
+      versionPolicy = 'win7';
     } else if (!value.startsWith('--')) {
-      if (/^\d+\.\d+\.\d+$/.test(value)) {
+      if (/^\d+\.\d+\.\d+(?:-win7(?:\.\d+)?)?$/.test(value)) {
         explicitVersion = value;
       } else {
         type = value;
@@ -39,7 +43,7 @@ function parseArgs(argv) {
     }
   }
 
-  return { explicitVersion, type, dryRun, buildArgs };
+  return { explicitVersion, type, dryRun, versionPolicy, buildArgs };
 }
 
 export function runCandidateBuild({
@@ -47,6 +51,7 @@ export function runCandidateBuild({
   explicitVersion,
   type = 'patch',
   dryRun = false,
+  versionPolicy = 'stable',
   buildArgs = [],
   createUpdaterArtifacts,
   runner,
@@ -54,15 +59,20 @@ export function runCandidateBuild({
 }) {
   const state = readProjectVersionState(rootDir);
   const currentVersion = assertProjectVersionsAligned(state);
-  const targetVersion = resolveTargetVersion(currentVersion, { explicitVersion, type });
-  logger.log(`Candidate build: ${currentVersion} -> ${targetVersion}`);
+  const targetVersion = versionPolicy === 'win7'
+    ? resolveWin7TargetVersion(currentVersion, explicitVersion)
+    : resolveTargetVersion(currentVersion, { explicitVersion, type });
+  logger.log(`${versionPolicy === 'win7' ? 'Win7 candidate' : 'Candidate'} build: ${currentVersion} -> ${targetVersion}`);
 
   if (dryRun) {
     logger.log('Candidate validation passed; no files were changed.');
     return { currentVersion, targetVersion, built: false };
   }
 
-  writeProjectVersion(state, targetVersion, { createUpdaterArtifacts });
+  writeProjectVersion(state, targetVersion, {
+    createUpdaterArtifacts,
+    validateVersion: versionPolicy === 'win7' ? parseWin7Version : undefined,
+  });
   try {
     runner({ rootDir, targetVersion, buildArgs });
     return { currentVersion, targetVersion, built: true };

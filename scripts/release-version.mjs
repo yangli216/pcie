@@ -122,8 +122,8 @@ export function assertProjectVersionsAligned(state) {
   return currentVersion;
 }
 
-export function writeProjectVersion(state, version, { createUpdaterArtifacts } = {}) {
-  parseStableVersion(version, 'target version');
+export function writeProjectVersion(state, version, { createUpdaterArtifacts, validateVersion = parseStableVersion } = {}) {
+  validateVersion(version, 'target version');
   const packageJson = { ...state.parsed.packageJson, version };
   const tauriConfig = { ...state.parsed.tauriConfig, version };
   if (typeof createUpdaterArtifacts === 'boolean') {

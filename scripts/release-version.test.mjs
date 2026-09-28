@@ -71,6 +71,27 @@ test('candidate build exposes target versions during build and restores every ve
   assert.deepEqual(readProjectVersionState(rootDir).contents, before.contents);
 });
 
+test('Win7 candidate build temporarily injects an isolated prerelease version', () => {
+  const rootDir = createProject('1.4.8');
+  const before = readProjectVersionState(rootDir);
+  const result = runCandidateBuild({
+    rootDir,
+    explicitVersion: '1.4.8-win7.2',
+    versionPolicy: 'win7',
+    createUpdaterArtifacts: false,
+    logger: { log: () => undefined },
+    runner: () => {
+      assert.deepEqual(readProjectVersionState(rootDir).versions, {
+        packageJson: '1.4.8-win7.2',
+        tauriConfig: '1.4.8-win7.2',
+        cargo: '1.4.8-win7.2',
+      });
+    },
+  });
+  assert.equal(result.targetVersion, '1.4.8-win7.2');
+  assert.deepEqual(readProjectVersionState(rootDir).contents, before.contents);
+});
+
 test('candidate build restores version files when the build fails', () => {
   const rootDir = createProject();
   const before = readProjectVersionState(rootDir);

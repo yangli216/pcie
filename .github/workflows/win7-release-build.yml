@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Win7 发布版本（稳定 X.Y.Z，必须高于源码及目标通道当前版本）'
+        description: 'Win7 发布版本（X.Y.Z-win7[.N]，基础版本必须等于源码）'
         required: true
         type: string
       previous_version:
-        description: '目标 Win7 通道当前版本（首次发布填写当前验证基线版本）'
+        description: '目标 Win7 通道当前版本（首次发布可填写旧稳定验证基线）'
         required: true
         type: string
       channel:
@@ -131,7 +131,7 @@ jobs:
         run: |
           yarn test:win7-build
           yarn test:release
-          node scripts/test-release.mjs --version "$env:CANDIDATE_VERSION" --dry-run
+          node scripts/test-release.mjs --win7 --version "$env:CANDIDATE_VERSION" --dry-run
           $targets = rustc --print target-list
           if ($targets -notcontains $env:WIN7_TARGET) {
             throw "Pinned Rust toolchain does not expose target $env:WIN7_TARGET"
@@ -170,7 +170,7 @@ jobs:
           try {
             cargo --version
             rustc --version
-            node scripts/test-release.mjs --version "$env:CANDIDATE_VERSION" -- --config src-tauri/tauri.win7.release.generated.conf.json --target "$env:WIN7_TARGET"
+            node scripts/test-release.mjs --win7 --version "$env:CANDIDATE_VERSION" -- --config src-tauri/tauri.win7.release.generated.conf.json --target "$env:WIN7_TARGET"
           }
           finally {
             Move-Item $hiddenRustupPath $rustupPath
