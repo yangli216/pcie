@@ -7,8 +7,6 @@ import {
   mapAuxiliaryCatalogRecommendations,
   alignMedicineRecommendationsToInventory,
   buildClinicalResultTreatmentRequestSpec,
-  findUnmatchedMedicineInventoryIntentNames,
-  selectAvailableMedicineInventoryCandidates,
 } from '@features/clinical-result';
 import {
   generateVoiceTreatmentRecommendations,
@@ -34,7 +32,6 @@ vi.mock('@/services/medicalData', () => ({
 vi.mock('@/services/his', () => ({}));
 vi.mock('@features/clinical-result', async () => {
   const currentInformation = await import('../../clinical-result/currentInformationMedication');
-  const inventoryApi = await import('../../clinical-result/api/availableMedicineInventory');
   return {
     ...currentInformation,
     alignMedicineRecommendationsToInventory: vi.fn((items) => items),
@@ -49,14 +46,11 @@ vi.mock('@features/clinical-result', async () => {
       config: {},
     })),
     buildInstitutionAuxiliaryCatalogContext: (await import('../../clinical-result/institutionAuxiliaryCatalog')).buildInstitutionAuxiliaryCatalogContext,
-    findUnmatchedMedicineInventoryIntentNames: vi.fn(inventoryApi.findUnmatchedMedicineInventoryIntentNames),
-    formatAvailableMedicineInventoryCandidatesPrompt: vi.fn(inventoryApi.formatAvailableMedicineInventoryCandidatesPrompt),
     loadAvailableMedicineInventoryContext: vi.fn(),
     mapAuxiliaryCatalogRecommendations: vi.fn(() => [{
       type: 'lab_test', name: '血常规', reason: '评估感染', selected: false,
     }]),
     parseLLMJson: vi.fn((value) => JSON.parse(value)),
-    selectAvailableMedicineInventoryCandidates: vi.fn(inventoryApi.selectAvailableMedicineInventoryCandidates),
   };
 });
 
@@ -70,7 +64,7 @@ function currentInformationInput(): VoiceTreatmentGenerationInput {
     patientName: '患者', gender: '女', age: '40岁', diagnosisName: '咳嗽', diagnosisCode: 'R05',
     chiefComplaint: '咳嗽', clinicalContext: '过敏史和查体',
     requestedTypes: ['medicine', 'lab_test', 'exam'],
-    currentInformationMedication: { symptomaticOnly: true, source: 'doctor' },
+    currentInformationMedication: { symptomaticOnly: true },
     explicitTreatments: [], pharmacies: [], consultationId: 'visit-1',
     normalize: (item) => item as TreatmentRecommendation,
   };
@@ -85,16 +79,14 @@ describe('generateVoiceTreatmentRecommendations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(loadAvailableMedicineInventoryContext).mockResolvedValue({
-      items: [availableMedicine], promptContext: '完整院内药品目录不应进入专用最终请求',
+      items: [availableMedicine],
+      promptContext: '【当前可用发药药房有效库存目录】\n- 可推荐药片｜5mg*10片/盒',
       pharmacyCount: 1, staleStoreCount: 0,
     });
   });
 
-  it('uses a fast intent request and sends only exact inventory candidates to the final model', async () => {
+  it('uses one default-model request with the complete available inventory', async () => {
     const phases: string[] = [];
-    vi.mocked(chatFast).mockResolvedValue(JSON.stringify({
-      summary: '意图评估', disposition: 'medication_options', medicines: [supported],
-    }));
     vi.mocked(chat).mockResolvedValue(JSON.stringify({
       summary: '处方评估', disposition: 'medication_options',
       medicines: [{ ...supported, name: '可推荐药片', spec: '5mg', targetDose: '5', targetDoseUnit: 'mg' }],
@@ -106,58 +98,37 @@ describe('generateVoiceTreatmentRecommendations', () => {
     });
 
     expect(phases).toEqual(['preparing', 'assessing']);
-    expect(chatFast).toHaveBeenCalledTimes(1);
+    expect(chatFast).not.toHaveBeenCalled();
     expect(chat).toHaveBeenCalledTimes(1);
-    expect(chatFast).toHaveBeenCalledWith(
+    expect(chat).toHaveBeenCalledWith(
       expect.anything(), undefined, undefined, undefined, expect.objectContaining({ temperature: 0 }),
     );
-    const intentUser = vi.mocked(chatFast).mock.calls[0][0][1].content;
-    const prescriptionUser = vi.mocked(chat).mock.calls[0][0][1].content;
-    expect(intentUser).not.toContain('完整院内药品目录');
-    expect(prescriptionUser).toContain('可推荐药片｜5mg*10片/盒');
-    expect(prescriptionUser).not.toContain('完整院内药品目录不应进入专用最终请求');
-    expect(selectAvailableMedicineInventoryCandidates).toHaveBeenCalledWith(
-      [availableMedicine], expect.any(Array), 16,
-    );
+    const userPrompt = vi.mocked(chat).mock.calls[0][0][1].content;
+    expect(userPrompt).toContain('【当前可用发药药房有效库存目录】');
+    expect(userPrompt).toContain('可推荐药片｜5mg*10片/盒');
     expect(alignMedicineRecommendationsToInventory).toHaveBeenCalledWith(expect.any(Array), [availableMedicine]);
     expect(results[0]).toMatchObject({ status: 'ready_with_items', medicationAssessment: { summary: '处方评估' } });
     expect(medicalDataService.fetchAvailableExamLabItems).not.toHaveBeenCalled();
   });
 
-  it.each(['empty', 'urgent'] as const)('skips the final model for an %s intent result', async (scenario) => {
-    vi.mocked(chatFast).mockResolvedValue(JSON.stringify({
+  it.each(['empty', 'urgent'] as const)('accepts an %s full-inventory assessment', async (scenario) => {
+    vi.mocked(chat).mockResolvedValue(JSON.stringify({
       summary: '评估结论',
       disposition: scenario === 'urgent' ? 'urgent_referral' : 'medication_options',
       medicines: [],
     }));
     const results = await generateVoiceTreatmentRecommendations(currentInformationInput());
-    expect(chatFast).toHaveBeenCalledTimes(1);
-    expect(chat).not.toHaveBeenCalled();
+    expect(chatFast).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
     expect(results[0]).toMatchObject({ status: 'ready_empty', items: [] });
   });
 
-  it('retries and closes when the intent response is malformed', async () => {
-    vi.mocked(chatFast).mockResolvedValue(JSON.stringify([supported]));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const results = await generateVoiceTreatmentRecommendations(currentInformationInput());
-      expect(chatFast).toHaveBeenCalledTimes(2);
-      expect(chat).not.toHaveBeenCalled();
-      expect(results[0]).toMatchObject({ status: 'model_invalid', items: [] });
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it('retries and closes when the final prescription response is malformed', async () => {
-    vi.mocked(chatFast).mockResolvedValue(JSON.stringify({
-      summary: '意图评估', disposition: 'medication_options', medicines: [supported],
-    }));
+  it('retries once and closes when the full-inventory response is malformed', async () => {
     vi.mocked(chat).mockResolvedValue(JSON.stringify([supported]));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const results = await generateVoiceTreatmentRecommendations(currentInformationInput());
-      expect(chatFast).toHaveBeenCalledTimes(1);
+      expect(chatFast).not.toHaveBeenCalled();
       expect(chat).toHaveBeenCalledTimes(2);
       expect(results[0]).toMatchObject({ status: 'model_invalid', items: [] });
       expect(alignMedicineRecommendationsToInventory).not.toHaveBeenCalled();
@@ -166,20 +137,22 @@ describe('generateVoiceTreatmentRecommendations', () => {
     }
   });
 
-  it('returns an inventory deferral without a final request when no exact candidate exists', async () => {
+  it('still sends the complete inventory when local intent-name matching would have found no candidate', async () => {
+    const otherMedicine = { ...availableMedicine, productId: 'other', productName: '其他药片' };
     vi.mocked(loadAvailableMedicineInventoryContext).mockResolvedValue({
-      items: [{ ...availableMedicine, productId: 'other', productName: '其他药片' }],
-      promptContext: '完整目录', pharmacyCount: 1, staleStoreCount: 0,
+      items: [otherMedicine],
+      promptContext: '【当前可用发药药房有效库存目录】\n- 其他药片｜5mg*10片/盒',
+      pharmacyCount: 1, staleStoreCount: 0,
     });
-    vi.mocked(chatFast).mockResolvedValue(JSON.stringify({
-      summary: '意图评估', disposition: 'medication_options', medicines: [supported],
+    vi.mocked(chat).mockResolvedValue(JSON.stringify({
+      summary: '完整目录评估', disposition: 'medication_options', medicines: [],
     }));
     const results = await generateVoiceTreatmentRecommendations(currentInformationInput());
-    expect(chat).not.toHaveBeenCalled();
-    expect(findUnmatchedMedicineInventoryIntentNames).toHaveBeenCalled();
-    expect(results[0].medicationAssessment?.deferred).toEqual([
-      { name: '可推荐药', reason: '未精确命中院内有效库存候选，暂不提供可选药品' },
-    ]);
+    expect(chatFast).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(chat).mock.calls[0][0][1].content).toContain('其他药片｜5mg*10片/盒');
+    expect(alignMedicineRecommendationsToInventory).toHaveBeenCalledWith([], [otherMedicine]);
+    expect(results[0]).toMatchObject({ status: 'ready_empty', items: [] });
   });
 
   it('does not load medicine inventory when the M1 plan only requests lab tests', async () => {

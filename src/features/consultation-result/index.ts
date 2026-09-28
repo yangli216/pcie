@@ -267,5 +267,4 @@ export { createMedicineCatalogPreparation } from './model/medicineCatalogPrepara
 export type {
   CurrentInformationMedicationPhase,
   CurrentInformationMedicationRequest,
-  CurrentInformationMedicationRequestSource,
 } from './model/useCurrentInformationMedication';

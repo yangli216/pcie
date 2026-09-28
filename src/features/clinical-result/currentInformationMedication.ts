@@ -3,10 +3,6 @@ import type { AppPatient } from '@/types/appState';
 import { getPatientContextAllergyHistory, getPatientContextCurrentMedicationHistory } from '@/utils/patientContext';
 import type { RawClinicalResultTreatmentRecommendationInput } from './clinicalResultAiMapping';
 import type { ClinicalResultTreatmentPromptAsset } from './clinicalResultAiRequest';
-import type { MedicineInventoryCandidateIntent } from './api/availableMedicineInventory';
-
-export const CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT = 4;
-export const CURRENT_INFORMATION_MEDICATION_INVENTORY_LIMIT = 16;
 
 export interface CurrentInformationMedicationAssessment {
   summary: string;
@@ -105,53 +101,25 @@ ${symptomaticOnly ? '当前为症状性工作诊断，只允许 purpose=symptoma
 若需紧急处置或转诊，disposition=urgent_referral，medicines=[]。否则 disposition=medication_options。允许零药品，不为满足数量凑药。`;
 }
 
-export function buildCurrentInformationMedicationIntentPrompt(
-  symptomaticOnly: boolean,
-): ClinicalResultTreatmentPromptAsset {
-  return {
-    system: `你是基层临床用药意图评估助手。先判断当前信息支持哪些药物通用名，供程序查询院内库存；本阶段不制定处方。
-
-${buildCurrentInformationMedicationSafetyRules(symptomaticOnly)}
-最多返回 ${CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT} 个 medicines。name 必须是规范通用名，aliases 只放稳定简称或同一通用名的常用写法，最多 3 个；不得给出商品名。
-本阶段禁止输出规格、剂量、频次、用法、疗程、包装总量，也不得读取或猜测院内库存。summary 不得列举具体药名。
-只返回下述 JSON 对象，不输出 Markdown，不返回 JSON 数组：
-{"summary":"简洁评估结论或无药原因","disposition":"medication_options|urgent_referral","medicines":[{"name":"规范通用名","aliases":["稳定别名"],"purpose":"symptomatic|etiologic","eligibility":"supported|requires_evidence","basis":"当前病例中的具体依据","missingEvidence":[],"reason":"推荐意图或暂缓原因"}]}
-supported 必须有具体 basis、reason 且 missingEvidence 为空；requires_evidence 必须明确缺少的依据。`,
-    buildUserPrompt: (params) => `${buildCurrentInformationMedicationPatientContext(params)}
-
-请先完成临床用药意图评估。不要输出处方剂量，不要使用普通用药推荐的数组协议。`,
-  };
-}
-
 export function buildCurrentInformationMedicationPrompt(
-  intentResult: CurrentInformationMedicationResult,
   symptomaticOnly: boolean,
 ): ClinicalResultTreatmentPromptAsset {
-  const supportedIntents = intentResult.recommendations.map((item) => ({
-    name: text(item.name),
-    aliases: Array.isArray(item.aliases) ? item.aliases.map(text).filter(Boolean).slice(0, 3) : [],
-    purpose: text(item.purpose),
-    basis: text(item.basis),
-    reason: text(item.intentReason || item.reason),
-  }));
   return {
-    system: `你是基层临床处方建议助手。程序已根据第一阶段临床意图精确筛选院内有效库存；本阶段只负责从候选中形成可核验的处方建议。
+    system: `你是基层临床处方建议助手。请基于当前病例和院内完整有效库存，一次完成用药评估与处方候选生成。
 
 ${buildCurrentInformationMedicationSafetyRules(symptomaticOnly)}
-只能选择 user 消息中的院内有效库存候选，药品名称和规格必须与候选完全一致，不得添加候选外药品，不得猜测临床等效药。
+只能选择 user 消息中“院内完整有效库存”里的药品，药品名称和规格必须与目录完全一致；不得添加目录外药品，不得自行猜测或替换临床等效药。
 逐药核对剂量安全性。剂量仍依赖缺失的体重、肾功能、肝功能或其他关键依据时，必须 eligibility=requires_evidence，且不得输出剂量等处方字段。
 summary 不得列举具体药名。所有 supported 药品必须逐项进入 medicines，不得只在 summary 中描述。
 只返回下述 JSON 对象，不输出 Markdown，不返回 JSON 数组：
-{"summary":"简洁评估结论或无药原因","disposition":"medication_options|urgent_referral","medicines":[{"type":"medicine","name":"候选中的完整药品名称","purpose":"symptomatic|etiologic","eligibility":"supported|requires_evidence","basis":"当前病例中的具体依据","missingEvidence":[],"reason":"推荐或暂缓原因","spec":"制剂规格","targetDose":"一次剂量数值","targetDoseUnit":"剂量单位","frequency":"标准频次","frequencyKey":"","usage":"用法","usageKey":"","days":"疗程天数"}]}
+{"summary":"简洁评估结论或无药原因","disposition":"medication_options|urgent_referral","medicines":[{"type":"medicine","name":"库存目录中的完整药品名称","purpose":"symptomatic|etiologic","eligibility":"supported|requires_evidence","basis":"当前病例中的具体依据","missingEvidence":[],"reason":"推荐或暂缓原因","spec":"库存目录中的完整制剂规格","targetDose":"一次剂量数值","targetDoseUnit":"剂量单位","frequency":"标准频次","frequencyKey":"","usage":"用法","usageKey":"","days":"疗程天数"}]}
 supported 必须有具体 basis、reason 且 missingEvidence 为空。dosage、dosageUnit、totalQty、totalUnit 留空，不设置选中状态。`,
     buildUserPrompt: (params) => `${buildCurrentInformationMedicationPatientContext(params)}
 
-【第一阶段已支持的临床用药意图】
-${JSON.stringify(supportedIntents)}
+${params.availableMedicineInventory || '【院内完整有效库存】\n- 当前未取得可用库存'}
 
-${params.availableMedicineInventory || '【院内有效库存候选】\n- 未命中候选'}
-
-请仅在上述候选范围内形成最终处方建议。`,
+本入口以 system 中的严格目录规则为准：仅可返回上述目录中真实存在的完整药品名称和规格，不得返回目录外通用名作为无库存参考。
+请仅从上述完整库存中选择适合当前病例的药品，并一次返回评估结论和结构化处方候选。`,
   };
 }
 
@@ -182,7 +150,7 @@ export function parseCurrentInformationMedicationResult(
   };
   if (result.disposition === 'urgent_referral') return result;
 
-  for (const raw of root.medicines.slice(0, CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT)) {
+  for (const raw of root.medicines) {
     const item = record(raw);
     const name = text(item?.name);
     const purpose = text(item?.purpose);
@@ -232,54 +200,6 @@ export function parseCurrentInformationMedicationResult(
     });
   }
   return result;
-}
-
-export function buildCurrentInformationMedicationInventoryIntents(
-  result: CurrentInformationMedicationResult,
-): MedicineInventoryCandidateIntent[] {
-  return result.recommendations.slice(0, CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT).flatMap((item) => {
-    const name = text(item.name);
-    if (!name) return [];
-    return [{
-      preferredGenericNames: [name],
-      aliases: Array.isArray(item.aliases)
-        ? item.aliases.map(text).filter(Boolean).slice(0, 3)
-        : [],
-    }];
-  });
-}
-
-export function mergeCurrentInformationMedicationStageAssessments(
-  intentAssessment: CurrentInformationMedicationResult,
-  prescriptionAssessment: CurrentInformationMedicationResult | null,
-  unavailableNames: string[],
-): CurrentInformationMedicationResult {
-  if (intentAssessment.disposition === 'urgent_referral') return intentAssessment;
-  const effective = prescriptionAssessment || intentAssessment;
-  const disposition = effective.disposition;
-  if (disposition === 'urgent_referral') {
-    return { ...effective, recommendations: [], deferred: [] };
-  }
-  const deferred = [
-    ...intentAssessment.deferred,
-    ...(prescriptionAssessment?.deferred || []),
-    ...unavailableNames.map((name) => ({
-      name,
-      reason: '未精确命中院内有效库存候选，暂不提供可选药品',
-    })),
-  ];
-  const seen = new Set<string>();
-  return {
-    summary: effective.summary,
-    disposition,
-    recommendations: prescriptionAssessment?.recommendations || [],
-    deferred: deferred.filter((item) => {
-      const key = `${item.name}\u0000${item.reason}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }),
-  };
 }
 
 /** Preserve every existing order/edit/selection; append only new, unselected medicine identities. */

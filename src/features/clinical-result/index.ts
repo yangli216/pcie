@@ -438,15 +438,10 @@ export type {
 } from './treatmentRequiredFields';
 export { completeGeneratedPrecautions } from './precautionsFollowUp';
 export {
-  CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT,
-  CURRENT_INFORMATION_MEDICATION_INVENTORY_LIMIT,
-  buildCurrentInformationMedicationIntentPrompt,
-  buildCurrentInformationMedicationInventoryIntents,
   buildCurrentInformationMedicationPrompt,
   buildCurrentInformationMedicationHistory,
   buildCurrentInformationMedicationTimingLog,
   buildFinalCurrentInformationMedicationAssessment,
-  mergeCurrentInformationMedicationStageAssessments,
   parseCurrentInformationMedicationResult,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,

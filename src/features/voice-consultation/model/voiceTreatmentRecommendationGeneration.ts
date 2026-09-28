@@ -5,25 +5,17 @@ import { explicitlyRequestsRestrictedMedicalItem } from '@/services/medicalCatal
 import type { PharmacyOption } from '@/services/his';
 import { PROMPTS } from '@/prompts';
 import type { TreatmentRecommendation } from '@/types/consultation';
-import type { CurrentInformationMedicationRequestSource } from '@features/consultation-result';
 import {
   alignMedicineRecommendationsToInventory,
   assessTreatmentCatalogMatch,
   buildClinicalResultTreatmentRecommendationsFromRaw,
   buildClinicalResultTreatmentRequestSpec,
-  buildCurrentInformationMedicationIntentPrompt,
-  buildCurrentInformationMedicationInventoryIntents,
   buildCurrentInformationMedicationPrompt,
-  mergeCurrentInformationMedicationStageAssessments,
   parseCurrentInformationMedicationResult,
   buildInstitutionAuxiliaryCatalogContext,
-  findUnmatchedMedicineInventoryIntentNames,
-  formatAvailableMedicineInventoryCandidatesPrompt,
   loadAvailableMedicineInventoryContext,
   mapAuxiliaryCatalogRecommendations,
   parseLLMJson,
-  selectAvailableMedicineInventoryCandidates,
-  CURRENT_INFORMATION_MEDICATION_INVENTORY_LIMIT,
   type AuxiliaryCatalogRecommendationResponse,
   type ClinicalResultRecommendationType,
   type RawClinicalResultTreatmentRecommendationInput,
@@ -41,7 +33,6 @@ export interface VoiceTreatmentGenerationInput {
   clinicalContext: string;
   currentInformationMedication?: {
     symptomaticOnly: boolean;
-    source: CurrentInformationMedicationRequestSource;
   };
   requestedTypes: ClinicalResultRecommendationType[];
   explicitTreatments: TreatmentRecommendation[];
@@ -168,88 +159,27 @@ export async function generateVoiceTreatmentRecommendations(
       await input.onMedicationPhase?.('assessing');
 
       if (input.currentInformationMedication) {
-        const intentPrompt = buildCurrentInformationMedicationIntentPrompt(
+        const inventory = await inventoryPromise;
+        const medicationPrompt = buildCurrentInformationMedicationPrompt(
           input.currentInformationMedication.symptomaticOnly,
         );
-        const intentSpec = buildClinicalResultTreatmentRequestSpec('medication', baseParams, intentPrompt, {
-          consultationId: input.consultationId,
-        }, {
-          scene: 'current-information-medication-intent',
-          operationAction: 'assess_medication_intent_with_current_information',
-          title: input.currentInformationMedication.source === 'automatic'
-            ? '普通语音空执行路由评估用药意图' : '医生主动评估用药意图',
-        });
-        const endIntentModel = input.timing?.span('medicine_intent_model');
-        const intentModelStartedAt = Date.now();
-        const intentAssessmentPromise = (async () => {
-          try {
-            return await requestAndParseWithOneRetry(
-              () => chatFast(intentSpec.messages, undefined, undefined, undefined, {
-                ...intentSpec.config,
-                temperature: 0,
-              }),
-              (response) => parseCurrentInformationMedicationModelResponse(
-                response,
-                input.currentInformationMedication!.symptomaticOnly,
-              ),
-            );
-          } finally {
-            endIntentModel?.();
-            console.info(`[CurrentInformationMedicationTiming] 用药意图模型 ${Date.now() - intentModelStartedAt} ms`);
-          }
-        })();
-        const [intentAssessment, inventory] = await Promise.all([
-          intentAssessmentPromise,
-          inventoryPromise,
-        ]);
-        const intents = buildCurrentInformationMedicationInventoryIntents(intentAssessment);
-        const candidates = selectAvailableMedicineInventoryCandidates(
-          inventory.items,
-          intents,
-          CURRENT_INFORMATION_MEDICATION_INVENTORY_LIMIT,
-        );
-        const unavailableNames = findUnmatchedMedicineInventoryIntentNames(candidates, intents);
-        console.info(
-          `[CurrentInformationMedicationTiming] 候选收敛 全量 ${inventory.items.length} 项 | 意图 ${intents.length} 项 | 候选 ${candidates.length} 项 | 未命中 ${unavailableNames.length} 项`,
-        );
-
-        if (intentAssessment.disposition === 'urgent_referral'
-          || intents.length === 0 || candidates.length === 0) {
-          const assessment = mergeCurrentInformationMedicationStageAssessments(
-            intentAssessment,
-            null,
-            unavailableNames,
-          );
-          return readyResult({
-            key: 'medication',
-            types: ['medicine'],
-            medicationAssessment: assessment,
-            items: [],
-          });
-        }
-
-        const prescriptionPrompt = buildCurrentInformationMedicationPrompt(
-          intentAssessment,
-          input.currentInformationMedication.symptomaticOnly,
-        );
-        const prescriptionSpec = buildClinicalResultTreatmentRequestSpec('medication', {
+        const spec = buildClinicalResultTreatmentRequestSpec('medication', {
           ...baseParams,
-          availableMedicineInventory: formatAvailableMedicineInventoryCandidatesPrompt(candidates),
-        }, prescriptionPrompt, {
+          availableMedicineInventory: inventory.promptContext,
+        }, medicationPrompt, {
           consultationId: input.consultationId,
         }, {
-          scene: 'current-information-medication-prescription',
-          operationAction: 'generate_medication_with_current_information',
-          title: input.currentInformationMedication.source === 'automatic'
-            ? '普通语音空执行路由生成候选处方' : '医生主动基于现有信息生成候选处方',
+          scene: 'current-information-medication',
+          operationAction: 'assess_medication_with_current_information',
+          title: '医生主动基于现有信息评估用药',
         });
-        const endPrescriptionModel = input.timing?.span('medicine_prescription_model');
-        const prescriptionModelStartedAt = Date.now();
-        let prescriptionAssessment: ReturnType<typeof parseCurrentInformationMedicationResult>;
+        const endModel = input.timing?.span('medicine_model');
+        const modelStartedAt = Date.now();
+        let assessment: ReturnType<typeof parseCurrentInformationMedicationResult>;
         try {
-          prescriptionAssessment = await requestAndParseWithOneRetry(
-            () => chat(prescriptionSpec.messages, undefined, undefined, undefined, {
-              ...prescriptionSpec.config,
+          assessment = await requestAndParseWithOneRetry(
+            () => chat(spec.messages, undefined, undefined, undefined, {
+              ...spec.config,
               temperature: 0,
             }),
             (response) => parseCurrentInformationMedicationModelResponse(
@@ -258,17 +188,12 @@ export async function generateVoiceTreatmentRecommendations(
             ),
           );
         } finally {
-          endPrescriptionModel?.();
-          console.info(`[CurrentInformationMedicationTiming] 候选处方模型 ${Date.now() - prescriptionModelStartedAt} ms`);
+          endModel?.();
+          console.info(`[CurrentInformationMedicationTiming] 全量目录用药模型 ${Date.now() - modelStartedAt} ms | 库存 ${inventory.items.length} 项`);
         }
-        const assessment = mergeCurrentInformationMedicationStageAssessments(
-          intentAssessment,
-          prescriptionAssessment,
-          unavailableNames,
-        );
         const raw = alignMedicineRecommendationsToInventory(
           assessment.recommendations,
-          candidates,
+          inventory.items,
         );
         return readyResult({
           key: 'medication',

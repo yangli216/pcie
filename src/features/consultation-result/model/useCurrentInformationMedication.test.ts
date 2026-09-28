@@ -8,8 +8,7 @@ import {
 
 const context = (): CurrentInformationMedicationContext => ({
   channel: 'voice', scopeKey: 'patient-1/visit-1/round-1/R05', hasSelectedDiagnosis: true,
-  symptomaticOnly: true, hasTreatments: false, hasMedicines: false, blocked: false, allowTreatmentRefresh: true,
-  resultComplete: true, automaticRequestKey: 'patient-1/visit-1/round-1/R05',
+  symptomaticOnly: true, hasMedicines: false, blocked: false, allowTreatmentRefresh: true,
   plan: { mode: 'diagnostic_first', recommendNow: ['lab_test'], defer: ['medicine'], skip: [], reason: '先检查', resumeCondition: 'report_available', confidence: 'high' },
 });
 const assessment = { summary: '暂无可推荐药品', disposition: 'medication_options' as const, deferred: [] };
@@ -23,7 +22,7 @@ function setup(run: (request: CurrentInformationMedicationRequest) => Promise<bo
 }
 
 describe('useCurrentInformationMedication', () => {
-  it('runs one explicit request, passes symptom-only scope and leaves automatic routing unchanged', async () => {
+  it('runs one explicit request, passes symptom-only scope and leaves treatment routing unchanged', async () => {
     let finish!: () => void;
     let activeRequest!: CurrentInformationMedicationRequest;
     const run = vi.fn(async (request: CurrentInformationMedicationRequest) => {
@@ -38,8 +37,7 @@ describe('useCurrentInformationMedication', () => {
     await controller.request();
     expect(run).toHaveBeenCalledTimes(1);
     expect(onRequest).toHaveBeenCalledOnce();
-    expect(onRequest).toHaveBeenCalledWith('doctor');
-    expect(activeRequest.source).toBe('doctor');
+    expect(onRequest).toHaveBeenCalledWith();
     expect(controller.pending.value).toBe(true);
     expect(controller.phase.value).toBe('preparing');
     activeRequest.reportPhase('assessing');
@@ -127,104 +125,20 @@ describe('useCurrentInformationMedication', () => {
     scope.stop();
   });
 
-  it('automatically assesses one completed formal-disease scope after blocking work settles', async () => {
-    const run = vi.fn(async (request: CurrentInformationMedicationRequest) => {
-      request.receive(assessment);
-      return true;
-    });
-    const { controller, state, scope, onRequest } = setup(run);
-    state.symptomaticOnly = false;
-    state.blocked = true;
-    await nextTick();
-    expect(run).not.toHaveBeenCalled();
-
-    state.blocked = false;
-    await nextTick();
-    await nextTick();
-    expect(run).toHaveBeenCalledOnce();
-    expect(run.mock.calls[0][0].source).toBe('automatic');
-    expect(onRequest).toHaveBeenCalledWith('automatic');
-    expect(controller.phase.value).toBe('completed');
-    scope.stop();
-  });
-
-  it('does not repeat an automatic attempt for the same key after failure or scope changes', async () => {
-    const run = vi.fn(async () => false);
-    const { state, scope } = setup(run);
-    state.symptomaticOnly = false;
-    await nextTick();
-    await nextTick();
-    expect(run).toHaveBeenCalledOnce();
-
-    state.scopeKey = 'changed-clinical-evidence';
-    state.blocked = true;
-    await nextTick();
-    state.blocked = false;
-    await nextTick();
-    expect(run).toHaveBeenCalledOnce();
-
-    state.automaticRequestKey = 'patient-1/visit-1/round-1/J06';
-    await nextTick();
-    await nextTick();
-    expect(run).toHaveBeenCalledTimes(2);
-    state.automaticRequestKey = 'patient-1/visit-1/round-1/R05';
-    await nextTick();
-    expect(run).toHaveBeenCalledTimes(2);
-    scope.stop();
-  });
-
-  it.each([
-    ['symptom diagnosis', (state: CurrentInformationMedicationContext) => { state.symptomaticOnly = true; }],
-    ['streaming result', (state: CurrentInformationMedicationContext) => { state.resultComplete = false; }],
-    ['medicine branch', (state: CurrentInformationMedicationContext) => { state.plan!.recommendNow = ['medicine']; }],
-    ['medicine not deferred', (state: CurrentInformationMedicationContext) => { state.plan!.defer = []; }],
-    ['medicine skipped', (state: CurrentInformationMedicationContext) => { state.plan!.skip = ['medicine']; }],
-    ['existing medicine', (state: CurrentInformationMedicationContext) => { state.hasMedicines = true; }],
-    ['symptom channel', (state: CurrentInformationMedicationContext) => { state.channel = 'symptom'; }],
-    ['chronic channel', (state: CurrentInformationMedicationContext) => { state.channel = 'chronic-refill'; }],
-  ])('does not automatically assess for %s', async (_name, arrange) => {
+  it('does not start an assessment when result state changes or blocking work settles', async () => {
     const run = vi.fn(async () => true);
-    const { state, scope } = setup(run);
+    const { state, scope, onRequest } = setup(run);
     state.symptomaticOnly = false;
+    state.blocked = true;
+    await nextTick();
+    state.blocked = false;
+    state.scopeKey = 'patient-1/visit-1/round-2/J06';
     state.plan!.recommendNow = [];
-    arrange(state);
+    state.plan!.defer = ['medicine'];
+    await nextTick();
     await nextTick();
     expect(run).not.toHaveBeenCalled();
-    scope.stop();
-  });
-
-  it('automatically assesses deferred medicine after exam or lab recommendations complete', async () => {
-    const run = vi.fn(async (request: CurrentInformationMedicationRequest) => {
-      request.receive(assessment);
-      return true;
-    });
-    const { state, scope } = setup(run);
-    state.symptomaticOnly = false;
-    state.hasTreatments = true;
-    state.plan!.recommendNow = ['exam', 'lab_test'];
-    await nextTick();
-    await nextTick();
-    expect(run).toHaveBeenCalledOnce();
-    scope.stop();
-  });
-
-  it('allows a doctor retry after an automatic attempt fails', async () => {
-    const run = vi.fn()
-      .mockResolvedValueOnce(false)
-      .mockImplementationOnce(async (request: CurrentInformationMedicationRequest) => {
-        request.receive(assessment);
-        return true;
-      });
-    const { controller, state, scope, onRequest } = setup(run);
-    state.symptomaticOnly = false;
-    await nextTick();
-    await nextTick();
-    expect(controller.phase.value).toBe('failed');
-
-    await controller.request();
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(onRequest.mock.calls.map(([source]) => source)).toEqual(['automatic', 'doctor']);
-    expect(controller.phase.value).toBe('completed');
+    expect(onRequest).not.toHaveBeenCalled();
     scope.stop();
   });
 });
