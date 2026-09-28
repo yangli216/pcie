@@ -18,11 +18,11 @@
 
 ## 快速导航
 
-普通语音治疗并行：`features/voice-consultation/model/voiceTreatmentRecommendationGeneration.ts` 在药品与检查 / 检验各分支内部准备目录，检查目录慢响应不阻塞药品结果；并发时序、目录空 / 失败及整体收口回归见同名 `.test.ts`。
+普通语音治疗并行：`features/voice-consultation/model/voiceTreatmentRecommendationGeneration.ts` 在药品与检查 / 检验各分支内部准备目录，检查目录慢响应不阻塞药品结果；同时负责下游确定性采样、模型格式异常单次重试及 `ready_with_items / ready_empty / catalog_unavailable / model_invalid / failed` 分支状态。并发时序、目录空 / 失败、格式重试及整体收口回归见同名 `.test.ts`。
 
 普通语音收起恢复：`features/voice-consultation/model/voiceEditorSnapshotRestoration.ts` 管理轮次资格与恢复期间的自动治疗保护；`voiceConsultationCache.ts` 保存编辑快照轮次，结果页在卸载前补存，并在初始结果应用保护内恢复完整快照。
 
-普通语音路由稳定性：`features/voice-consultation/lib/voiceRecommendationPlan.ts`（置信度无关的集合归一与决策摘要）+ `model/voiceRoutingDiagnostics.ts`（请求指纹、纯文本决策日志去重）；普通语音识别/修复通过 `llm.ts` 显式发送低温度，其他场景默认参数不变。
+普通语音路由稳定性：`features/voice-consultation/lib/voiceRecommendationPlan.ts`（模型 mode 到客户端固定执行集合的策略、协议集合归一与决策摘要）+ `model/voiceRoutingDiagnostics.ts`（请求指纹、纯文本决策日志去重）；普通语音识别/修复及药品、检查、检验下游生成通过 `llm.ts` 显式发送低温度，其他场景默认参数不变。
 
 语音流式输出顺序：`features/voice-consultation/lib/voiceIntentStreamProtocol.ts` 统一诊断/路由优先、候选随后到达的当前请求协议，并对托管提示词的完整 NDJSON 示例只重排原行；`prompts.ts` 与 PCIE Server 内置提示词同步 v1.5。
 
@@ -32,7 +32,7 @@
 
 语音诊断性能：`services/diagnosisCatalogMatch.ts` 负责精确匹配优先、目录名称解析复用和分组 top-5；`features/voice-consultation/model/useVoiceIntentRecognition.ts` 持有单请求目录评估缓存，跨分区及 complete 复用，目录替换后失效，临床上下文门禁继续实时执行。
 
-现有信息用药推荐：`features/consultation-result/model/useCurrentInformationMedication.ts`（手动入口门禁、普通语音空执行路由的一次性自动启动、请求身份与阶段状态）+ `ui/CurrentInformationMedication.vue`（入口、阶段反馈与只读结论）+ `features/clinical-result/currentInformationMedication.ts`（请求/响应、定稿摘要及合并纯规则）；`VoiceConsultationNew.vue` 负责提供患者/就诊/轮次/主诊断自动请求键、入口可见时的药房库存预热、端到端耗时采集及定稿后的药品合并，复用 `voiceTreatmentRecommendationGeneration.ts` 的药品分支和共享药品定稿。
+现有信息用药推荐：`features/consultation-result/model/useCurrentInformationMedication.ts`（手动入口门禁、普通语音空执行路由的一次性自动启动、请求身份与阶段状态）+ `ui/CurrentInformationMedication.vue`（入口、阶段反馈与只读结论）+ `features/clinical-result/currentInformationMedication.ts`（用药意图/候选处方两阶段 Prompt、阶段解析合并、最终可选药品收口、客户端摘要及合并纯规则）；`voiceTreatmentRecommendationGeneration.ts` 负责快速意图生成、调用 `availableMedicineInventory.ts` 将全量库存精确压缩到最多 16 项、默认模型最终处方和分支状态，`VoiceConsultationNew.vue` 提供患者/就诊/轮次/主诊断请求键、库存预热、端到端耗时采集，并只合并完整定稿且库存可用的药品。
 
 慢病配药既往史：`chronicRefillAssessment.ts` 的 `historicalDiagnoses` 保留范围筛选前的完整历史慢病；`chronicRefillRecord.ts` 合并 HIS 病史并通过 `historyRecordTemplates.ts` 生成首屏、流式和最终结果共用的既往史，已选诊断和处方范围独立。
 

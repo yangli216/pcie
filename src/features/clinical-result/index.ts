@@ -438,14 +438,24 @@ export type {
 } from './treatmentRequiredFields';
 export { completeGeneratedPrecautions } from './precautionsFollowUp';
 export {
+  CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT,
+  CURRENT_INFORMATION_MEDICATION_INVENTORY_LIMIT,
+  buildCurrentInformationMedicationIntentPrompt,
+  buildCurrentInformationMedicationInventoryIntents,
   buildCurrentInformationMedicationPrompt,
   buildCurrentInformationMedicationHistory,
   buildCurrentInformationMedicationTimingLog,
+  buildFinalCurrentInformationMedicationAssessment,
+  mergeCurrentInformationMedicationStageAssessments,
   parseCurrentInformationMedicationResult,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,
 } from './currentInformationMedication';
-export type { CurrentInformationMedicationAssessment } from './currentInformationMedication';
+export type {
+  CurrentInformationMedicationAssessment,
+  CurrentInformationMedicationResult,
+  PreparedCurrentInformationMedicines,
+} from './currentInformationMedication';
 
 export {
   PHYSICAL_EXAM_GUIDANCE_PROMPT,

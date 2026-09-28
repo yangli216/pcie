@@ -1,4 +1,8 @@
-import { normalizeRecommendationPlan, VOICE_ROUTING_RULES } from '../lib/voiceRecommendationPlan';
+import {
+  normalizeRecommendationPlan,
+  stabilizeOrdinaryVoiceRecommendationPlan,
+  VOICE_ROUTING_RULES,
+} from '../lib/voiceRecommendationPlan';
 import { createVoiceRoutingDiagnostics } from './voiceRoutingDiagnostics';
 import { applyVoiceIntentStreamProtocol } from '../lib/voiceIntentStreamProtocol';
 import type { VoiceTimingSession } from './voiceTimingTracker';
@@ -750,10 +754,13 @@ export function useVoiceIntentRecognition() {
     const menstrualHistory = normalizedExtraction.recordDraft.menstrualHistory || '';
     const maritalReproductiveHistory = normalizedExtraction.recordDraft.maritalReproductiveHistory || '';
     const familyHistory = normalizedExtraction.recordDraft.familyHistory || '';
-    const plan = normalizeRecommendationPlan(constrainOrdinaryVoiceWorkingDiagnosisPlan(
-      normalizedExtraction.recommendationPlan,
+    const plan = stabilizeOrdinaryVoiceRecommendationPlan(
+      constrainOrdinaryVoiceWorkingDiagnosisPlan(
+        normalizedExtraction.recommendationPlan,
+        matchedDiagnoses,
+      ),
       matchedDiagnoses,
-    ));
+    );
     const autoFetchTreatments = plan.mode !== 'explicit_only' && plan.mode !== 'urgent_referral';
 
     const outpatientRecord = buildOutpatientRecord({

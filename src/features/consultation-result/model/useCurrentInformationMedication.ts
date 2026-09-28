@@ -71,10 +71,9 @@ export function useCurrentInformationMedication(options: {
     && !context.value.symptomaticOnly
     && context.value.allowTreatmentRefresh
     && context.value.plan?.mode === 'diagnostic_first'
-    && context.value.plan.recommendNow.length === 0
+    && !context.value.plan.recommendNow.includes('medicine')
     && context.value.plan.defer.includes('medicine')
     && !context.value.plan.skip.includes('medicine')
-    && !context.value.hasTreatments
     && !context.value.hasMedicines
   ));
   const automaticAttempts = new Set<string>();

@@ -1561,9 +1561,11 @@ describe('useWindowManagement', () => {
 
 用药评估的病例快照按来源同时保留 HIS 和本次问诊的过敏史、当前用药史，未知占位内容不得遮蔽另一来源的明确事实；来源冲突时不得自动认定无过敏或已停药。
 
-`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、自动启动资格、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供 Prompt Builder、逐药失败关闭的响应校验及药品分支增量合并；现有 `voiceTreatmentRecommendationGeneration.ts` 在现有信息请求时只调用药品分支，以 `temperature=0` 复用签名 LLM 网关、库存匹配与定稿流程，并在库存上下文就绪和模型返回时上报阶段。普通诊疗路由请求继续原数组协议，现有信息请求使用单次结构化评估对象；可推荐药品必须进入 `medicines` 数组，摘要不得以药名或处方参数代替结构化药品。关键证据缺失项和症状性诊断下的病因治疗项进入只读暂缓列表，无法识别的单项被丢弃但不拖垮同一响应的有效候选，根对象无法识别或紧急处置结论仍整体不产出药品。
+`features/consultation-result/model/useCurrentInformationMedication.ts` 管理入口门禁、自动启动资格、请求身份、`preparing / assessing / finalizing` 阶段与局部结果说明，`ui/CurrentInformationMedication.vue` 提供按钮、阶段反馈、结果/错误状态和只读暂缓列表。`features/clinical-result/currentInformationMedication.ts` 提供两阶段 Prompt Builder、逐药失败关闭的响应校验、阶段结果合并、定稿结果收口和药品分支增量合并；`voiceTreatmentRecommendationGeneration.ts` 在现有信息请求时先以 `temperature=0` 调用快速模型，只根据病例生成最多 4 个规范通用名/别名意图，不生成剂量处方，也不携带全量库存。客户端随后复用 `selectAvailableMedicineInventoryCandidates`，在当前药房完整有效库存中按通用名/别名精确筛选最多 16 个候选；只有默认医疗模型读取这份小候选集并生成最终处方。未精确命中的意图直接进入只读暂缓，不由模型从全量库存猜测临床等效药；无支持意图、紧急转诊或零库存命中时跳过第二次模型调用。两个阶段均使用同一患者/就诊/轮次/主诊断请求身份，普通诊疗路由与其他渠道仍保留原协议。
 
-共享结果页仅注入病例快照、生成与审计副作用，新增能力不进入 App.vue 或 ConsultationPage.vue。不改原 recommendation plan 或 HIS Bridge 契约，不新增 store；检查建议与医生已有药品保持原样。入口稳定可见后异步预热当前药房库存上下文，点击请求复用库存缓存与 in-flight 合并。普通语音只有在结构化流完成、选中正式疾病诊断、`recommendNow` 为空、药品明确暂缓且当前没有任何已有治疗项目时，才按患者、就诊、轮次和主诊断自动尝试一次；自动失败不重放，症状性工作诊断及其他渠道继续只允许医生主动请求。结构化临床结论解析成功后立即写入局部只读 assessment 并进入 `finalizing`，新增药品仍须在完整定稿和库存检查完成后原子追加且默认未选，医生选择与回写继续走既有门禁。患者/就诊/轮次/诊断/病例变化同时受原请求序列和新上下文身份校验，迟到阶段、结论和药品均不能覆盖新场景；错误不清空旧方案或已形成的只读结论，暂缓项不进入缓存药品和 orderList。一次请求的准备、模型评估、定稿和总耗时由结果页按数值阶段采集并通过 operation log 上报，只记录耗时、数量和技术状态，不记录病例文本；自动启动与医生点击使用不同动作来源。
+现有信息最终模型只使用对象协议，可推荐药品必须进入 `medicines` 数组，不再拼接普通药品数组协议和示例；模型摘要不直接进入最终 UI。结果页等待目录匹配、药品详情、剂量/频次/用法/总量和库存核验全部完成后，只合并 `ready && inventoryReady` 项，并按最终可选、证据暂缓、库存未命中和定稿淘汰数量构造无具体药名的摘要。关键证据缺失项和症状性诊断下的病因治疗项进入只读暂缓列表；无法识别的单项不拖垮同一响应的有效候选，根对象无法识别或紧急处置结论仍整体不产出药品。
+
+共享结果页仅注入病例快照、生成与审计副作用，新增能力不进入 App.vue 或 ConsultationPage.vue。不改原 recommendation plan 或 HIS Bridge 契约，不新增 store；检查建议与医生已有药品保持原样。入口稳定可见后异步预热当前药房库存上下文，点击请求复用库存缓存与 in-flight 合并。普通语音只有在结构化流完成、选中正式疾病诊断、路由为 `diagnostic_first`、药品明确暂缓且当前没有已有药品时，才按患者、就诊、轮次和主诊断自动尝试一次；已有检查或检验不阻止该药品安全评估。自动失败不重放，症状性工作诊断及其他渠道继续只允许医生主动请求。结构化临床结论解析成功后立即写入局部只读 assessment 并进入 `finalizing`，新增药品仍须在完整定稿和库存检查完成后原子追加且默认未选，医生选择与回写继续走既有门禁。患者/就诊/轮次/诊断/病例变化同时受原请求序列和新上下文身份校验，迟到阶段、结论和药品均不能覆盖新场景；错误不清空旧方案或已形成的只读结论，暂缓项不进入缓存药品和 orderList。一次请求的准备、模型评估、定稿和总耗时由结果页按数值阶段采集并通过 operation log 上报，只记录耗时、数量和技术状态，不记录病例文本；自动启动与医生点击使用不同动作来源。
 
 ### 场景查体项目库与证据隔离
 
@@ -1590,7 +1592,9 @@ describe('useWindowManagement', () => {
 
 ### 普通语音诊疗路由稳定性（2026-09-22）
 
-`features/voice-consultation/lib/voiceRecommendationPlan.ts` 统一普通语音路由归一化与无病历正文的决策摘要。置信度只描述把握程度，不能自动扩大推荐集合；同一决策仅 confidence 改变时，执行分支保持不变。集合按暂缓优先于跳过、跳过优先于立即推荐消除交集；diagnostic_first 固定暂缓 medicine，urgent_referral / explicit_only 清空自动推荐；症状性工作诊断仍经既有检查优先约束，最终再归一一次。未提供有效分支允许为空，不补齐全类别。
+`features/voice-consultation/lib/voiceRecommendationPlan.ts` 统一普通语音路由归一化、执行策略和无病历正文的决策摘要。模型的 `mode` 只提供临床阶段信号；正式疾病诊断由客户端确定性映射为固定集合：parallel 执行 medicine / exam / lab_test，treatment_first 只执行 medicine，diagnostic_first 执行 exam / lab_test 并暂缓 medicine。模型返回的三个集合仅用于协议诊断，不直接控制正式疾病的最终执行分支；置信度只描述把握程度，不改变模式或集合。urgent_referral / explicit_only 清空自动推荐，症状性工作诊断仍经既有检查优先约束，没有正式诊断时不启动治疗。
+
+`voiceTreatmentRecommendationGeneration.ts` 为每个分支返回 `ready_with_items / ready_empty / catalog_unavailable / model_invalid / failed` 结果；普通药品和联合检查检验请求都显式使用 `temperature=0`，模型 JSON 或根契约异常在同一请求身份内只重试一次。结果页只有在全部请求分支均为 ready 状态时才把零项视为稳定临床空结果；目录、格式和请求错误保留分支错误状态与刷新入口，不写成稳定空结果。控制台使用单条无病例正文的分支状态摘要记录结果类型和数量。
 
 普通语音结构化识别（包括原有失败兜底）与结构修复显式传 temperature=0；`llm.ts` 通过既有签名 `/v1/ai/chat` 出口透传可选 temperature，其他调用不传时维持原行为，服务端已支持该可选字段。低温度降低采样波动，不承诺跨模型版本完全确定。`voiceRoutingDiagnostics.ts` 只输出 `[VoiceDecision] 决策汇总` 纯文本：请求消息与采样设置的 SHA-256 截断指纹、模型路由枚举、置信度、诊断角色枚举计数、最终分支与规则原因；不输出患者标识、病历、诊断名称或理由正文。摘要按同次请求变化去重，后台日志不能影响业务，消息指纹不代表服务端实际模型版本相同。
 

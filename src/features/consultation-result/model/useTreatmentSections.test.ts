@@ -113,4 +113,25 @@ describe('useTreatmentSections', () => {
 
     expect(controller.treatmentPresentationRows.value).toEqual([]);
   });
+
+  it('keeps failed branches visible with a retryable error instead of an empty state', () => {
+    const controller = useTreatmentSections({
+      treatments: ref<TreatmentRecommendation[]>([]),
+      selectedDiagnosis: ref<Diagnosis | null>({ code: 'J06.9', name: '急性上呼吸道感染', rate: '高', rationale: '' }),
+      isRefreshNeeded: ref(false),
+      getLastTreatmentDiagnosisKey: () => '',
+      generationStates: ref({
+        medicine: 'error', exam: 'error', lab_test: 'error', procedure: 'skipped',
+      }),
+      showGenerationPlaceholders: ref(true),
+    });
+
+    expect(controller.treatmentPresentationRows.value).toHaveLength(2);
+    expect(controller.treatmentPresentationRows.value[0]).toMatchObject({
+      type: 'medicine', placeholder: 'error',
+    });
+    expect(controller.treatmentPresentationRows.value[1]).toMatchObject({
+      presentationKey: 'auxiliary-generation', placeholder: 'error',
+    });
+  });
 });

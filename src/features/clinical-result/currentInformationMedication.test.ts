@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TreatmentRecommendation } from '@/types/consultation';
 import { buildPatientContext } from '@/utils/patientContext';
-import { TreatmentRecommendationPrompt } from '@/prompts/prompts';
 import {
+  CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT,
+  buildCurrentInformationMedicationIntentPrompt,
+  buildCurrentInformationMedicationInventoryIntents,
   buildCurrentInformationMedicationPrompt,
   buildCurrentInformationMedicationHistory,
   buildCurrentInformationMedicationTimingLog,
+  buildFinalCurrentInformationMedicationAssessment,
+  mergeCurrentInformationMedicationStageAssessments,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,
   parseCurrentInformationMedicationResult,
@@ -61,12 +65,21 @@ describe('current information medication assessment', () => {
     const onSummary = vi.fn();
     const checkInventory = vi.fn(async () => { order.push('inventory'); return true; });
     const prepared = await prepareCurrentInformationMedicines([ready, incomplete], {
-      finalize: async () => { order.push('finalize'); return [{ item: ready, ready: true }, { item: incomplete, ready: false }]; },
+      finalize: async () => { order.push('finalize'); return [
+        { item: ready, ready: true },
+        { item: incomplete, ready: false, issues: ['一次剂量不完整'] },
+      ]; },
       checkInventory,
       isCurrent: () => true,
       onSummary,
     });
-    expect(prepared).toBe(true);
+    expect(prepared).toMatchObject({
+      readyItems: [ready],
+      unavailable: [{ name: '药品B', reason: '一次剂量不完整' }],
+      candidateCount: 2,
+      finalizedCount: 1,
+      inventoryReadyCount: 1,
+    });
     expect(order).toEqual(['finalize', 'inventory']);
     expect(checkInventory).toHaveBeenCalledWith(ready);
     expect(checkInventory).toHaveBeenCalledTimes(1);
@@ -84,8 +97,21 @@ describe('current information medication assessment', () => {
     expect(await prepareCurrentInformationMedicines([ready], {
       finalize: async () => [{ item: ready, ready: true }],
       checkInventory, isCurrent: () => false,
-    })).toBe(false);
+    })).toBeNull();
     expect(checkInventory).not.toHaveBeenCalled();
+  });
+
+  it('keeps inventory failures out of selectable cards and records a deferred reason', async () => {
+    const unavailable = { type: 'medicine', name: '药品A', selected: false } as TreatmentRecommendation;
+    const prepared = await prepareCurrentInformationMedicines([unavailable], {
+      finalize: async () => [{ item: unavailable, ready: true }],
+      checkInventory: async () => false,
+      isCurrent: () => true,
+    });
+    expect(prepared?.readyItems).toEqual([]);
+    expect(prepared?.unavailable).toEqual([{
+      name: '药品A', reason: '当前药房库存不足或暂无法完成库存核验',
+    }]);
   });
 
   it('only exposes supported medicines and keeps missing evidence entries read-only', () => {
@@ -114,6 +140,31 @@ describe('current information medication assessment', () => {
     expect(parseCurrentInformationMedicationResult(response([]), false)).toMatchObject({
       summary: '依据当前信息评估', recommendations: [], deferred: [],
     });
+  });
+
+  it('builds the visible summary from finalized cards instead of trusting model drug prose', () => {
+    const assessment = {
+      summary: '可考虑药品甲和药品乙',
+      disposition: 'medication_options' as const,
+      deferred: [{ name: '待查药品', reason: '缺少肾功能' }],
+    };
+    const ready = { type: 'medicine', name: '可开立药品', selected: false } as TreatmentRecommendation;
+    const finalized = buildFinalCurrentInformationMedicationAssessment(assessment, {
+      readyItems: [ready],
+      unavailable: [{ name: '库存药品', reason: '当前药房库存不足' }],
+      candidateCount: 2,
+      finalizedCount: 2,
+      inventoryReadyCount: 1,
+    });
+    expect(finalized.summary).toContain('1 项可选药品');
+    expect(finalized.summary).not.toContain('药品甲');
+    expect(finalized.deferred).toHaveLength(2);
+
+    const empty = buildFinalCurrentInformationMedicationAssessment(assessment, {
+      readyItems: [], unavailable: [], candidateCount: 0, finalizedCount: 0, inventoryReadyCount: 0,
+    });
+    expect(empty.summary).toBe('当前信息下暂无可直接开立的药品，1 项候选已暂缓。');
+    expect(empty.summary).not.toContain('药品甲');
   });
 
   it('accepts omitted empty evidence for a supported medicine and isolates malformed candidates', () => {
@@ -168,16 +219,78 @@ describe('current information medication assessment', () => {
     expect(added.selected).toBe(true);
   });
 
-  it('uses the full provided context and removes forced medicine counts', () => {
-    const prompt = buildCurrentInformationMedicationPrompt(TreatmentRecommendationPrompt, true);
-    const user = prompt.buildUserPrompt({ patientName: '患者', gender: '女', age: '8月', diagnosisName: '咳嗽', diagnosisCode: 'R05', chiefComplaint: '咳嗽', clinicalContext: '青霉素过敏；体重未知', availableMedicineInventory: '院内目录' });
+  it('builds a compact intent prompt without inventory or the ordinary array protocol', () => {
+    const prompt = buildCurrentInformationMedicationIntentPrompt(true);
+    const user = prompt.buildUserPrompt({
+      patientName: '患者', gender: '女', age: '8月', diagnosisName: '咳嗽', diagnosisCode: 'R05',
+      chiefComplaint: '咳嗽', clinicalContext: '青霉素过敏；体重未知',
+      availableMedicineInventory: '不应进入第一阶段的院内目录',
+    });
     expect(user).toContain('青霉素过敏；体重未知');
-    expect(user).not.toContain('推荐3-5个药品');
+    expect(user).not.toContain('不应进入第一阶段的院内目录');
+    expect(prompt.system).toContain(`最多返回 ${CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT} 个 medicines`);
     expect(prompt.system).toContain('不能套用成人剂量');
     expect(prompt.system).toContain('只允许 purpose=symptomatic');
-    expect(prompt.system).toContain('不表示患者拒绝检查');
-    expect(prompt.system).toContain('summary 只说明评估结论或无药原因');
-    expect(prompt.system).toContain('所有 eligibility=supported 的可推荐药品必须逐项放入 medicines 数组');
-    expect(user).toContain('不得在 summary 中列举具体药品');
+    expect(prompt.system).toContain('不返回 JSON 数组');
+    expect(prompt.system).not.toContain('推荐3-5个药品');
+  });
+
+  it('builds a final prescription prompt from supported intents and candidate inventory only', () => {
+    const intent = parseCurrentInformationMedicationResult(response([{
+      ...candidate,
+      name: '对乙酰氨基酚',
+      aliases: ['扑热息痛', ' 对乙酰氨基酚片 ', '别名3', '别名4'],
+    }]), true);
+    const prompt = buildCurrentInformationMedicationPrompt(intent, true);
+    const user = prompt.buildUserPrompt({
+      patientName: '患儿', gender: '女', age: '3岁', diagnosisName: '急性上呼吸道感染', diagnosisCode: 'J06.900',
+      chiefComplaint: '发热', clinicalContext: '体重15kg',
+      availableMedicineInventory: '【候选】\n- 对乙酰氨基酚混悬液｜100ml',
+    });
+    expect(user).toContain('对乙酰氨基酚混悬液｜100ml');
+    expect(user).toContain('扑热息痛');
+    expect(user).not.toContain('别名4');
+    expect(prompt.system).toContain('不得添加候选外药品');
+    expect(prompt.system).toContain('不返回 JSON 数组');
+    expect(prompt.system).not.toContain('推荐3-5个药品');
+  });
+
+  it('caps intents, preserves controlled matching fields and merges stage assessments', () => {
+    const medicines = Array.from({ length: 6 }, (_, index) => ({
+      ...candidate,
+      name: `药品${index + 1}`,
+      aliases: ['别名1', '别名2', '别名3', '别名4'],
+    }));
+    const intent = parseCurrentInformationMedicationResult(response(medicines), false);
+    expect(intent.recommendations).toHaveLength(CURRENT_INFORMATION_MEDICATION_INTENT_LIMIT);
+    expect(intent.recommendations[0]).toMatchObject({
+      aliases: ['别名1', '别名2', '别名3'],
+      purpose: 'symptomatic',
+      basis: '当前明确的症状',
+    });
+    expect(buildCurrentInformationMedicationInventoryIntents(intent)[0]).toEqual({
+      preferredGenericNames: ['药品1'],
+      aliases: ['别名1', '别名2', '别名3'],
+    });
+
+    const final = parseCurrentInformationMedicationResult(response([candidate]), false);
+    const merged = mergeCurrentInformationMedicationStageAssessments(
+      { ...intent, deferred: [{ name: '需核实药', reason: '缺少依据' }] },
+      { ...final, deferred: [{ name: '剂量待定药', reason: '缺少体重' }] },
+      ['无库存药'],
+    );
+    expect(merged.recommendations).toHaveLength(1);
+    expect(merged.deferred).toEqual([
+      { name: '需核实药', reason: '缺少依据' },
+      { name: '剂量待定药', reason: '缺少体重' },
+      { name: '无库存药', reason: '未精确命中院内有效库存候选，暂不提供可选药品' },
+    ]);
+  });
+
+  it('keeps urgent intent results closed without prescription recommendations', () => {
+    const urgent = parseCurrentInformationMedicationResult(response([candidate], 'urgent_referral'), false);
+    const merged = mergeCurrentInformationMedicationStageAssessments(urgent, null, ['测试药品']);
+    expect(merged).toEqual(urgent);
+    expect(merged.recommendations).toEqual([]);
   });
 });

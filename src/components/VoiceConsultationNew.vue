@@ -43,6 +43,7 @@ import {
   buildDiagnosisScopedPrecautions,
   buildCurrentInformationMedicationHistory,
   buildCurrentInformationMedicationTimingLog,
+  buildFinalCurrentInformationMedicationAssessment,
   loadAvailableMedicineInventoryContext,
   mergeCurrentInformationMedicines,
   prepareCurrentInformationMedicines,
@@ -479,7 +480,7 @@ const treatmentSectionState = useTreatmentSections({
   generationStates: treatmentGenerationState,
   showGenerationPlaceholders: computed(() => (
     resultChannel.value === 'voice'
-    && treatmentLoading.value
+    && (treatmentLoading.value || Object.values(treatmentGenerationState.value).includes('error'))
     && canShowGeneratedTreatments.value
   )),
 });
@@ -1832,6 +1833,9 @@ async function fetchAITreatment(
       ...currentMedicationTiming,
       completedAt,
     });
+    console.info(
+      `[CurrentInformationMedicationTiming] 总耗时 ${timingLog.durationMs} ms | 准备 ${timingLog.details.preparationMs ?? '未记录'} ms | 模型与候选 ${timingLog.details.aiAssessmentMs ?? '未记录'} ms | 定稿库存核验 ${timingLog.details.finalizationMs ?? '未记录'} ms | 候选 ${timingLog.details.candidateCount ?? 0} 项 | 可用 ${timingLog.details.readyCount ?? 0} 项 | 暂缓 ${timingLog.details.deferredCount ?? 0} 项 | 结果 ${success ? '成功' : '失败'}`,
+    );
     trackBusinessOperation({
       module: 'consultation-result',
       action: 'complete_current_information_medication',
@@ -1900,7 +1904,7 @@ async function fetchAITreatment(
     }
     if (!isCurrentTreatmentRequest()) return false;
     endPreparation?.();
-    await generateVoiceTreatmentRecommendations({
+    const generationResults = await generateVoiceTreatmentRecommendations({
       timing: voiceTiming,
       ...baseParams,
       clinicalContext: options.currentInformationMedication
@@ -1919,10 +1923,13 @@ async function fetchAITreatment(
         ? reportCurrentMedicationPhase : undefined,
       onTaskResult: async (task) => {
         if (!isCurrentTreatmentRequest()) return;
-        if (task.error) {
+        if (task.status === 'catalog_unavailable'
+          || task.status === 'model_invalid'
+          || task.status === 'failed') {
           task.types.forEach((type) => { treatmentGenerationState.value[type] = 'error'; });
           console.warn('[VoiceConsultationNew] Treatment recommendation task failed', {
             key: task.key,
+            status: task.status,
             error: task.error instanceof Error ? task.error.message : String(task.error),
           });
           return;
@@ -1931,7 +1938,6 @@ async function fetchAITreatment(
         if (options.currentInformationMedication && task.medicationAssessment) {
           currentMedicationTiming!.candidateCount = task.items.length;
           currentMedicationTiming!.deferredCount = task.medicationAssessment.deferred.length;
-          options.currentInformationMedication.receive(task.medicationAssessment);
           reportCurrentMedicationPhase('finalizing');
         }
         const ranked = await applyRecommendationPreferenceRanking(
@@ -1958,13 +1964,24 @@ async function fetchAITreatment(
     });
 
     if (!isCurrentTreatmentRequest()) return false;
-    if (options.requireAll) {
-      const failedTypes = requestedTypes.filter(
-        (type) => treatmentGenerationState.value[type] === 'error',
-      );
-      if (failedTypes.length > 0) {
-        throw new Error('部分治疗方案生成失败');
-      }
+    const failedResults = generationResults.filter((result) => (
+      result.status === 'catalog_unavailable'
+      || result.status === 'model_invalid'
+      || result.status === 'failed'
+    ));
+    const readyResults = generationResults.filter((result) => (
+      result.status === 'ready_with_items' || result.status === 'ready_empty'
+    ));
+    const completedTypes = Array.from(new Set(
+      readyResults.flatMap((result) => result.types),
+    ));
+    if (resultChannel.value === 'voice') {
+      console.info(`[VoiceDecision] 治疗分支结果=${generationResults.map((result) => (
+        `${result.types.join('+')}:${result.status}:${result.items.length}`
+      )).join(',') || '无'}`);
+    }
+    if (failedResults.length > 0 && (options.requireAll || readyResults.length === 0)) {
+      throw new Error(readyResults.length === 0 ? '治疗方案生成失败' : '部分治疗方案生成失败');
     }
     // 各目录请求并行完成；普通语音首次生成已经按分支原子落位，
     // 此处再做一次确定性合并。手动刷新仍只在全部完成后替换旧方案。
@@ -1989,9 +2006,15 @@ async function fetchAITreatment(
         },
       });
       if (!prepared) return false;
-      treatments.value = mergeCurrentInformationMedicines(treatments.value, generated);
+      const finalAssessment = buildFinalCurrentInformationMedicationAssessment(
+        medicationAssessment,
+        prepared,
+      );
+      currentMedicationTiming!.deferredCount = finalAssessment.deferred.length;
+      options.currentInformationMedication.receive(finalAssessment);
+      treatments.value = mergeCurrentInformationMedicines(treatments.value, prepared.readyItems);
       void registerCurrentRecommendations();
-      void performTreatmentFactCheck(generated);
+      void performTreatmentFactCheck(prepared.readyItems);
       submitVoiceGeneratedUserLog();
       persistEditorSnapshotImmediate();
       logCurrentMedicationTiming(true);
@@ -1999,7 +2022,7 @@ async function fetchAITreatment(
     }
     treatments.value = mergeGeneratedTreatmentBranches(
       treatments.value,
-      requestedTypes,
+      completedTypes,
       generated,
     );
     const nextTreatments = treatments.value;
@@ -2026,7 +2049,11 @@ async function fetchAITreatment(
       return false;
     }
 
-    lastTreatmentDiagnosisKey.value = diagnosisIdentity;
+    // A failed branch remains retryable. During refresh its previous stable content
+    // is preserved; during initial generation an empty key allows cache restore to retry.
+    if (failedResults.length === 0) {
+      lastTreatmentDiagnosisKey.value = diagnosisIdentity;
+    }
     autoTreatmentFetchAttemptKey.value = buildTreatmentAutoFetchKey(diagnosisIdentity);
     await reconcileAutoSelectedMedicineInventory(treatments.value);
     if (!options.deferSideEffects) {

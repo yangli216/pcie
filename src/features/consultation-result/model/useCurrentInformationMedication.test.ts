@@ -134,7 +134,6 @@ describe('useCurrentInformationMedication', () => {
     });
     const { controller, state, scope, onRequest } = setup(run);
     state.symptomaticOnly = false;
-    state.plan!.recommendNow = [];
     state.blocked = true;
     await nextTick();
     expect(run).not.toHaveBeenCalled();
@@ -153,7 +152,6 @@ describe('useCurrentInformationMedication', () => {
     const run = vi.fn(async () => false);
     const { state, scope } = setup(run);
     state.symptomaticOnly = false;
-    state.plan!.recommendNow = [];
     await nextTick();
     await nextTick();
     expect(run).toHaveBeenCalledOnce();
@@ -178,11 +176,9 @@ describe('useCurrentInformationMedication', () => {
   it.each([
     ['symptom diagnosis', (state: CurrentInformationMedicationContext) => { state.symptomaticOnly = true; }],
     ['streaming result', (state: CurrentInformationMedicationContext) => { state.resultComplete = false; }],
-    ['exam branch', (state: CurrentInformationMedicationContext) => { state.plan!.recommendNow = ['exam']; }],
     ['medicine branch', (state: CurrentInformationMedicationContext) => { state.plan!.recommendNow = ['medicine']; }],
     ['medicine not deferred', (state: CurrentInformationMedicationContext) => { state.plan!.defer = []; }],
     ['medicine skipped', (state: CurrentInformationMedicationContext) => { state.plan!.skip = ['medicine']; }],
-    ['existing treatment', (state: CurrentInformationMedicationContext) => { state.hasTreatments = true; }],
     ['existing medicine', (state: CurrentInformationMedicationContext) => { state.hasMedicines = true; }],
     ['symptom channel', (state: CurrentInformationMedicationContext) => { state.channel = 'symptom'; }],
     ['chronic channel', (state: CurrentInformationMedicationContext) => { state.channel = 'chronic-refill'; }],
@@ -197,6 +193,21 @@ describe('useCurrentInformationMedication', () => {
     scope.stop();
   });
 
+  it('automatically assesses deferred medicine after exam or lab recommendations complete', async () => {
+    const run = vi.fn(async (request: CurrentInformationMedicationRequest) => {
+      request.receive(assessment);
+      return true;
+    });
+    const { state, scope } = setup(run);
+    state.symptomaticOnly = false;
+    state.hasTreatments = true;
+    state.plan!.recommendNow = ['exam', 'lab_test'];
+    await nextTick();
+    await nextTick();
+    expect(run).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+
   it('allows a doctor retry after an automatic attempt fails', async () => {
     const run = vi.fn()
       .mockResolvedValueOnce(false)
@@ -206,7 +217,6 @@ describe('useCurrentInformationMedication', () => {
       });
     const { controller, state, scope, onRequest } = setup(run);
     state.symptomaticOnly = false;
-    state.plan!.recommendNow = [];
     await nextTick();
     await nextTick();
     expect(controller.phase.value).toBe('failed');

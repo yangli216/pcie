@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { VoiceRecommendationPlan } from '@/prompts';
-import { normalizeRecommendationPlan, buildVoiceRoutingDecisionSummary } from './voiceRecommendationPlan';
+import {
+  normalizeRecommendationPlan,
+  stabilizeOrdinaryVoiceRecommendationPlan,
+  buildVoiceRoutingDecisionSummary,
+} from './voiceRecommendationPlan';
 import { constrainOrdinaryVoiceWorkingDiagnosisPlan } from './ordinaryVoiceDiagnosisGuard';
 
 const plan = (patch: Partial<VoiceRecommendationPlan> = {}): VoiceRecommendationPlan => ({
@@ -44,20 +48,48 @@ describe('voice routing stability', () => {
   });
 
   it('keeps working diagnosis constraints mutually exclusive after normalization', () => {
-    const normalized = normalizeRecommendationPlan(constrainOrdinaryVoiceWorkingDiagnosisPlan(
-      plan({ mode: 'parallel', recommendNow: ['medicine'], skip: ['medicine'], defer: [] }),
-      [{ diagnosisKind: 'symptom_working', suggestionType: 'formal' }] as never,
-    ));
+    const diagnoses = [{ diagnosisKind: 'symptom_working', suggestionType: 'formal' }] as never;
+    const normalized = stabilizeOrdinaryVoiceRecommendationPlan(
+      constrainOrdinaryVoiceWorkingDiagnosisPlan(
+        plan({ mode: 'parallel', recommendNow: ['medicine'], skip: ['medicine'], defer: [] }),
+        diagnoses,
+      ),
+      diagnoses,
+    );
     expect(normalized).toMatchObject({ mode: 'diagnostic_first', recommendNow: ['exam', 'lab_test'], defer: ['medicine'], skip: [] });
+  });
+
+  it.each([
+    ['parallel', ['medicine', 'exam', 'lab_test'], [], []],
+    ['treatment_first', ['medicine'], [], ['exam', 'lab_test']],
+    ['diagnostic_first', ['exam', 'lab_test'], ['medicine'], []],
+  ] as const)('maps disease mode %s to fixed executable branches', (mode, recommendNow, defer, skip) => {
+    const diagnoses = [{ diagnosisKind: 'disease', suggestionType: 'formal' }];
+    const sparse = stabilizeOrdinaryVoiceRecommendationPlan(plan({
+      mode, recommendNow: [], defer: [], skip: [],
+    }), diagnoses);
+    const contradictory = stabilizeOrdinaryVoiceRecommendationPlan(plan({
+      mode, recommendNow: ['lab_test'], defer: ['exam'], skip: ['medicine'],
+    }), diagnoses);
+    expect(sparse).toMatchObject({ mode, recommendNow, defer, skip });
+    expect(contradictory).toMatchObject({ mode, recommendNow, defer, skip });
+  });
+
+  it('does not start treatment without a formal diagnosis', () => {
+    expect(stabilizeOrdinaryVoiceRecommendationPlan(plan({ mode: 'parallel' }), [
+      { diagnosisKind: 'disease', suggestionType: 'differential' },
+    ]).recommendNow).toEqual([]);
   });
 
   it('logs decisions using only whitelisted enums and counts, never patient text', () => {
     const raw = plan({ reason: '患者私人病历内容', recommendNow: ['medicine', 'exam'], confidence: 'low' });
-    const summary = buildVoiceRoutingDecisionSummary(raw, normalizeRecommendationPlan(raw), [
+    const summary = buildVoiceRoutingDecisionSummary(raw, stabilizeOrdinaryVoiceRecommendationPlan(raw, [
+      { diagnosisKind: 'disease', suggestionType: 'formal' },
+    ]), [
       { diagnosisKind: 'disease', suggestionType: 'formal' },
     ]);
-    expect(summary).toContain('低置信不扩展');
-    expect(summary).toContain('剔除受限或冲突分支');
+    expect(summary).toContain('低置信不改变模式');
+    expect(summary).toContain('客户端按模式固定执行分支');
     expect(summary).toContain('正式疾病=1');
     expect(summary).not.toContain(raw.reason);
     const invalid = buildVoiceRoutingDecisionSummary({ ...raw, mode: '患者姓名' as never }, normalizeRecommendationPlan(raw), []);
