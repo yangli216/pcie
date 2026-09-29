@@ -75,6 +75,26 @@ function findUniqueFile(rootDir, fileName) {
   return matches[0];
 }
 
+function findVersionedReleaseFile(rootDir, fileName, tag) {
+  const matches = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.name === fileName) matches.push(entryPath);
+    }
+  };
+  visit(rootDir);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  const versionedMatches = matches.filter((match) =>
+    path.relative(rootDir, match).split(path.sep).includes(tag),
+  );
+  if (versionedMatches.length === 1) return versionedMatches[0];
+  throw new Error(`release contains multiple files named ${fileName}`);
+}
+
 function verifyWithMinisign({ command, artifactPath, signatureText, publicKeyText }) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcie-release-signature-'));
   const signaturePath = path.join(tempDir, 'artifact.minisig');
@@ -124,8 +144,8 @@ export function validateReleaseAssets({
     if (!artifactUrl.pathSegments.includes(tag)) {
       throw new Error(`${target} URL does not contain release version ${tag}: ${platform.url}`);
     }
-    const artifactPath = findUniqueFile(assetsDir, artifactName);
-    const signaturePath = findUniqueFile(assetsDir, `${artifactName}.sig`);
+    const artifactPath = findVersionedReleaseFile(assetsDir, artifactName, tag);
+    const signaturePath = findVersionedReleaseFile(assetsDir, `${artifactName}.sig`, tag);
     if (!artifactPath) throw new Error(`${target} artifact is missing: ${artifactName}`);
     if (!signaturePath) throw new Error(`${target} signature asset is missing: ${artifactName}.sig`);
 

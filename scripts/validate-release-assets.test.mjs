@@ -101,3 +101,31 @@ test('accepts the nested PCIE Server upload bundle layout', (context) => {
   });
   assert.deepEqual(result.artifacts, [fixture.artifactName]);
 });
+
+test('selects the versioned updater when direct-install contains the same MSI name', (context) => {
+  const fixture = createFixture();
+  context.after(() => fs.rmSync(fixture.dir, { recursive: true, force: true }));
+  const channelDir = path.join(fixture.dir, 'win7-testing');
+  const versionDir = path.join(channelDir, 'v1.4.0-win7');
+  const directInstallDir = path.join(fixture.dir, 'direct-install');
+  fs.mkdirSync(versionDir, { recursive: true });
+  fs.mkdirSync(directInstallDir, { recursive: true });
+  fs.renameSync(path.join(fixture.dir, fixture.artifactName), path.join(versionDir, fixture.artifactName));
+  fs.renameSync(path.join(fixture.dir, `${fixture.artifactName}.sig`), path.join(versionDir, `${fixture.artifactName}.sig`));
+  fs.writeFileSync(path.join(directInstallDir, fixture.artifactName), 'direct-installer');
+
+  const latest = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'latest.json'), 'utf8'));
+  latest.version = '1.4.0-win7';
+  latest.platforms['windows-x86_64'].url =
+    `http://intra.example.com/v1/client/releases/win7-testing/files/windows-x86_64/v1.4.0-win7/${fixture.artifactName}`;
+  fs.writeFileSync(path.join(channelDir, 'latest.json'), JSON.stringify(latest));
+  fs.rmSync(path.join(fixture.dir, 'latest.json'));
+
+  const result = validateReleaseAssets({
+    assetsDir: fixture.dir,
+    tag: 'v1.4.0-win7',
+    publicKey: fixture.publicKey,
+    requiredTargets: ['windows-x86_64'],
+  });
+  assert.deepEqual(result.artifacts, [fixture.artifactName]);
+});

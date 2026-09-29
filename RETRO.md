@@ -1113,3 +1113,10 @@
 - **根因**: Tauri 2.10.1 的 MSI bundler 会把 SemVer 的 prerelease 直接转为 MSI ProductVersion 第四段，该段只接受 `0–65535` 数字；此前只验证了 SemVer 与通道规则，没有把目标 bundle 的原生版本约束纳入 preflight。
 - **解决方案**: 对外继续使用 `X.Y.Z-win7[.N]`；构建期三处临时版本映射为 `X.Y.Z-0 / X.Y.Z-N`，公开版本通过编译期环境进入 Rust updater comparator 和前端版本适配层，更新清单、请求头、强更策略及界面仍使用公开版本。
 - **后续防护**: 发布脚本单测必须覆盖映射唯一性、`1–65535` 边界、构建环境注入与文件恢复；Win7 静态验证必须拒绝把公开字母版本直接写入 Tauri/MSI，也必须拒绝把内部版本上传到更新通道。
+
+### RETRO-148: Win7 签名 MSI 因 direct-install 同名副本被误判为跨批次重复 [已解决]
+
+- **现象**: Win7 release flavor 已成功生成并签名 MSI，但组装 PCIE Server 上传包时，校验器报 `release contains multiple files named ...msi`，导致 `latest.json` 与发布 Artifact 未能上传。
+- **根因**: 当前 Tauri MSI updater 直接使用 `*.msi + *.msi.sig`，发布工作流又把同一 MSI 复制到 `direct-install` 供首次安装；通用校验器递归按 basename 要求全局唯一，没有利用 `latest.json` URL 中的版本目录区分 updater 文件与直接安装副本。
+- **解决方案**: 发布资产校验在出现同名文件时优先选择相对路径包含目标 `vX.Y.Z-win7[.N]` 目录的文件；仅当版本目录内仍不唯一时才失败。发布文档同步以 Tauri 实际签名产物为准，不再假定 Windows 一定生成 `*.msi.zip`。
+- **后续防护**: 新增带 `win7-testing/v版本/同名 MSI` 与 `direct-install/同名 MSI` 的完整布局回归测试；`latest.json` 指向的版本目录文件和签名仍必须同批且通过独立公钥校验，不能因支持直接安装副本而放宽版本目录唯一性。
