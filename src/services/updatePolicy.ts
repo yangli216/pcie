@@ -3,6 +3,7 @@ import {
   getActiveUpdateChannel,
   getActiveUpdatePolicyEndpoint,
   getUpdateEnvironmentLabel,
+  resolvePublicClientVersion,
   type UpdateChannel,
 } from './updateConfig';
 import { fetchWithTimeout } from '@shared/lib/fetchTimeout';
@@ -55,7 +56,9 @@ export function getCurrentForceUpdateState(): ForceUpdateState {
 
 export async function getCurrentClientVersion(): Promise<string> {
   if (!versionPromise) {
-    versionPromise = getVersion().catch(() => 'unknown');
+    versionPromise = getVersion()
+      .then((nativeVersion) => resolvePublicClientVersion(nativeVersion))
+      .catch(() => 'unknown');
   }
   return versionPromise;
 }

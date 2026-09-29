@@ -1,3 +1,5 @@
+#[cfg(any(feature = "win7-legacy", test))]
+use semver::Version;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
@@ -185,11 +187,82 @@ struct UpdateProgressPayload {
     finished: bool,
 }
 
+#[cfg(any(feature = "win7-legacy", test))]
+fn map_win7_internal_version(internal_version: &Version) -> Result<Version, String> {
+    if !internal_version.build.is_empty() {
+        return Err("Win7 MSI 内部版本不能包含 build metadata".to_string());
+    }
+    let revision = internal_version
+        .pre
+        .as_str()
+        .parse::<u64>()
+        .map_err(|_| "Win7 MSI 内部版本必须使用纯数字 prerelease".to_string())?;
+    if revision > 65535 {
+        return Err("Win7 MSI 内部版本修订号不能超过 65535".to_string());
+    }
+    let public_version = if revision == 0 {
+        format!(
+            "{}.{}.{}-win7",
+            internal_version.major, internal_version.minor, internal_version.patch
+        )
+    } else {
+        format!(
+            "{}.{}.{}-win7.{}",
+            internal_version.major, internal_version.minor, internal_version.patch, revision
+        )
+    };
+    Version::parse(&public_version).map_err(|error| format!("Win7 公开版本无效: {}", error))
+}
+
+#[cfg(any(feature = "win7-legacy", test))]
+fn is_public_update_newer(current_version: &Version, remote_version: &Version) -> bool {
+    remote_version > current_version
+}
+
+#[cfg(feature = "win7-legacy")]
+fn win7_public_version(internal_version: &Version) -> Result<Version, String> {
+    let derived = map_win7_internal_version(internal_version)?;
+    if let Some(configured) = option_env!("PCIE_WIN7_PUBLIC_VERSION") {
+        let configured = Version::parse(configured)
+            .map_err(|error| format!("PCIE_WIN7_PUBLIC_VERSION 无效: {}", error))?;
+        if configured != derived {
+            return Err(format!(
+                "Win7 公开版本 {} 与 MSI 内部版本 {} 不匹配（应为 {}）",
+                configured, internal_version, derived
+            ));
+        }
+    }
+    Ok(derived)
+}
+
+fn reported_client_version(native_version: &str) -> String {
+    #[cfg(feature = "win7-legacy")]
+    {
+        return Version::parse(native_version)
+            .map_err(|error| format!("Win7 MSI 内部版本无效: {}", error))
+            .and_then(|version| win7_public_version(&version))
+            .map(|version| version.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+    }
+    #[cfg(not(feature = "win7-legacy"))]
+    {
+        native_version.to_string()
+    }
+}
+
 fn build_runtime_updater(
     app: &tauri::AppHandle,
     endpoint: Option<String>,
 ) -> Result<tauri_plugin_updater::Updater, String> {
     let mut builder = app.updater_builder();
+
+    #[cfg(feature = "win7-legacy")]
+    {
+        let current_public_version = win7_public_version(&app.package_info().version)?;
+        builder = builder.version_comparator(move |_internal_version, release| {
+            is_public_update_newer(&current_public_version, &release.version)
+        });
+    }
 
     if let Some(endpoint_value) = endpoint
         .map(|value| value.trim().to_string())
@@ -209,6 +282,46 @@ fn build_runtime_updater(
 
 #[cfg(test)]
 mod update_tests {
+    use super::{is_public_update_newer, map_win7_internal_version, reported_client_version};
+    use semver::Version;
+
+    #[test]
+    fn win7_internal_versions_map_to_public_release_versions() {
+        assert_eq!(
+            map_win7_internal_version(&Version::parse("1.4.8-0").unwrap()).unwrap(),
+            Version::parse("1.4.8-win7").unwrap()
+        );
+        assert_eq!(
+            map_win7_internal_version(&Version::parse("1.4.8-12").unwrap()).unwrap(),
+            Version::parse("1.4.8-win7.12").unwrap()
+        );
+        assert!(map_win7_internal_version(&Version::parse("1.4.8-win7").unwrap()).is_err());
+        assert!(map_win7_internal_version(&Version::parse("1.4.8-65536").unwrap()).is_err());
+    }
+
+    #[test]
+    fn regular_build_reports_native_version() {
+        #[cfg(not(feature = "win7-legacy"))]
+        assert_eq!(reported_client_version("1.4.8"), "1.4.8");
+    }
+
+    #[test]
+    fn win7_updater_compares_public_versions_instead_of_msi_versions() {
+        let current = Version::parse("1.4.8-win7.1").unwrap();
+        assert!(!is_public_update_newer(
+            &current,
+            &Version::parse("1.4.8-win7.1").unwrap()
+        ));
+        assert!(is_public_update_newer(
+            &current,
+            &Version::parse("1.4.8-win7.2").unwrap()
+        ));
+        assert!(!is_public_update_newer(
+            &current,
+            &Version::parse("1.4.8-win7").unwrap()
+        ));
+    }
+
     #[test]
     fn tauri_updater_config_allows_http_endpoints() {
         let tauri_config: serde_json::Value =
@@ -381,7 +494,7 @@ async fn check_app_update(
         version: item.version,
         body: item.body,
         date: item.date.map(|value| value.to_string()),
-        current_version: item.current_version,
+        current_version: reported_client_version(&item.current_version),
         download_url: item.download_url.to_string(),
         target: item.target,
     }))

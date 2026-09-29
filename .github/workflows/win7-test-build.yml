@@ -114,8 +114,14 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force dist | Out-Null
+          $internalMsiVersion = (node scripts/win7-version.mjs "$env:CANDIDATE_VERSION").Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($internalMsiVersion)) {
+            throw 'Failed to resolve the Win7 internal MSI version.'
+          }
+          "WIN7_INTERNAL_MSI_VERSION=$internalMsiVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $manifest = [ordered]@{
             version = $env:CANDIDATE_VERSION
+            internalMsiVersion = $internalMsiVersion
             flavor = 'win7-legacy-validation'
             updateChannel = 'win7-testing'
             commit = $env:GITHUB_SHA
@@ -150,6 +156,8 @@ jobs:
 
           - Artifact only; no tag, release, update metadata, or update channel was created.
           - Target: ``$env:WIN7_TARGET``
+          - Public version: ``${{ inputs.version }}``
+          - Internal MSI version: ``$env:WIN7_INTERNAL_MSI_VERSION``
           - Rust: ``$env:WIN7_RUST_TOOLCHAIN`` with ``rust-src`` and ``build-std``
           - External prerequisite: WebView2 ``$env:WIN7_REQUIRED_WEBVIEW2_MAJOR`` must be installed separately on the Win7 test machine.
           - A real Windows 7 SP1 x64 smoke test is still required before compatibility can be claimed.

@@ -32,6 +32,8 @@ export function validateWin7Configuration({
   workflow,
   releaseWorkflow,
   releaseConfigBuilder,
+  candidateBuilder,
+  versionRules,
 }) {
   assert(win7Config.productName === 'PCIE-Win7-Legacy', 'Win7 productName must identify the legacy build');
   assert(
@@ -90,6 +92,14 @@ export function validateWin7Configuration({
   );
   assert(workflow.includes('actions/upload-artifact@'), 'Win7 workflow must upload an Actions Artifact');
   assert(workflow.includes('test-release.mjs --win7'), 'Win7 validation workflow must use the isolated Win7 version policy');
+  assert(workflow.includes('internalMsiVersion'), 'Win7 validation manifest must record the internal MSI version');
+  assert(releaseWorkflow.includes('internalMsiVersion'), 'Win7 release manifest must record the internal MSI version');
+  assert(
+    candidateBuilder.includes('PCIE_WIN7_PUBLIC_VERSION') &&
+      candidateBuilder.includes('VITE_PCIE_RELEASE_VERSION') &&
+      versionRules.includes('toWin7MsiVersion'),
+    'Win7 builds must map the public version to an MSI-safe internal version and embed the public version',
+  );
 
   const forbidden = [
     'tauri-apps/tauri-action',
@@ -169,6 +179,8 @@ export function readWin7Configuration(rootDir) {
     workflow: readText('.github/workflows/win7-test-build.yml'),
     releaseWorkflow: readText('.github/workflows/win7-release-build.yml'),
     releaseConfigBuilder: readText('scripts/prepare-win7-release-config.mjs'),
+    candidateBuilder: readText('scripts/test-release.mjs'),
+    versionRules: readText('scripts/win7-version.mjs'),
   };
 }
 

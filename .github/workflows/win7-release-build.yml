@@ -226,8 +226,14 @@ jobs:
           if (-not $updateArtifact -or -not $directInstaller) {
             throw 'Packaged Win7 updater artifact or direct-install MSI is missing.'
           }
+          $internalMsiVersion = (node scripts/win7-version.mjs "$env:CANDIDATE_VERSION").Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($internalMsiVersion)) {
+            throw 'Failed to resolve the Win7 internal MSI version.'
+          }
+          "WIN7_INTERNAL_MSI_VERSION=$internalMsiVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $manifest = [ordered]@{
             version = $env:CANDIDATE_VERSION
+            internalMsiVersion = $internalMsiVersion
             previousVersion = $env:PREVIOUS_WIN7_VERSION
             channel = $env:RELEASE_CHANNEL
             flavor = 'win7-legacy-release'
@@ -267,6 +273,7 @@ jobs:
 
           - Channel: ``$env:RELEASE_CHANNEL``
           - Version: ``$env:CANDIDATE_VERSION``
+          - Internal MSI version: ``$env:WIN7_INTERNAL_MSI_VERSION``
           - Operator-declared previous channel version: ``$env:PREVIOUS_WIN7_VERSION``
           - Artifact is signed and ready for PCIE Server admin upload, but this workflow did not publish it.
           - The workflow did not access the intranet release server; PCIE Server performs the final monotonic-version gate during admin upload.

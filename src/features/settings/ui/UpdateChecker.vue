@@ -86,7 +86,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref } from 'vue';
 import Icon from '@shared/ui/Icon.vue';
-import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { useTauriEventListener } from '@shared/composables/useTauriEventListener';
@@ -102,6 +101,7 @@ import {
 } from '@services/updateConfig';
 import {
   checkForceUpdateRequired,
+  getCurrentClientVersion,
   notifyForceUpdateRequired,
   type ForceUpdateState,
 } from '@services/updatePolicy';
@@ -176,7 +176,7 @@ onMounted(async () => {
   testingUrl.value = config.testingUrl;
 
   try {
-    currentVersion.value = await getVersion();
+    currentVersion.value = await getCurrentClientVersion();
   } catch (e) {
     console.error('Failed to get version', e);
     currentVersion.value = '未知';

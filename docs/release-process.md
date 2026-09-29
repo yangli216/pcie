@@ -52,11 +52,11 @@ Windows 7 不属于普通 Windows 正式客户端支持范围。为仍在使用 
 
 ### 技术验证
 
-1. `Win7 Legacy Test Build` 只允许手动触发，只生成 GitHub Actions Artifact，不创建 tag、Release、draft、`.sig` 或 `latest.json`，也不上传任何更新源。候选版本必须使用 `X.Y.Z-win7` 或 `X.Y.Z-win7.N`，其中基础 `X.Y.Z` 与所选源码 commit 的三处稳定版本一致；例如普通源码为 `1.4.8` 时，首次 Win7 候选为 `1.4.8-win7`，后续热修为 `1.4.8-win7.1`、`1.4.8-win7.2`。
+1. `Win7 Legacy Test Build` 只允许手动触发，只生成 GitHub Actions Artifact，不创建 tag、Release、draft、`.sig` 或 `latest.json`，也不上传任何更新源。候选公开版本必须使用 `X.Y.Z-win7` 或 `X.Y.Z-win7.N`，其中基础 `X.Y.Z` 与所选源码 commit 的三处稳定版本一致，`N` 为 `1–65535`；例如普通源码为 `1.4.8` 时，首次 Win7 候选为 `1.4.8-win7`，后续热修为 `1.4.8-win7.1`、`1.4.8-win7.2`。构建器会把它们临时映射为 WiX 可接受的内部版本 `1.4.8-0`、`1.4.8-1`、`1.4.8-2`，但 Artifact 名称和来源清单仍使用公开版本。
 2. 构建使用固定 nightly 工具链、`x86_64-win7-windows-msvc` Tier 3 目标和 `build-std`，不得复用普通正式构建的 `stable-x86_64-pc-windows-msvc` 产物。该 Tier 3 target 不在 `rustup target list` 的可下载组件中，工作流只在调用 Tauri CLI 时临时隐藏 `rustup.exe` 以跳过其 target 预检，并在 `finally` 中恢复；Cargo 和 rustc 仍必须使用固定 nightly 与 `rust-src`。当前 `tauri-utils 2.9.3` 的旧 `ctor 0.8` 不识别 `target_vendor = win7`，Win7 专用 Cargo runner 仅在该 flavor 内将 `tauri-utils` 固定到上游修复提交 `8a97d387a3a1a52f7c501762517e294d8c94e119`；普通构建继续使用原 Cargo.lock。
 3. Win7 包设置 `webviewInstallMode = skip`，CI 不下载、不安装也不内嵌 WebView2。验证人员必须在 Windows 7 SP1 x64 实机上另行安装 WebView2 109，并在冒烟记录中写明实际版本。
 4. Win7 flavor 使用独立 `identifier`、WiX `UpgradeCode` 和 Tauri 默认 WiX 模板，不继承普通正式模板中的历史安装线迁移规则；验证配置继续关闭 updater artifact 与运行时 updater，禁止把候选 Artifact 误传到发布中心。由于仍需保留历史 `med-hermes` HIS 深链，Win7 包不得与普通正式客户端安装在同一台机器。
-5. 候选包必须记录版本、源 commit/ref、Rust 工具链、Rust target 和要求的外置 WebView2 版本。Artifact 名称必须包含 `win7-legacy`，不得描述为已发布版本。
+5. 候选包必须同时记录公开版本、内部 MSI 版本、源 commit/ref、Rust 工具链、Rust target 和要求的外置 WebView2 版本。Artifact 名称必须包含 `win7-legacy`，不得描述为已发布版本。
 6. WebView2 在 Windows 7 上不支持透明默认背景，Win7 flavor 必须通过 `win7-legacy` Cargo feature 启用原生窗口 region 裁剪：待机仅保留中心球，菜单展开时保留中心球与四个菜单圆，进入工作态或任何几何变更前先恢复完整矩形 region。实机必须回归启动白底、菜单展开/收起、四个按钮点击、拖拽、球态↔工作态及混合 DPI。
 7. Actions 构建成功只证明安装包可生成；完成技术验证还必须在真实 Windows 7 SP1 x64 环境执行安装、进程启动、首屏渲染、本地 Bridge 健康检查、SDK handshake 和卸载手测。WebView2 109 不支持 `color-mix()` 等较新 Web 能力，关键页面还需检查样式 fallback。
 
@@ -64,11 +64,11 @@ Windows 7 不属于普通 Windows 正式客户端支持范围。为仍在使用 
 
 验证通过后，可手动运行 `Win7 Legacy Release Build` 生成供 PCIE Server 后台上传的签名更新包：
 
-1. 源 commit 必须位于 `main`，版本只在 CI 构建期间临时注入，不提交三处版本、不创建 tag、GitHub Release、draft 或普通 Windows `latest.json`。发布版本必须为与源码稳定版本同基线的 `X.Y.Z-win7[.N]`；Win7 热修只递增末尾修订号，不占用普通客户端的下一个稳定版本。
+1. 源 commit 必须位于 `main`，版本只在 CI 构建期间临时注入，不提交三处版本、不创建 tag、GitHub Release、draft 或普通 Windows `latest.json`。公开发布版本必须为与源码稳定版本同基线的 `X.Y.Z-win7[.N]`；Win7 热修只递增末尾修订号，不占用普通客户端的下一个稳定版本。三处临时版本使用 `X.Y.Z-0 / X.Y.Z-N` 内部映射以满足 MSI，禁止把该内部版本写入 Win7 更新通道。
 2. 发布通道固定为 `win7-testing` 或 `win7-production`。两条通道拥有独立的 `latest.json`、`policy.json`、历史快照和回滚状态，不得上传到 `testing` / `production`。
 3. CI 使用 `WIN7_TAURI_SIGNING_PRIVATE_KEY`、`WIN7_TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 和 `WIN7_TAURI_UPDATER_PUBLIC_KEY` 生成临时 release config；公私钥必须独立于普通正式客户端。仓库中的验证 config 仍保持 updater 关闭，避免本地误构建可发布包。Windows 构建完成后，独立 Linux job 必须重新下载 Artifact 并用 minisign 对 updater archive 做完整公钥验签。
 4. Win7 updater 默认 target 与普通 Windows 一样是 `windows-x86_64`，隔离依赖的是独立通道，不得把两个安装包合并进同一份 `latest.json`。
-5. GitHub 托管 Runner 不访问内网更新服务器。触发工作流时必须显式填写目标通道当前版本 `previous_version`（首次发布可填写已确认的旧稳定 Win7 验证基线，之后必须填写当前 `X.Y.Z-win7[.N]`），CI 只用它和源码版本执行离线递增预检；`WIN7_UPDATE_SERVER_BASE_URL` 只用于写入 `latest.json` 下载地址，不在构建期发起网络请求。每次构建必须记录源 commit/ref、Win7 SemVer、前置版本、Rust 工具链、Rust target、外置 WebView2 109、发布通道、安全责任人和支持截止日期。
+5. GitHub 托管 Runner 不访问内网更新服务器。触发工作流时必须显式填写目标通道当前版本 `previous_version`（首次发布可填写已确认的旧稳定 Win7 验证基线，之后必须填写当前 `X.Y.Z-win7[.N]`），CI 只用它和源码版本执行离线递增预检；`WIN7_UPDATE_SERVER_BASE_URL` 只用于写入 `latest.json` 下载地址，不在构建期发起网络请求。每次构建必须记录源 commit/ref、公开 Win7 SemVer、内部 MSI 版本、前置版本、Rust 工具链、Rust target、外置 WebView2 109、发布通道、安全责任人和支持截止日期。
 6. CI 只生成签名发布包 Artifact；真正发布由管理员在 PCIE Server“版本发布”中把同一份 `latest.json` 与签名 updater archive（Windows 为 `*.msi.zip`）上传到对应 Win7 通道。服务端以该通道全部历史快照中的最高版本执行最终单调递增校验：只有与当前版本相同的补传，或严格高于历史最高版本的新发布可以进入；降级和恢复旧版本只能走显式回滚入口。原始 `*.msi` 位于 Artifact 的 `direct-install` 目录，只用于首次安装或人工恢复，不得代替 `latest.json` 指向的签名 updater archive。上传前必须复核通道、版本、文件名和签名来自同一次构建。
 7. `win7-production` 首次发布及每次 updater 变更都必须完成 Windows 7 SP1 x64 的 `N -> N+1` 实机冒烟，覆盖签名校验、下载安装、重启、应用数据保留、Bridge/SDK、失败后的人工恢复；外置 WebView2 109 不随客户端更新。
 8. 已安装的 1.4.5 及更早 Win7 验证包编译时关闭了 updater，不能自行发现首个 Win7 发布版本。首次迁移必须用更高版本的 `direct-install/*.msi` 手工覆盖安装；该 updater-enabled 引导版本安装成功后，下一版本才允许作为首次应用内更新冒烟基线。

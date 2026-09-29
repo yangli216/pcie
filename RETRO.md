@@ -1106,3 +1106,10 @@
 - **根因**: 普通候选与 Win7 独立 flavor 共用 `test-release.mjs` 的稳定 `X.Y.Z` 解析和“目标必须高于源码”规则，版本模型没有体现 Win7 已经拥有独立 identifier、签名和更新通道。
 - **解决方案**: 普通发布规则保持不变；Win7 改用与源码稳定基线一致的 `X.Y.Z-win7[.N]`，构建时临时注入，热修只递增 Win7 修订号。Win7 离线 preflight、工作流和 PCIE Server 最终门禁统一按完整 SemVer 比较。
 - **后续防护**: Win7 工作流必须显式启用 Win7 版本策略并覆盖基础版本不一致、普通稳定版本误入、同版补传、修订号递增与历史最高版本回滚场景；禁止为 Win7 热修提交普通三处版本或创建普通 release tag。
+
+### RETRO-147: Win7 公开预发布版本通过校验但被 WiX MSI 拒绝 [已解决]
+
+- **现象**: `1.4.8-win7` 已通过候选校验、前端门禁与 Rust release 编译，并成功生成 `pcie.exe`；进入 WiX 打包时才报 `optional pre-release identifier in app version must be numeric-only and cannot be greater than 65535 for msi target`。
+- **根因**: Tauri 2.10.1 的 MSI bundler 会把 SemVer 的 prerelease 直接转为 MSI ProductVersion 第四段，该段只接受 `0–65535` 数字；此前只验证了 SemVer 与通道规则，没有把目标 bundle 的原生版本约束纳入 preflight。
+- **解决方案**: 对外继续使用 `X.Y.Z-win7[.N]`；构建期三处临时版本映射为 `X.Y.Z-0 / X.Y.Z-N`，公开版本通过编译期环境进入 Rust updater comparator 和前端版本适配层，更新清单、请求头、强更策略及界面仍使用公开版本。
+- **后续防护**: 发布脚本单测必须覆盖映射唯一性、`1–65535` 边界、构建环境注入与文件恢复；Win7 静态验证必须拒绝把公开字母版本直接写入 Tauri/MSI，也必须拒绝把内部版本上传到更新通道。

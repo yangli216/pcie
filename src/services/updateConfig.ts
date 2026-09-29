@@ -4,6 +4,9 @@ export type UpdateChannel = UpdateEnvironment | 'win7-production' | 'win7-testin
 
 const ACTIVE_BUILD_FLAVOR: UpdateBuildFlavor =
   import.meta.env.VITE_PCIE_BUILD_FLAVOR === 'win7' ? 'win7' : 'standard';
+const CONFIGURED_PUBLIC_VERSION = String(import.meta.env.VITE_PCIE_RELEASE_VERSION || '').trim();
+const WIN7_PUBLIC_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-win7(?:\.([1-9]\d*))?$/;
+const WIN7_INTERNAL_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(0|[1-9]\d*)$/;
 
 export interface UpdateConfig {
   environment: UpdateEnvironment;
@@ -73,6 +76,34 @@ export function resolveUpdateChannel(
 
 export function isWin7UpdateBuild(): boolean {
   return ACTIVE_BUILD_FLAVOR === 'win7';
+}
+
+export function resolvePublicClientVersion(
+  nativeVersion: string,
+  flavor: UpdateBuildFlavor = ACTIVE_BUILD_FLAVOR,
+  configuredPublicVersion: string = CONFIGURED_PUBLIC_VERSION,
+): string {
+  const native = String(nativeVersion || '').trim();
+  if (flavor !== 'win7') {
+    return native || 'unknown';
+  }
+
+  const internalMatch = WIN7_INTERNAL_VERSION_PATTERN.exec(native);
+  if (!internalMatch) {
+    return 'unknown';
+  }
+  const revision = Number(internalMatch[4]);
+  if (revision > 65535) {
+    return 'unknown';
+  }
+  const derivedPublicVersion = `${internalMatch[1]}.${internalMatch[2]}.${internalMatch[3]}-win7${revision === 0 ? '' : `.${revision}`}`;
+  const configured = String(configuredPublicVersion || '').trim();
+  if (!configured) {
+    return derivedPublicVersion;
+  }
+  return WIN7_PUBLIC_VERSION_PATTERN.test(configured) && configured === derivedPublicVersion
+    ? configured
+    : 'unknown';
 }
 
 function buildRegionalReleaseEndpoint(channel: UpdateChannel): string {

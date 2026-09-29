@@ -8,7 +8,11 @@ import {
   restoreProjectVersionState,
   writeProjectVersion,
 } from './release-version.mjs';
-import { parseWin7Version, resolveWin7TargetVersion } from './win7-version.mjs';
+import {
+  parseWin7MsiVersion,
+  resolveWin7TargetVersion,
+  toWin7MsiVersion,
+} from './win7-version.mjs';
 
 function parseArgs(argv) {
   const separatorIndex = argv.indexOf('--');
@@ -62,31 +66,42 @@ export function runCandidateBuild({
   const targetVersion = versionPolicy === 'win7'
     ? resolveWin7TargetVersion(currentVersion, explicitVersion)
     : resolveTargetVersion(currentVersion, { explicitVersion, type });
-  logger.log(`${versionPolicy === 'win7' ? 'Win7 candidate' : 'Candidate'} build: ${currentVersion} -> ${targetVersion}`);
+  const buildVersion = versionPolicy === 'win7' ? toWin7MsiVersion(targetVersion) : targetVersion;
+  logger.log(
+    `${versionPolicy === 'win7' ? 'Win7 candidate' : 'Candidate'} build: ${currentVersion} -> ${targetVersion}`
+      + (versionPolicy === 'win7' ? ` (MSI internal ${buildVersion})` : ''),
+  );
 
   if (dryRun) {
     logger.log('Candidate validation passed; no files were changed.');
-    return { currentVersion, targetVersion, built: false };
+    return { currentVersion, targetVersion, buildVersion, built: false };
   }
 
-  writeProjectVersion(state, targetVersion, {
+  writeProjectVersion(state, buildVersion, {
     createUpdaterArtifacts,
-    validateVersion: versionPolicy === 'win7' ? parseWin7Version : undefined,
+    validateVersion: versionPolicy === 'win7' ? parseWin7MsiVersion : undefined,
   });
   try {
-    runner({ rootDir, targetVersion, buildArgs });
-    return { currentVersion, targetVersion, built: true };
+    runner({ rootDir, targetVersion, buildVersion, versionPolicy, buildArgs });
+    return { currentVersion, targetVersion, buildVersion, built: true };
   } finally {
     restoreProjectVersionState(state);
     logger.log(`Restored project version files to ${currentVersion}.`);
   }
 }
 
-function runTauriBuild({ rootDir, buildArgs }) {
+function runTauriBuild({ rootDir, targetVersion, buildVersion, versionPolicy, buildArgs }) {
   const tauriCliPath = path.join(rootDir, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
   const result = spawnSync(process.execPath, [tauriCliPath, 'build', ...buildArgs], {
     cwd: rootDir,
-    env: process.env,
+    env: versionPolicy === 'win7'
+      ? {
+          ...process.env,
+          PCIE_WIN7_PUBLIC_VERSION: targetVersion,
+          PCIE_WIN7_MSI_VERSION: buildVersion,
+          VITE_PCIE_RELEASE_VERSION: targetVersion,
+        }
+      : process.env,
     stdio: 'inherit',
   });
   if (result.error) throw result.error;

@@ -71,7 +71,7 @@ test('candidate build exposes target versions during build and restores every ve
   assert.deepEqual(readProjectVersionState(rootDir).contents, before.contents);
 });
 
-test('Win7 candidate build temporarily injects an isolated prerelease version', () => {
+test('Win7 candidate build injects an MSI-safe internal version and exposes the public version', () => {
   const rootDir = createProject('1.4.8');
   const before = readProjectVersionState(rootDir);
   const result = runCandidateBuild({
@@ -80,15 +80,19 @@ test('Win7 candidate build temporarily injects an isolated prerelease version', 
     versionPolicy: 'win7',
     createUpdaterArtifacts: false,
     logger: { log: () => undefined },
-    runner: () => {
+    runner: ({ targetVersion, buildVersion, versionPolicy }) => {
       assert.deepEqual(readProjectVersionState(rootDir).versions, {
-        packageJson: '1.4.8-win7.2',
-        tauriConfig: '1.4.8-win7.2',
-        cargo: '1.4.8-win7.2',
+        packageJson: '1.4.8-2',
+        tauriConfig: '1.4.8-2',
+        cargo: '1.4.8-2',
       });
+      assert.equal(targetVersion, '1.4.8-win7.2');
+      assert.equal(buildVersion, '1.4.8-2');
+      assert.equal(versionPolicy, 'win7');
     },
   });
   assert.equal(result.targetVersion, '1.4.8-win7.2');
+  assert.equal(result.buildVersion, '1.4.8-2');
   assert.deepEqual(readProjectVersionState(rootDir).contents, before.contents);
 });
 
