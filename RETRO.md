@@ -1117,6 +1117,6 @@
 ### RETRO-148: Win7 签名 MSI 因 direct-install 同名副本被误判为跨批次重复 [已解决]
 
 - **现象**: Win7 release flavor 已成功生成并签名 MSI，但组装 PCIE Server 上传包时，校验器报 `release contains multiple files named ...msi`，导致 `latest.json` 与发布 Artifact 未能上传。
-- **根因**: 当前 Tauri MSI updater 直接使用 `*.msi + *.msi.sig`，发布工作流又把同一 MSI 复制到 `direct-install` 供首次安装；通用校验器递归按 basename 要求全局唯一，没有利用 `latest.json` URL 中的版本目录区分 updater 文件与直接安装副本。
-- **解决方案**: 发布资产校验在出现同名文件时优先选择相对路径包含目标 `vX.Y.Z-win7[.N]` 目录的文件；仅当版本目录内仍不唯一时才失败。发布文档同步以 Tauri 实际签名产物为准，不再假定 Windows 一定生成 `*.msi.zip`。
+- **根因**: 当前 Tauri MSI updater 直接使用 `*.msi + *.msi.sig`，发布工作流又把同一 MSI 复制到 `direct-install` 供首次安装；通用校验器递归按 basename 要求全局唯一，没有利用 `latest.json` URL 中的版本目录区分 updater 文件与直接安装副本。后续来源清单步骤也仍只查找 `*.msi.zip`，即使上传包校验通过仍会误报 updater 缺失。
+- **解决方案**: 发布资产校验在出现同名文件时优先选择相对路径包含目标 `vX.Y.Z-win7[.N]` 目录的文件；仅当版本目录内仍不唯一时才失败。来源清单优先查找 zip archive，缺失时选择同目录内具有 `.sig` 的 MSI。发布文档同步以 Tauri 实际签名产物为准，不再假定 Windows 一定生成 `*.msi.zip`。
 - **后续防护**: 新增带 `win7-testing/v版本/同名 MSI` 与 `direct-install/同名 MSI` 的完整布局回归测试；`latest.json` 指向的版本目录文件和签名仍必须同批且通过独立公钥校验，不能因支持直接安装副本而放宽版本目录唯一性。

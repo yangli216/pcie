@@ -221,7 +221,13 @@ jobs:
           finally {
             $sha256.Dispose()
           }
-          $updateArtifact = Get-ChildItem "dist/win7-update/$env:RELEASE_CHANNEL/v$env:CANDIDATE_VERSION" -File -Filter '*.msi.zip' | Select-Object -First 1
+          $versionDirectory = "dist/win7-update/$env:RELEASE_CHANNEL/v$env:CANDIDATE_VERSION"
+          $updateArtifact = Get-ChildItem $versionDirectory -File -Filter '*.msi.zip' | Select-Object -First 1
+          if (-not $updateArtifact) {
+            $updateArtifact = Get-ChildItem $versionDirectory -File -Filter '*.msi' |
+              Where-Object { Test-Path "$($_.FullName).sig" } |
+              Select-Object -First 1
+          }
           $directInstaller = Get-ChildItem 'dist/win7-update/direct-install' -File -Filter '*.msi' | Select-Object -First 1
           if (-not $updateArtifact -or -not $directInstaller) {
             throw 'Packaged Win7 updater artifact or direct-install MSI is missing.'
