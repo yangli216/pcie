@@ -1,5 +1,13 @@
 # 架构文档 (ARCHITECTURE.md)
 
+## 机构知识检索工作台（2026-09-30）
+
+现有知识库按钮通过useNavigation.openKnowledgeBase进入features/knowledge/ui/KnowledgeBasePanel；App仅编排入口。InstitutionKnowledgePanel使用useInstitutionKnowledgeController管理集合、检索、错误与迟到结果，KnowledgeSearchForm与KnowledgeEvidenceList只展示和发出事件；api/knowledgeRetrieval.ts统一经regionalClient签名消费服务端集合/检索。另提供PMPHAI原有外部页面入口，不持有第三方Key、不直接调用WeKnora。原文按文本显示，来源和版本由服务端批准清单提供；本轮不自动注入ChatPanel/公卫。
+
+`output/knowledge-retrieval-runtime` 是独立浏览器组件预览，不进入桌面生产入口。它直接复用上述组件、主题与 `WINDOW_SIZES.WORK`，只在该入口的 Vite 配置中替换服务依赖为合成响应；不连接实际服务、模型或 Tauri，也不修改生产签名出口。真实 WeKnora 本机部署由 PCIE Server 的 `deploy/weknora` 管理。
+
+
+
 普通语音结果页的最小化恢复复用同就诊编辑快照：快照记录 `consultationRoundId`，来源仍为 `llm` 的重建仅允许恢复同一非空轮次；显式 `cache` 入口沿用同就诊、同自然日缓存规则。`voiceEditorSnapshotRestoration.ts` 负责恢复资格与异步恢复保护，快照恢复和 Vue watcher 收敛前不得开放自动治疗生成。恢复空治疗数组时也保留已完成的诊断键，防止有效空结果重算；药房与库存仍按原规则核对。普通语音卸载前补存最新编辑，患者/就诊/轮次变化及卸载后拦截迟到恢复。此规则仅用于 `voice`，慢病复诊、症状问诊与报告回诊保留原入口与状态机。
 
 ### 同日跨报告一致性校验
@@ -807,7 +815,7 @@ eventListeners.unregisterAllListeners();
 | `HisIntegrationLogPanel.vue` | HIS 联调日志独立视图面板：筛选、查看详情、复制、导出、清空本地 JSONL 日志；真实实现已迁至 settings 功能域下的排障工具面板，旧 `src/components/HisIntegrationLogPanel.vue` 已删除，App 通过 `@features/settings` 公开入口消费 | [src/features/settings/ui/HisIntegrationLogPanel.vue](src/features/settings/ui/HisIntegrationLogPanel.vue) |
 | `UpdateChecker.vue` / `ForceUpdateGate.vue` | 客户端更新与服务端强制更新门禁 UI：`UpdateChecker` 负责更新源配置、检查按钮、下载进度和安装重启动作编排；`ForceUpdateGate` 只展示强更版本要求并复用 `UpdateChecker forced`。真实实现已迁至 settings 功能域，旧 `src/components/UpdateChecker.vue` / `src/components/ForceUpdateGate.vue` 已删除，设置页和 App 强更门禁通过 `@features/settings` 公开入口消费 | [src/features/settings/ui](src/features/settings/ui) |
 | `FeedbackSubmissionPanel.vue` | 通用问题反馈面板：承接工作区顶栏反馈入口，提供紧凑星级、问题标签、选填截图和补充说明，并统一提交 `/v1/client/feedbacks` | [src/features/feedback/ui/FeedbackSubmissionPanel.vue](src/features/feedback/ui/FeedbackSubmissionPanel.vue) |
-| `KnowledgeBasePanel.vue` / `KnowledgePanel.vue` | 知识库 UI 域：内置知识库检索面板、问诊页知识检索抽屉、搜索结果行和详情弹窗；真实实现已迁至 knowledge 功能域，旧 `src/components/Knowledge*.vue` 已删除，App 与问诊页通过 `@features/knowledge` 公开入口消费。智能问诊和语音问诊的批量检索分类词提取收敛到 `features/knowledge/lib/knowledgeSearchCategories.ts`，检索 loading / results / 面板开合收敛到 `features/knowledge/model/useKnowledgeSearchController.ts`；知识服务、配置判断、toast 和埋点仍由调用方注入。当前默认知识入口仍更偏向 `pmphai.ts` 生成的外部页面，内置面板作为保留备选通道 | [src/features/knowledge/ui](src/features/knowledge/ui) / [src/features/knowledge/lib](src/features/knowledge/lib) / [src/features/knowledge/model](src/features/knowledge/model) |
+| `KnowledgeBasePanel.vue` / `KnowledgePanel.vue` | 知识库 UI 域：内置知识库检索面板、问诊页知识检索抽屉、搜索结果行和详情弹窗；真实实现已迁至 knowledge 功能域，旧 `src/components/Knowledge*.vue` 已删除，App 与问诊页通过 `@features/knowledge` 公开入口消费。智能问诊和语音问诊的批量检索分类词提取收敛到 `features/knowledge/lib/knowledgeSearchCategories.ts`，检索 loading / results / 面板开合收敛到 `features/knowledge/model/useKnowledgeSearchController.ts`；知识服务、配置判断、toast 和埋点仍由调用方注入。知识库按钮进入 `KnowledgeBasePanel.vue` 工作台，机构资料由批准集合检索接口提供，人卫页面由 `usePmphaiKnowledgePage.ts` 打开；问诊分类检索沿用原有 PMPHAI controller | [src/features/knowledge/ui](src/features/knowledge/ui) / [src/features/knowledge/lib](src/features/knowledge/lib) / [src/features/knowledge/model](src/features/knowledge/model) |
 | `Toast.vue` | 消息提示；真实实现已迁至 `src/shared/ui/Toast.vue`，旧 `src/components/Toast.vue` 兼容包装已删除，全局 provider 直接使用 shared 实现 | [src/shared/ui/Toast.vue](src/shared/ui/Toast.vue) |
 | `Icon.vue` | 通用图标封装真实实现已迁至 `src/shared/ui/Icon.vue`；旧 `src/components/Icon.vue` 兼容包装已删除。离线图标由 `main.ts` 注册 `src/icons/iconifyCollections.ts` 中的精简 Iconify 集合，避免把完整 `@iconify-json/*` 图标包打进产物 | [src/shared/ui/Icon.vue](src/shared/ui/Icon.vue) |
 

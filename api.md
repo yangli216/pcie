@@ -1,5 +1,13 @@
 # 全医慧助（PCIE）HIS 接入指南 / 接口说明
 
+## 服务端机构知识检索（2026-09-30）
+
+桌面知识工作台通过已有regionalClient签名调用GET `/v1/knowledge/collections`与POST `/v1/knowledge/search`，字段以[服务端随附机器契约](../pcie-server/deploy/weknora/knowledge-retrieval.openapi.json)、[工作区协同契约](../development-harness/contracts/knowledge-retrieval.openapi.json)及[服务端API](../pcie-server/API.md)为准。机构及批准文档范围由服务端确定，客户端只提交逻辑集合、查询、批准版本与limit。无新增本地Bridge接口，不向HIS暴露WeKnora地址/Key。PMPHAI原有契约继续使用。
+
+匹配标签 `matchType` 保持字符串，由服务端将 WeKnora 的整数枚举归一化；桌面不解析供应商数字枚举，不根据匹配标签改变资料批准或原文校验。
+
+
+
 > 最后更新: 2026-09-10
 >
 > 本文档面向准备接入全医慧助（PCIE）的 HIS / 医生站 / PHIS 项目。

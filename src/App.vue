@@ -47,7 +47,6 @@ import {
   getPatientContextAnchorId,
   getPatientContextName,
 } from "./utils/patientContext";
-import { pmphaiService, isPMPHAIConfigured } from './services/pmphai';
 import {
   medicalDataService,
   type MedicalCatalogClearOptions,
@@ -347,6 +346,7 @@ const navigation = useNavigation({
 const {
   openSettings,
   openChat,
+  openKnowledgeBase,
   openHisIntegrationLog,
   openMedicalCatalogCache,
   openConsultation,
@@ -888,28 +888,6 @@ const handleExitApp = async (e: MouseEvent) => {
 };
 
 
-const openInsideCloudHome = async () => {
-  if (!isPMPHAIConfigured()) {
-    showToast('请先在本地设置或后台管理端启用知识库', 'error');
-    return;
-  }
-
-  const pageUrl = await pmphaiService.getPageUrl({
-    pageName: 'home',
-  });
-  if (!pageUrl) {
-    showToast('知识库地址生成失败', 'error');
-    return;
-  }
-
-  try {
-    const { openUrl } = await import('@tauri-apps/plugin-opener');
-    await openUrl(pageUrl);
-  } catch (err) {
-    console.error('Failed to open URL:', err);
-    window.open(pageUrl, '_blank');
-  }
-};
 </script>
 
 <template>
@@ -1026,7 +1004,7 @@ const openInsideCloudHome = async () => {
 	              >
 	                <Icon icon="lucide:sparkles" class="toolbar-icon" size="20" />
 	              </button>
-	              <button class="icon-btn" aria-label="知识库" title="知识库" @click="openInsideCloudHome">
+	              <button class="icon-btn" aria-label="知识库" title="知识库" @click="openKnowledgeBase">
 	                <Icon icon="lucide:book-open" class="toolbar-icon" size="20" />
 	              </button>
                 <button class="icon-btn feedback-entry-btn" aria-label="问题反馈" title="问题反馈" @click="openFeedbackDialog">
@@ -1050,7 +1028,7 @@ const openInsideCloudHome = async () => {
           <ChatPanel
             v-if="currentView === 'chat'"
             @open-consultation-assist="openConsultationAssist"
-            @open-inside-cloud-home="openInsideCloudHome"
+            @open-inside-cloud-home="openKnowledgeBase"
             @open-feedback-dialog="openFeedbackDialog"
             @handle-user-collapse="handleUserCollapse"
           />

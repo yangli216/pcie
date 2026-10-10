@@ -1,4 +1,9 @@
-# 人卫数智 / PMPHAI 知识库链路
+# 知识库工作台与 PMPHAI 检索链路
+
+## WeKnora 机构资料检索（2026-09-30）
+
+独立知识库按钮现在进入正式工作台；机构资料由服务端批准清单和WeKnora提供，API位于features/knowledge/api/knowledgeRetrieval.ts，列表与检索经过regionalClient签名。原人卫页面保留在工作台的人卫入口；问诊/语音的PMPHAI分类检索继续使用既有controller。本轮不对ChatPanel或公卫自动注入知识。设计、版本/内容hash门禁及部署见[知识服务设计](../../development-harness/KNOWLEDGE_BASE_DESIGN.md)。
+
 
 本文档记录当前真实运行的知识库实现。早期 `src/services/knowledgeSearch.ts`、聊天面板自动 RAG 注入、`RENWEI_TOKEN` 配置口径已经不再是当前代码基线。
 
@@ -8,7 +13,7 @@
 | --- | --- |
 | PMPHAI API / token / 批量检索 / 分类检索 / 原文片段 / 页面 URL / 连接测试 | `src/services/pmphai.ts` |
 | 知识库面板、RAG / 列表模式展示、结果详情弹窗 | `src/features/knowledge/ui/KnowledgePanel.vue` |
-| 内置知识库页面入口和 page token URL 构建 | `src/features/knowledge/ui/KnowledgeBasePanel.vue` + `src/services/knowledgeBase.ts` |
+| 知识库工作台、机构资料检索、人卫页面入口 | `src/features/knowledge/ui/KnowledgeBasePanel.vue`、`api/knowledgeRetrieval.ts`、`model/useInstitutionKnowledgeController.ts`、`model/usePmphaiKnowledgePage.ts` |
 | 智能问诊 / 语音问诊共用的批量检索状态 | `src/features/knowledge/model/useKnowledgeSearchController.ts` |
 | 诊断、药品、检查分类词提取 | `src/features/knowledge/lib/knowledgeSearchCategories.ts` |
 | 语音问诊到知识库 controller 的轻包装 | `src/features/voice-consultation/model/useVoiceKnowledgeSearch.ts` |

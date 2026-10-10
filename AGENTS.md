@@ -1,5 +1,12 @@
 # AGENTS.md
 
+## 机构知识检索入口
+
+独立知识库按钮进入KnowledgeBasePanel工作台，机构资料使用features/knowledge/api中的签名服务端接口，人卫页面保留独立入口；问诊分类检索仍走pmphai.ts。新UI/状态进入features/knowledge，不在App增加业务逻辑，不新增Pinia store。单测覆盖签名、错误/零命中、迟到结果隔离和原文文本安全；执行type-check/test:unit/build，真实Tauri/WeKnora联调单列。
+
+`output/knowledge-retrieval-runtime` 是知识库生产组件的浏览器预览入口。只在该入口的 Vite 别名中注入合成服务，不修改生产签名出口，不新增依赖或锁文件；运行命令见 HARNESS.md，预览数据必须显式标记为合成资料。
+
+
 全医慧助（PCIE，Primary Care Intelligent Expert）项目的协作规则；GitHub 仓库名为 `pcie`。
 
 本项目是一个 `Tauri 2 + Vue 3 + TypeScript + Rust` 的基层医疗桌面工作站，当前真实运行形态包含：
@@ -8,7 +15,7 @@
 2. 独立诊断路径窗口（`DiagnosisPathWindow.vue`）
 3. 语音问诊与病历回写链路
 4. 本地 HTTP Bridge 与 PHIS 引用回执入口（`src-tauri/src/http_server.rs`）
-5. 服务端托管的外部知识库能力（`pmphai.ts` 为主，`KnowledgeBasePanel.vue` 为保留内置面板）
+5. 服务端托管的知识库能力（`KnowledgeBasePanel.vue` 为独立工作台，机构资料走签名检索接口，问诊分类检索与人卫页面使用 `pmphai.ts`）
 
 ## 必读顺序
 
@@ -67,7 +74,7 @@
 
 1. `ConsultationPage.vue` 是完整问诊 + 灵活模式的唯一落点，不允许维护第二套推荐口径。
 2. Pinia 当前只有 `consultationConfig` 和 `diagnosisPath` 两个权威 store，新增需人工审批。
-3. 知识库入口主次关系：`pmphai.ts` 为主，`KnowledgeBasePanel.vue` 为保留备选。
+3. 知识库按钮进入 `KnowledgeBasePanel.vue` 工作台；机构资料检索与人卫页面分别在 knowledge 功能域管理，问诊分类检索继续复用 `pmphai.ts`。
 4. 前端复用治理以 `docs/frontend-reuse-architecture.md` 为准，文件结构迁移以 `docs/frontend-file-structure-plan.md` 为目标路线图；新增业务组件 / composable / mapper 默认进入对应 `features/<feature>/ui|model|api|lib`，通用 UI / 工具进入 `shared/*`，稳定实体进入 `entities/*`，根级 `components/`、`composables/`、`services/` 不再作为新增默认落点，只保留历史入口或兼容 facade。
 5. 后续重构不能只追求大文件行数下降；必须说明沉淀了哪类能力（Adapter / Builder / Strategy / Composable Controller / Headless UI / domain lib），以及是否减少重复规则或可删除旧入口。
 6. 客户端只保留服务端托管运行形态，不再提供本地/区域模式开关；LLM、语音、PMPHAI/知识库、Prompt/模板同步、反馈和审计统一经签名 `/v1/*` 接口。不得重新引入客户端第三方密钥、供应商直连或本地 Tauri AI 代理。HIS Bridge、HIS Adapter、目录缓存、窗口/音频采集和确定性规则属于桌面基础设施，不等同于本地模式。
@@ -138,7 +145,7 @@
 5. 涉及 `emit('minimize')`、`exitWork()`、`handleCollapse()` 的改动，必须区分“同一运行期内保留现场”和“真正持久化恢复”，不要把内存保活误写成已落盘；结束就诊收球必须走统一 transition 队列并以完整 `160×160` 球态作为终态，不得被迟到的胶囊/语音 resize 覆盖
 6. 修改 `windowSizes.ts`、`useWorkMode.ts`、`useWindowManagement.ts` 时，必须同步校验窗口尺寸、显示器边界和动画原点
 7. `DiagnosisPathWindow.vue`、`diagnosisPath.ts`、`stores/diagnosisPath.ts` 的改动必须同时检查窗口生命周期、渲染就绪事件和缓存 key 策略
-8. 知识库相关改动要明确是走 `pmphai.ts` 主链路，还是启用内置 `KnowledgeBasePanel.vue`，避免双轨长期漂移
+8. 知识库相关改动必须明确机构批准资料、人卫知识与问诊分类检索的职责，并同步工作台入口、签名契约和来源版本展示
 9. **HIS 调用边界**：业务代码（`components/` / `composables/` / `services/` 中除 `services/his/*` 之外）禁止直接 `import ... from 'services/hisService'`。必须经 `services/his` 入口：业务调用走 `getHisAdapter()`，仅 SDK handshake / 服务端 bootstrap 等认证场景允许使用 `services/his` 重导出的 `getHisService` / `resetHisService`。新增 PHIS 私有字段读取必须通过 `entry.raw.xxx` 透传，不允许在中性 DTO 上加 PHIS 命名字段。
 10. **药品定稿流水线**：任何 AI 或历史上下文产生的药品，在自动选中、缓存、库存校验和回写前必须调用共享 `finalizeMedicineRecommendation(s)`，依次完成当前库存对齐、药品详情、一次剂量换算、标准频次 / 用法、程序总量和最终库存校验。模型包装总量不得直接进入药品处方；只调用 hydrate、只在展示层 normalize 或只在提交 payload 时补字段均不满足门禁。
 11. **Tauri capability 同步**：新增或首次调用 Tauri JS API 时，必须同时核对 `src-tauri/capabilities/*.json` 中对应的 `allow-*` 权限，并执行会真实触发该 API 的 Tauri 运行时冒烟；`type-check`、浏览器单测和 `cargo check` 不能替代 capability 验证。

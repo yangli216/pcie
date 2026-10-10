@@ -1,0 +1,13 @@
+html, body, #app { margin: 0; min-height: 100%; }
+body { font-family: var(--font-family-base, -apple-system, BlinkMacSystemFont, sans-serif); background: var(--color-background, #f3f6fa); color: var(--color-text-primary, #1e293b); }
+.runtime-page { padding: 24px; }
+.runtime-toolbar { display: flex; flex-wrap: wrap; gap: 20px; justify-content: space-between; align-items: center; max-width: 1040px; margin: 0 auto; }
+.runtime-toolbar h1 { margin: 0; font-size: 20px; }
+.runtime-toolbar p, .runtime-guide { color: var(--color-text-muted, #64748b); font-size: 13px; line-height: 1.7; }
+.runtime-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.runtime-controls button, .runtime-controls a, .runtime-closed button { border: 1px solid var(--color-border-light, #dbe3eb); background: var(--color-background-white, #fff); color: var(--color-text-primary, #1e293b); border-radius: 8px; padding: 8px 12px; font: inherit; font-size: 13px; text-decoration: none; cursor: pointer; }
+.runtime-controls :focus-visible, .runtime-closed button:focus-visible { outline: 2px solid var(--color-primary, #008577); outline-offset: 2px; }
+.runtime-guide { max-width: 1040px; margin: 18px auto; }
+.runtime-stage { width: min(var(--runtime-width), 100%); height: var(--runtime-height); margin: 20px auto; border: 1px solid var(--color-border-light, #dbe3eb); border-radius: 12px; box-shadow: 0 8px 30px #0f172a14; overflow: hidden; }
+.runtime-closed { display: grid; place-content: center; gap: 16px; height: 100%; text-align: center; }
+@media (max-width: 520px) { .runtime-page { padding: 16px 10px; } .runtime-toolbar h1 { font-size: 18px; } }
