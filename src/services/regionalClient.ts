@@ -24,6 +24,7 @@ export {
   initializeRegionalClient,
   regionalGet,
   regionalPost,
+  regionalRequestResponse,
   registerDevice,
   saveRegionalConnectionConfig,
   shutdownRegionalClient,

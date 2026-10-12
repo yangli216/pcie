@@ -246,6 +246,9 @@ export function useWorkMode(options: WorkModeOptions) {
 
     if (!workStateCommitted) return;
 
+    // 公卫任务有独立居民上下文，不将门诊 currentPatient 关联到通用会话日志。
+    if (targetView === 'public-health') return;
+
     // 会话启动不阻塞窗口已经完成的视觉切换。
     void feedbackService.startSession(
       getSessionType(),

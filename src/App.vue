@@ -21,6 +21,8 @@ import { ConsultationResultPage } from "@features/consultation-result";
 import { FeedbackSubmissionPanel } from "@features/feedback";
 import { HisIntegrationLogPanel } from "@features/settings";
 import { MedicalCatalogCachePanel } from "@features/medical-catalog";
+import { PublicHealthPage } from "@features/public-health";
+import { usePublicHealthBridgeController } from "@app/events/usePublicHealthBridgeController";
 import { TreatmentPlanPage } from "@features/treatment-plan";
 import { OutpatientFollowUpPage } from "@features/outpatient-follow-up";
 import { InpatientEmrPage, type InpatientEmrGenerationRequest } from "@features/inpatient-emr";
@@ -157,6 +159,8 @@ const assistantTitle = computed(() => {
       return '住院病历生成';
     case 'outpatient-emr':
       return '门诊模板分析';
+    case 'public-health':
+      return '公卫助手';
     case 'differential-diagnosis':
       return currentPatient.value ? `鉴别诊断 - ${patientDisplayName.value}` : '鉴别诊断';
     case 'his-log':
@@ -357,9 +361,16 @@ const {
   openPatientMemory,
   openInpatientEmr,
   openOutpatientEmr,
+  openPublicHealth,
   openDifferentialDiagnosis,
   startVoiceInteraction: startVoiceInteractionBase,
 } = navigation;
+
+const publicHealth = usePublicHealthBridgeController({
+  open: openPublicHealth,
+  notify: showToast,
+  enabled: !isStandaloneWindow,
+});
 
 const outpatientEmrBridge = useOutpatientEmrBridgeController({
   openOutpatientEmr,
@@ -989,7 +1000,7 @@ const handleExitApp = async (e: MouseEvent) => {
           <!-- 工具栏 (risk-alert, voice-interaction, reception-capsule 视图不显示) -->
           <div v-if="currentView !== 'risk-alert' && currentView !== 'voice-interaction' && currentView !== 'reception-capsule' && currentView !== 'differential-diagnosis' && currentView !== 'chat'" class="assistant-toolbar" data-tauri-drag-region>
             <div class="toolbar-left" data-tauri-drag-region>
-	              <button v-if="currentView === 'settings' || currentView === 'his-log' || currentView === 'medical-cache' || currentView === 'knowledge-base' || currentView === 'treatment-plan' || currentView === 'outpatient-follow-up' || currentView === 'report-interpretation' || currentView === 'inpatient-emr' || currentView === 'outpatient-emr'" class="icon-btn back-btn" @click="currentView === 'report-interpretation' ? closeReportInterpretationWorkspace() : handleUserCollapse()" title="返回">
+	              <button v-if="currentView === 'settings' || currentView === 'his-log' || currentView === 'medical-cache' || currentView === 'knowledge-base' || currentView === 'treatment-plan' || currentView === 'outpatient-follow-up' || currentView === 'report-interpretation' || currentView === 'inpatient-emr' || currentView === 'outpatient-emr' || currentView === 'public-health'" class="icon-btn back-btn" @click="currentView === 'report-interpretation' ? closeReportInterpretationWorkspace() : handleUserCollapse()" title="返回">
 	                 <Icon icon="lucide:arrow-left" class="toolbar-icon" size="20" />
 	              </button>
 	              <span class="assistant-title" data-tauri-drag-region>{{ assistantTitle }}</span>
@@ -1097,6 +1108,11 @@ const handleExitApp = async (e: MouseEvent) => {
             @close="handleUserCollapse"
             @cancel="cancelVoiceResult"
             @writeback-prepared="voiceOutpatientEmrWorkflow.handleWritebackPrepared"
+          />
+          <PublicHealthPage
+            v-show="currentView === 'public-health'"
+            :controller="publicHealth"
+            @close="handleUserCollapse"
           />
           <TreatmentPlanPage
             v-if="currentView === 'treatment-plan'"

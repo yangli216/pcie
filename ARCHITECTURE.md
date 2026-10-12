@@ -7,6 +7,7 @@
 `output/knowledge-retrieval-runtime` 是独立浏览器组件预览，不进入桌面生产入口。它直接复用上述组件、主题与 `WINDOW_SIZES.WORK`，只在该入口的 Vite 配置中替换服务依赖为合成响应；不连接实际服务、模型或 Tauri，也不修改生产签名出口。真实 WeKnora 本机部署由 PCIE Server 的 `deploy/weknora` 管理。
 
 
+> **公卫迁移实现中（2026-09-29）**：新增独立 `features/public-health` 与 `public-health` 主窗口视图；`pcie-server` 原生执行业务生成，桌面核对事实、展示流式阶段、编辑确认并等待 PHIS 保存回执。独立任务不写门诊 `currentPatient`、不进入问诊最新结果槽。契约见[公卫设计](../pcie-server/deploy/public-health/PUBLIC_HEALTH_DESIGN.md)与[机器契约](../pcie-server/deploy/public-health/contracts/public-health.openapi.json)，生产接入须以实现与验证记录为准。
 
 普通语音结果页的最小化恢复复用同就诊编辑快照：快照记录 `consultationRoundId`，来源仍为 `llm` 的重建仅允许恢复同一非空轮次；显式 `cache` 入口沿用同就诊、同自然日缓存规则。`voiceEditorSnapshotRestoration.ts` 负责恢复资格与异步恢复保护，快照恢复和 Vue watcher 收敛前不得开放自动治疗生成。恢复空治疗数组时也保留已完成的诊断键，防止有效空结果重算；药房与库存仍按原规则核对。普通语音卸载前补存最新编辑，患者/就诊/轮次变化及卸载后拦截迟到恢复。此规则仅用于 `voice`，慢病复诊、症状问诊与报告回诊保留原入口与状态机。
 
@@ -1628,3 +1629,19 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 
 `recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段及身高、体重、腰围测量槽位剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，人体测量值继续保留在完整正文或 PHIS 独立字段中，仅剩余描述性查体正文同时投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。
+
+
+## 公卫助手桌面边界（2026-09-29）
+
+公卫 Bridge 新增的 SHA-256、Base64 与时间解析依赖同时登记到独立 Win7 锁快照，复用已有固定版本，仅补 root dependency 引用；不升级 Win7 依赖或变更其发布通道。
+
+- `features/public-health/types.ts` 描述 `public-health.v1` 的事实、结果、SSE 和回写结构；`lib` 承担来源引用、身份匹配、流顺序和允许回写范围的纯校验。健康处方固定三章节，减重固定两章节与服务端只读 BMI/BMR。
+- `lib/publicHealthHealthProfile.ts` 从发起方当前 facts 派生只读画像，保留来源和证据，排除未来时间及最新结果冲突；`ui/PublicHealthHealthProfile.vue` 仅显示在随访页。`lib/publicHealthHealthEducation.ts` 校验六分区内部教育草稿及检查/用药输出，生成仍沿用三节纯文本结果，不扩展 PHIS 请求/确认字段。
+- `features/public-health/model/usePublicHealthController.ts` 在 App 生命周期内持有独立任务、草稿、生成 run token 和冻结回写尝试；网络、Bridge、时间与 UUID 均显式注入，不增加 Pinia store，不借用 `consultationId`。页面与子组件采用 props/emits，患者条复用 entity 展示并显式关闭费用标签。
+- 食谱章节可携带 `options` 三份结构化方案，首项为默认推荐，`content` 等于首项原始正文。`model/usePublicHealthMealSelection.ts` 管理当前方案 ID 和各方案编辑，控制器从该状态派生当前食谱正文并复用原确认 Builder；`ui/PublicHealthMealOptions.vue` 展示当前正文和折叠的两备选，以 props/emits 传递选择与编辑。完整结果才可选择，冻结确认后不可切换，清空生成同时清空方案状态，不按文本标题拆分输出。
+- `features/public-health/api` 通过 regional 基础设施的签名 Response 出口读取标准 SSE；该出口沿用设备注册、ECDSA P-256 签名及签名时钟校正。公卫事件不交给只解析 OpenAI `choices` 的旧 `createRegionalSSE`。每连接绑定 `streamId`、从 sequence 1 开始；同 stream 重复或较旧序号丢弃，跨身份、跳号、旧 run 和无终态断流不能成为可回写结果。断流后遇到 `GENERATION_IN_PROGRESS` 保持原请求供手动重连，不自动更换请求重复生成。
+- `app/events/usePublicHealthBridgeController.ts` 管理专用 Tauri 事件与启动恢复，跨任务调入先读取并核对完整活动快照以恢复已发送/已保存状态；同任务仍在内存时保留医生草稿，迟到查询受 token 保护。App 只注入导航及网关。`public-health` 视图的 1120×760 初始几何统一经 transition coordinator 与工作区裁剪，业务组件不调用窗口几何 API。
+- 医生补充事实或再次生成更换 `requestId`，保持首次 `originRequestId`；启动新的居民/业务任务会替换本地任务并废弃旧异步结果。手工身高/体重必须录入真实测量时间，创建 `PCIE_MANUAL` 来源 observation 并由 profile 显式引用，不能以录入时间冒充测量时间。
+- `lib/publicHealthPresentation.ts` 从当前请求纯派生展示资料：仅将与 weightProfile 引用、code、单位和数值一致的身高/体重列为“本次采用”，其余同类原始测量可展开核对；不按数组顺序或日期推断采用值。减重运动/饮食展示 profile 的当前值。事实面板始终从 request 派生，不另存展示快照，不删改原始 observations/lifestyle；补充后生成仍使用控制器的完整新请求。
+- 只有完整 completed 结果可首次编辑并确认。重建页面时若仅恢复已确认目标快照，正文与 sourceSections 先校验业务身份及允许范围；明确失败后可编辑这些目标正文并新建保存尝试，不伪造丢失的原始章节分割。启动恢复期间最多缓冲 16 条回执，快照恢复后仍经完整身份匹配应用。停止等待只停止本页消费，不声称取消服务端或停止计费。知识缺失明确阻断，不生成客户端占位医疗正文。
+- 冻结快照仅在等待回执时可沿用 `writebackRequestId` 重传；failed 为终态，重新保存必须新 ID。成功只来自匹配的 PHIS success 回执；超时保留等待身份并接受匹配迟到回执。版本冲突保留草稿，要求 PHIS 重新调入最新记录，不在客户端虚构新版本。

@@ -29,6 +29,6 @@ export {
   initializeRegionalClient,
   shutdownRegionalClient,
 } from './bootstrap';
-export { regionalGet, regionalPost } from './httpClient';
+export { regionalGet, regionalPost, regionalRequestResponse } from './httpClient';
 export { createRegionalSSE, createRegionalWebSocketUrl } from './realtime';
 export { buildRegionalSpeechUploadPayload } from './speechUpload';

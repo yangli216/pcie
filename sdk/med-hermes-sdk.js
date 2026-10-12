@@ -809,7 +809,7 @@
     this.timeout = timeout || 5000;
   }
 
-  HttpClient.prototype.post = function (path, payload) {
+  HttpClient.prototype.post = function (path, payload, headers) {
     var url = this.baseUrl + path;
     var timeoutMs = this.timeout;
 
@@ -822,7 +822,7 @@
 
       var opts = {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: assign({ 'Content-Type': 'application/json' }, headers || {}),
         body: JSON.stringify(payload || {})
       };
       if (controller) opts.signal = controller.signal;
@@ -1757,6 +1757,7 @@
   /** 销毁实例，清理全部资源 */
   MedHermes.prototype.destroy = function () {
     this._destroyed = true;
+    this._destroyPublicHealth();
     this._isChannelPersistent = false;
     if (this._subscriptionActive) {
       this._subscriptionActive = false;
@@ -1772,6 +1773,170 @@
     this._rejectPendingOutpatientEmrRequests(new Error('MedHermes SDK 已销毁'));
     this._connected = false;
     this._transport = 'idle';
+  };
+
+  // 公卫使用独立握手、所有权和socket。绝不进入门诊 normalize/dispatch/restore。
+  function publicHealthError(code, message) {
+    var err = new Error(message); err.code = code; return err;
+  }
+  function publicHealthUuid() {
+    if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+      throw publicHealthError('SECURE_RANDOM_UNAVAILABLE', '公卫接入需要浏览器安全随机数能力');
+    }
+    var bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    var hex = Array.prototype.map.call(bytes, function (n) { return ('0' + n.toString(16)).slice(-2); }).join('');
+    return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);
+  }
+  function publicHealthId(value) { return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value); }
+  var PUBLIC_HEALTH_IDENTITY = ['schemaVersion','originRequestId','capability','scene','patientId','businessRecordId','recordVersion'];
+  function publicHealthMatches(left, right, extra) {
+    return PUBLIC_HEALTH_IDENTITY.concat(extra || []).every(function (key) { return left[key] === right[key]; });
+  }
+  MedHermes.prototype._publicHealthState = function () {
+    if (!this._publicHealth) {
+      var options = this._opts.publicHealth || {};
+      this._publicHealth = { instanceId: options.sdkInstanceId || publicHealthUuid(), session: null, socket: null, ready: false,
+        timer: null, renewTimer: null, promise: null, lastEventId: '', reconnect: 0, requests: Object.create(null), writes: Object.create(null), seen: Object.create(null) };
+    }
+    return this._publicHealth;
+  };
+  MedHermes.prototype.initPublicHealth = function () {
+    var self = this;
+    if (this._destroyed) return Promise.reject(publicHealthError('SDK_DESTROYED', 'SDK 已销毁'));
+    var options = this._opts.publicHealth || {};
+    if (!options.pairingKey || typeof WebSocket === 'undefined') return Promise.reject(publicHealthError('BRIDGE_NOT_CONFIGURED', '请配置公卫配对凭据并使用支持 WebSocket 的浏览器'));
+    var ph;
+    try { ph = this._publicHealthState(); } catch (err) { return Promise.reject(err); }
+    if (!publicHealthId(ph.instanceId)) return Promise.reject(publicHealthError('INVALID_REQUEST', 'sdkInstanceId 必须为 UUID'));
+    if (ph.ready && ph.session && Date.parse(ph.session.expiresAt) > Date.now()) return Promise.resolve(ph.session);
+    if (ph.promise) return ph.promise;
+    var request = { schemaVersion: 'public-health.v1', sdkInstanceId: ph.instanceId };
+    var headers = { 'X-PCIE-Pairing-Key': options.pairingKey };
+    if (ph.session) { request.resumeSessionId = ph.session.bridgeSessionId; headers['X-PCIE-Bridge-Token'] = ph.session.publicHealthBridgeToken; }
+    function acceptSession(result) {
+      if (self._destroyed) throw publicHealthError('SDK_DESTROYED', 'SDK 已销毁');
+      if (!result || result.schemaVersion !== 'public-health.v1' || !publicHealthId(result.bridgeSessionId)
+          || typeof result.publicHealthBridgeToken !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))) throw publicHealthError('INVALID_RESPONSE', '公卫握手响应无效');
+      if (ph.session && ph.session.bridgeSessionId !== result.bridgeSessionId) throw publicHealthError('BRIDGE_OWNER_MISMATCH', '续期不能改变任务所属会话');
+      ph.session = result;
+      return result;
+    }
+    ph.promise = this._http.post('/public-health/handshake', request, headers).then(acceptSession).then(function (result) {
+      // A retry with the previous token may recover an already-expired current token.
+      // Obtain a fresh token once, without starting any business operation.
+      if (Date.parse(result.expiresAt) <= Date.now()) return self._http.post('/public-health/handshake',
+        { schemaVersion:'public-health.v1', sdkInstanceId:ph.instanceId, resumeSessionId:result.bridgeSessionId },
+        { 'X-PCIE-Pairing-Key':options.pairingKey, 'X-PCIE-Bridge-Token':result.publicHealthBridgeToken }).then(acceptSession);
+      return result;
+    }).then(function (result) {
+      if (Date.parse(result.expiresAt) <= Date.now()) throw publicHealthError('BRIDGE_SESSION_EXPIRED', '公卫会话未获得有效续期');
+      return self._subscribePublicHealth();
+    }).then(function (result) { ph.promise = null; return result; }, function (err) { ph.promise = null; throw err; });
+    return ph.promise;
+  };
+  MedHermes.prototype._subscribePublicHealth = function () {
+    var self = this, ph = this._publicHealth;
+    return new Promise(function (resolve, reject) {
+      var acknowledged = false, retry = true;
+      var ws = new WebSocket(buildEventWebSocketUrl(self._opts.baseUrl, '') + '?channel=public-health');
+      ph.socket = ws;
+      var timeout = setTimeout(function () { reject(publicHealthError('BRIDGE_AUTH_FAILED', '公卫订阅未完成认证')); try { ws.close(); } catch (_) {} }, 10000);
+      ws.onopen = function () {
+        if (self._destroyed || !ph.session) { try { ws.close(); } catch (_) {} return; }
+        ws.send(JSON.stringify({ type:'public-health-subscribe', schemaVersion:'public-health.v1', bridgeSessionId:ph.session.bridgeSessionId,
+          publicHealthBridgeToken:ph.session.publicHealthBridgeToken, after:ph.lastEventId || undefined }));
+      };
+      ws.onmessage = function (message) {
+        if (self._destroyed || !ph.session || !message || typeof message.data !== 'string' || message.data === 'pong') return;
+        var data; try { data = JSON.parse(message.data); } catch (_) { return; }
+        if (data.type === 'public-health-error') {
+          var err = publicHealthError(data.errorCode || 'BRIDGE_AUTH_FAILED', data.message || '公卫事件通道不可用');
+          retry = ['BRIDGE_AUTH_FAILED','BRIDGE_OWNER_MISMATCH','ORIGIN_NOT_ALLOWED','BRIDGE_NOT_CONFIGURED','EVENT_CURSOR_INVALID'].indexOf(err.code) < 0;
+          self._emitter.emit('public-health-error', err);
+          if (!acknowledged) reject(err);
+          return;
+        }
+        if (data.type === 'public-health-subscribed' && data.schemaVersion === 'public-health.v1' && data.bridgeSessionId === ph.session.bridgeSessionId) {
+          if (acknowledged) return;
+          acknowledged = true; clearTimeout(timeout); ph.ready = true; ph.reconnect = 0;
+          // Proactively renew at expiry even when the host does not observe a close event.
+          clearTimeout(ph.renewTimer);
+          ph.renewTimer = setTimeout(function () { ph.ready = false; try { ws.close(); } catch (_) {} }, Math.max(1, Date.parse(ph.session.expiresAt) - Date.now()));
+          self._emitter.emit('public-health-connected', { bridgeSessionId:ph.session.bridgeSessionId, expiresAt:ph.session.expiresAt });
+          resolve(ph.session); return;
+        }
+        if (!acknowledged || data.state !== 'ready' || !data.event) return;
+        self._dispatchPublicHealth(data.event);
+      };
+      ws.onerror = function () { if (!acknowledged) reject(publicHealthError('BRIDGE_CONNECTION_FAILED', '公卫事件通道连接失败')); };
+      ws.onclose = function () {
+        clearTimeout(timeout);
+        if (ph.socket !== ws) return;
+        clearTimeout(ph.renewTimer);
+        ph.socket = null; ph.ready = false;
+        if (!acknowledged) reject(publicHealthError('BRIDGE_CONNECTION_FAILED', '公卫事件通道已关闭'));
+        if (!self._destroyed && retry) self._schedulePublicHealthReconnect();
+      };
+    });
+  };
+  MedHermes.prototype._schedulePublicHealthReconnect = function () {
+    var self = this, ph = this._publicHealth;
+    if (!ph || ph.timer || this._destroyed) return;
+    var delay = Math.min(30000, 1000 * Math.pow(2, Math.min(ph.reconnect++, 5)));
+    ph.timer = setTimeout(function () {
+      ph.timer = null;
+      self.initPublicHealth().catch(function (err) {
+        self._emitter.emit('public-health-error', err);
+        // Credential rejection cannot be repaired by acquiring another instance's session.
+        if (err.status === 401 || err.status === 403 || ['BRIDGE_AUTH_FAILED','BRIDGE_OWNER_MISMATCH','ORIGIN_NOT_ALLOWED','BRIDGE_NOT_CONFIGURED','EVENT_CURSOR_INVALID'].indexOf(err.code) >= 0) return;
+        self._schedulePublicHealthReconnect();
+      });
+    }, delay);
+  };
+  MedHermes.prototype._dispatchPublicHealth = function (event) {
+    var ph = this._publicHealth, payload = event.payload || {};
+    if (!ph || event.type !== 'public-health-result-confirmed' || event.bridgeSessionId !== ph.session.bridgeSessionId || !publicHealthId(event.id)) return;
+    var request = ph.requests[payload.originRequestId];
+    if (!request || !publicHealthMatches(request, payload) || !publicHealthId(payload.requestId) || !publicHealthId(payload.generationId) || !publicHealthId(payload.writebackRequestId)) return;
+    if (!Array.isArray(payload.items) || !payload.items.length) return;
+    var seenTargets = Object.create(null);
+    var valid = payload.items.every(function (item) {
+      var target = request.writebackTargets.filter(function (t) { return t.targetFieldId === item.targetFieldId; })[0];
+      if (!target || seenTargets[item.targetFieldId] || JSON.stringify(target.sourceSections) !== JSON.stringify(item.sourceSections) || typeof item.value !== 'string' || !item.value.trim()) return false;
+      seenTargets[item.targetFieldId] = true; return true;
+    });
+    if (!valid) return;
+    if (ph.seen[event.id]) { ph.lastEventId = event.id; return; }
+    var previous = ph.writes[payload.writebackRequestId];
+    if (previous && JSON.stringify(previous) !== JSON.stringify(payload)) { this._emitter.emit('public-health-error', publicHealthError('WRITEBACK_ID_CONFLICT', '重复保存标识对应不同内容')); return; }
+    ph.seen[event.id] = true; ph.lastEventId = event.id; ph.writes[payload.writebackRequestId] = JSON.parse(JSON.stringify(payload));
+    this._emitter.emit('public-health-result-confirmed', payload);
+  };
+  MedHermes.prototype.assistPublicHealth = function (request) {
+    var self = this;
+    if (!isPlainObject(request) || !publicHealthId(request.requestId) || request.originRequestId !== request.requestId || !Array.isArray(request.writebackTargets)) return Promise.reject(publicHealthError('INVALID_REQUEST', '公卫首次调入需要匹配的 requestId/originRequestId 和字段映射'));
+    var snapshot = JSON.parse(JSON.stringify(request));
+    return this.initPublicHealth().then(function () {
+      var ph = self._publicHealth, old = ph.requests[snapshot.originRequestId];
+      if (old && JSON.stringify(old) !== JSON.stringify(snapshot)) throw publicHealthError('REQUEST_ID_CONFLICT', '同一调入标识对应不同资料');
+      if (!old && Object.keys(ph.requests).length >= 128) throw publicHealthError('CAPACITY_EXCEEDED', '当前SDK实例公卫任务容量已满');
+      ph.requests[snapshot.originRequestId] = snapshot;
+      return self._http.post('/public-health/assist', snapshot, { 'X-PCIE-Bridge-Token':ph.session.publicHealthBridgeToken });
+    });
+  };
+  MedHermes.prototype.sendPublicHealthFeedback = function (feedback) {
+    var self = this, ph = this._publicHealth;
+    var intent = ph && feedback && ph.writes[feedback.writebackRequestId];
+    if (!intent || !publicHealthMatches(intent, feedback, ['requestId','generationId','writebackRequestId','snapshotAt']) || ['success','failed'].indexOf(feedback.status) < 0) return Promise.reject(publicHealthError('TASK_CONTEXT_MISMATCH', '回执未匹配本实例已收到的保存意图'));
+    if (feedback.status === 'success' ? !feedback.savedRecordVersion || feedback.errorCode : !feedback.errorCode || !feedback.message || feedback.savedRecordVersion) return Promise.reject(publicHealthError('INVALID_REQUEST', '保存回执缺少终态信息'));
+    var snapshot = JSON.parse(JSON.stringify(feedback));
+    return this.initPublicHealth().then(function () { return self._http.post('/public-health/writeback-feedback', snapshot, { 'X-PCIE-Bridge-Token':ph.session.publicHealthBridgeToken }); });
+  };
+  MedHermes.prototype._destroyPublicHealth = function () {
+    var ph = this._publicHealth;
+    if (ph) { clearTimeout(ph.timer); clearTimeout(ph.renewTimer); if (ph.socket) { try { ph.socket.close(); } catch (_) {} } ph.session = null; ph.requests = {}; ph.writes = {}; this._publicHealth = null; }
+    if (this._opts.publicHealth) this._opts.publicHealth = {};
   };
 
   // ─── 内部方法 ───

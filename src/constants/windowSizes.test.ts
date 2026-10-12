@@ -72,3 +72,13 @@ describe('outpatient EMR workspace', () => {
     expect(supportsPersistentWindowSize('outpatient-emr')).toBe(true);
   });
 });
+
+describe('public health workspace', () => {
+  it('participates in bounded persistent workspace geometry', () => {
+    expect(getWindowSizeForView('public-health')).toEqual({ width: 1120, height: 760 });
+    expect(getWindowSizeConstraints('public-health')).toEqual({ minWidth: 900, minHeight: 620 });
+    expect(isLargePanelView('public-health')).toBe(true);
+    expect(isLargeWorkspaceView('public-health')).toBe(true);
+    expect(supportsPersistentWindowSize('public-health')).toBe(true);
+  });
+});

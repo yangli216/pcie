@@ -155,7 +155,7 @@ fn handshake_console_message(ctx: &BrowserContext) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn record_bridge_log(
+pub(crate) fn record_bridge_log(
     app_handle: &web::Data<tauri::AppHandle>,
     trace_id: &str,
     operation: &str,
@@ -2068,6 +2068,9 @@ async fn consultation_events_ws(
     stream: web::Payload,
     state: web::Data<SharedAppState>,
 ) -> Result<HttpResponse, actix_web::Error> {
+    if url::form_urlencoded::parse(req.query_string().as_bytes()).any(|(key, value)| key == "channel" && value == "public-health") {
+        return crate::public_health_http::events_ws(req, stream, state).await;
+    }
     if let Err(response) = ensure_http_service_access(&state) {
         return Ok(response);
     }
@@ -2835,6 +2838,7 @@ pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
                     .app_data(app_handle.clone())
                     .app_data(state.clone())
                     .configure(configure_debug_routes)
+                    .configure(crate::public_health_http::configure)
                     .route("/api/health", web::get().to(health_check))
                     .route("/api/handshake", web::post().to(handshake))
                     .route("/api/consultation/receive", web::post().to(receive_patient))

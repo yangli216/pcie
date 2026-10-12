@@ -65,12 +65,13 @@ function resolveRegionalRequestTimeout(path: string): number {
   return REGIONAL_DEFAULT_TIMEOUT_MS;
 }
 
-export async function regionalFetch<T>(
+export async function regionalRequestResponse(
   path: string,
   options: RequestInit = {},
+  responseOptions: { timeoutMs?: number } = {},
   allowAuthRetry = true,
   allowClockRetry = true
-): Promise<T> {
+): Promise<{ response: Response; requestId: string }> {
   const baseUrl = getRegionalBaseUrl();
   if (!baseUrl) throw new Error('区域化服务地址未配置');
 
@@ -108,7 +109,7 @@ export async function regionalFetch<T>(
 
   let res: Response;
   try {
-    const timeoutMs = resolveRegionalRequestTimeout(path);
+    const timeoutMs = responseOptions.timeoutMs ?? resolveRegionalRequestTimeout(path);
     res = await fetchWithTimeout(
       `${baseUrl}${path}`,
       {
@@ -139,7 +140,7 @@ export async function regionalFetch<T>(
       && path !== '/v1/client/register'
       && updateSignatureClockOffset(errorInfo.timestamp)
     ) {
-      return regionalFetch<T>(path, options, allowAuthRetry, false);
+      return regionalRequestResponse(path, options, responseOptions, allowAuthRetry, false);
     }
     if (
       res.status === 401
@@ -150,13 +151,13 @@ export async function regionalFetch<T>(
     ) {
       setRegionalInitialized(false);
       await refreshRegisteredDevice(token);
-      return regionalFetch<T>(path, options, false, allowClockRetry);
+      return regionalRequestResponse(path, options, responseOptions, false, allowClockRetry);
     }
     if (res.status === 401 && allowAuthRetry && path !== '/v1/client/register') {
       clearDeviceRegistration();
       setRegionalInitialized(false);
       await ensureRegisteredDevice();
-      return regionalFetch<T>(path, options, false, allowClockRetry);
+      return regionalRequestResponse(path, options, responseOptions, false, allowClockRetry);
     }
     if (res.status === 426 || isUpdateRequiredCode(errorInfo.code)) {
       notifyForceUpdateRequired({
@@ -168,6 +169,11 @@ export async function regionalFetch<T>(
     throw createRegionalRequestError(errorInfo, `区域化服务请求失败（${res.status}）`, res.status, requestId);
   }
 
+  return { response: res, requestId };
+}
+
+export async function regionalFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const { response: res, requestId } = await regionalRequestResponse(path, options);
   let body: ApiResponse<T>;
   try {
     body = await res.json();
@@ -183,8 +189,8 @@ export async function regionalFetch<T>(
   if (body.code !== '0') {
     if (isUpdateRequiredCode(body.code)) {
       notifyForceUpdateRequired({
-        channel: updateChannel,
-        currentVersion: clientVersion,
+        channel: getActiveUpdateChannel(),
+        currentVersion: await getCurrentClientVersion(),
         message: body.message,
       });
     }

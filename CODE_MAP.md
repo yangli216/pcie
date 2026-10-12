@@ -30,6 +30,15 @@
 
 同日跨报告验收：[report-cross-consistency-uat.md](docs/report-cross-consistency-uat.md)。同日跨报告校验：`features/report-interpretation/lib/reportConsistency.ts`（同日证据 Builder、提示词和输出校验）、`api/reportConsistencyHistory.ts`（外部报告关联）、`ui/ReportConsistencyPanel.vue`（冲突与核查展示）；工作台 controller 管理患者锚点及证据缓存。
 
+## 公卫助手（2026-09-29 实现中）
+
+- `features/public-health`：公开页面/控制器/类型入口；`ui` 仅展示核对、结果与回写状态，`model` 管理独立任务，`lib` 管理身份、来源引用和允许目标纯规则，`api` 封装签名 SSE 与本地 Bridge。
+- `features/public-health/model/usePublicHealthMealSelection.ts` 与 `ui/PublicHealthMealOptions.vue`：当前生成内食谱单选/独立编辑，以及默认推荐、折叠两备选的展示；仅当前采用正文进入既有确认 Builder。
+- `features/public-health/lib/publicHealthHealthProfile.ts`、`publicHealthHealthEducation.ts` 与 `ui/PublicHealthHealthProfile.vue`：仅随访功能使用的事实画像、来源和已知风险展示，以及内部六分区教育/风险引用、检查适配和用药类别校验；减重仍保持独立两节。
+- `app/events/usePublicHealthBridgeController.ts`：专用调入/回执订阅、启动恢复与导航；不修改门诊 currentPatient。
+- `services/regional/httpClient.ts`：regional 签名 Response 出口；公卫 SSE 消费命名事件，旧聊天 SSE 保持原解析。
+- `constants/windowSizes.ts` 与 `app/navigation/useNavigation.ts`：公卫工作台 1120×760、统一窗口 transition。
+
 ## 快速导航
 
 Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-tauri/Cargo.win7.lock`、slim errors 与 `scripts/win7/windows-link` 补丁；`scripts/validate-win7-installer.ps1` 解包实际 MSI，`scripts/validate-win7-imports.mjs` 校验安装 EXE/DLL 的普通/延迟导入及主程序来源 SHA-256。普通构建不使用此锁与补丁。

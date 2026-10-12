@@ -7,8 +7,11 @@
 匹配标签 `matchType` 保持字符串，由服务端将 WeKnora 的整数枚举归一化；桌面不解析供应商数字枚举，不根据匹配标签改变资料批准或原文校验。
 
 
+> **公卫功能接入（2026-10-10，代码已落地，正式部署与真实 PHIS 验收待完成）**：高血压随访、糖尿病随访和老年人体检通过 `POST /api/public-health/assist` 调入独立健康处方或减重任务；使用独立公卫结果事件与 `POST /api/public-health/writeback-feedback`，不复用门诊 `consultationId / last_result`。已完成本机 Tauri 合成闭环，以及独立随访三章和减重两章的专用入口真实 AI 工程验证；随访仅回填三个字段，减重仅回填运动与食谱，确认范围保持独立。正式公卫 API、批准资产、真实 PHIS 与医学审核仍单独验收。功能入口、完整请求、SDK 示例与回执处理见文末“公卫健康助手本地 Bridge”第8节，远端生成说明见 [服务端 API](../pcie-server/API.md)。
 
-> 最后更新: 2026-09-10
+> **公卫工程验证（2026-10-12）**：独立功能/场景、编辑确认、食谱选择、失败恢复和源版本冲突已完成本机工程验证。生产相关定向回归为客户端204、隔离服务端139、Rust18项，共361项通过；类型与构建检查通过。正式公卫真实上游/数据库、机构医学批准及真实PHIS另验；本机调试代码和过程资料不纳入功能分支。
+
+> 最后更新: 2026-10-12
 >
 > 本文档面向准备接入全医慧助（PCIE）的 HIS / 医生站 / PHIS 项目。
 > 当前真实运行契约以 `src-tauri/src/http_server.rs` 与当前前端实现为准；旧区域化草案已归档，不能替代本文档。
@@ -16,13 +19,14 @@
 
 ## 1. 文档目标
 
-本文档回答 5 件事：
+本文档回答 6 件事：
 
 1. HIS 应该按什么顺序接入全医慧助（PCIE）
 2. 当前本地 HTTP Bridge 暴露了哪些接口
 3. 各接口的请求字段、响应字段、异常场景是什么
 4. 推荐诊断 / 用药 / 检查 / 独立诊疗方案的最终回写、历史/单项引用与 PHIS 回执闭环应该怎么做
 5. 门急诊病历模板如何以“HTML 渲染实例 + JSON 结构定义”成对接入、生成参数并完成回填回执
+6. 公卫健康处方与减重助手如何从原业务页面唤起、选择食谱并确认保存
 
 门急诊病历模板解析的 HIS 唯一外部入口是 [6.3C `POST /api/outpatient/emr/analyze`](#63c-post-apioutpatientemranalyze)。HIS 不直接调用 PCIE Server 的 `/v1/client/outpatient-emr/*`；历史快照查询、模板登记、设备签名和 LLM 调用均由桌面端内部完成。
 
@@ -2552,3 +2556,220 @@ HIS 接入完成后，至少验证以下场景：
 患者上下文和 `record-confirmed` 支持独立可选字符串 `maritalReproductiveHistory`（婚育史），与 `menstrualHistory`（月经史）并列。`writebackScope.recordFields` 增加 `maritalReproductiveHistory`；只有患者为女性、明确周岁年龄满足 `14 <= ageYears < 60`、字段有内容且被选中时，才携带对应顶层字段、outpatientRecord 字段与 emrFieldValues。月龄、日龄、年龄不明、未满 14 岁、已满 60 岁、非女性、空白或未选择时均省略，不能清空 HIS 原字段。
 
 `emrFieldValues["月经史文本"]` 只承载月经史，`emrFieldValues["婚育史文本"]` 承载婚育史。选中婚育史时，可按明确无冲突事实同时传“婚育状况”：未婚未育=1、已婚未育=2、已婚已育=3、未婚已育=4、离异=5；“怀孕标志”：本次明确未孕=0、本次明确已孕=1。缺失、存疑、冲突或仅有历史孕产事实时省略对应字典，不以年龄、婚育或月经状态推断。PHIS 应用原有 dictionary VALUE/TEXT 转换，不把月经史回填到婚育史，仍沿用单条 record-confirmed + batch / 单次回执。动态模板模式以实际 targetFieldIds 为准，独立保留婚育史章节映射。
+
+## 8. 公卫健康助手本地 Bridge（开发契约，2026-09-29）
+
+正式健康处方与减重的医学生成由签名 `pcie-server /v1/public-health/generations` 执行。已完成本机 Tauri 合成生成/保存闭环，以及专用 Mock 入口独立随访三章和减重两章的真实 AI 工程验证；正式部署、真实 PHIS、生产知识资产与医学审核仍单独验收。公卫独立于门诊 `current_consultation / last_result / event_queue`，不伪造 `consultationId`，不提供结果轮询。
+
+### 8.1 部署配置、集成实例认证与续期
+
+Rust 进程启动时读取以下环境变量，只存在进程内存，不从浏览器请求覆盖：
+
+| 变量 | 默认 | 含义 |
+| --- | --- | --- |
+| `PCIE_PUBLIC_HEALTH_ALLOWED_ORIGINS` | 空（拒绝接入） | 逗号分隔的完整 HTTP(S) Origin，例如 `https://phis.example.invalid`；不能包含路径、查询、userinfo、通配符或 `null` |
+| `PCIE_PUBLIC_HEALTH_PAIRING_SECRET` | 空（拒绝接入） | 标准 Base64 编码、解码后至少32随机字节的部署配对凭证，由部署方安全交付可信 PHIS 接入配置；不能写入 SDK 源码、URL、日志或示例 |
+
+配对凭证与 Origin 认证的是部署许可的 PHIS 集成实例，不是医生账号真实性；既有 `emrAccessToken` 非空检查不能替代身份验证。公卫握手不读写门诊全局 `browser_context`，也不信任请求体机构名称作为授权。远端机构与设备权限仍由服务端签名设备身份决定。
+
+`POST /api/public-health/handshake`，浏览器自动提供 `Origin`，同时提供 `X-PCIE-Pairing-Key`。请求为：
+
+```json
+{"schemaVersion":"public-health.v1","sdkInstanceId":"40000000-0000-4000-8000-000000000001"}
+```
+
+成功 HTTP 200：
+
+```json
+{"status":"ready","schemaVersion":"public-health.v1","bridgeSessionId":"30000000-0000-4000-8000-000000000001","publicHealthBridgeToken":"<仅运行时返回的随机令牌>","expiresAt":"2026-09-29T10:30:00.000Z","renewUntil":"2026-09-29T11:00:00.000Z"}
+```
+
+令牌有效30分钟；续期宽限30分钟。续期请求在相同 body 中增加 `resumeSessionId`，同时发送旧 `X-PCIE-Bridge-Token`、配对凭证和相同 Origin/sdkInstanceId。续期保留 `bridgeSessionId` 以及该实例的任务、请求、回执去重空间，只轮换令牌。过期或轮换后旧 WS 关闭；旧令牌只能在规定宽限内用于续期，不能调用业务接口。超过宽限或丢失凭据不能根据公开 sessionId/sdkInstanceId 夺回旧任务；重新建实例不会继承旧任务。为避免续期响应丢包孤立任务，内存有界保留当前token与上一token的hash/原renewUntil。同Origin/sdkInstanceId、配对凭据和上一token在原renewUntil内重试续期时，幂等返回当前token及原响应到期时间，不再次轮换。上一token不能调用业务接口或订阅WS；若返回的当前token也已过期，SDK须用该当前token再次续期后才能订阅。全部数据仅内存保存，桌面重启后旧会话不可恢复。超过renewUntil后，在下一次握手、业务访问或桌面恢复读取时清理该会话的私有资料、队列、任务和request/writeback索引，并清空其active指针；宽限内不清理。旧页面再次生成/确认只返回会话失效，不移交给新会话。新会话不能prepare/confirm旧任务；PHIS必须重新创建originRequestId。若PHIS违规重复使用已完全清理的UUID调用assist，只会创建全新空状态，不继承任何旧结果、回执或所有权。
+
+共同错误形态为 `{ "errorCode":"BRIDGE_SESSION_EXPIRED", "message":"公卫会话已过期，请重新认证" }`。400为结构非法；401为配对/令牌/过期失败；403为 Origin、实例或任务所有权不匹配；409为业务ID或冻结内容冲突；429为内存容量已满；503为部署配置未就绪。错误不回显令牌、配对凭据或资料内容。
+
+### 8.2 调入、目标字段与保存回执
+
+生成 `Section` 可仅在 `meal_plan` 中返回可选 `options`：固定三项 `{id,title,content}`，首项为默认推荐且章节 `content` 必须逐字等于首项正文；ID 非空且不重复，ID/标题各最多128/100码点，每份正文非空且最多16000码点。其他章节禁止携带方案，省略时按单份正文展示。此字段属于生成结果/SSE；本地确认 `items[].value` 只携带医生当前选中并编辑的一份食谱，不发送备选列表/选择 ID。等待回执仍按冻结正文重传，不能切换后复用旧保存 ID。
+
+`POST /api/public-health/assist` 和 `POST /api/public-health/writeback-feedback` 必须逐请求校验 Origin 与 `X-PCIE-Bridge-Token`。本地校验事实条目、来源、日期、Unicode码点长度与未知字段；PCIE_MANUAL来源必须携带UUID。允许减重profile整体缺失或测量引用尚未补充的调入；远端生成完整性门槛不前移到本地调入。请求体/回执使用 [公卫 OpenAPI](../pcie-server/deploy/public-health/contracts/public-health.openapi.json) 的 `PublicHealthRequest` / `WritebackFeedback`；最大512 KiB。
+
+首次调入必须 `originRequestId=requestId`。HTTP202返回完整业务身份、`schemaVersion/requestId/originRequestId/bridgeSessionId/status:"accepted"/acceptedAt`。桌面补充资料或再次生成的新 requestId 必须继承原实例的 origin、居民、场景、业务记录、能力、recordVersion 与启动目标映射；只有事实快照及 snapshotAt 可以更新；请求摘要递归排序对象键，并将JavaScript安全整数范围内的等值JSON数值（如170与170.0）规范为同一数字，数组顺序保持不变，不能把数字改成字符串；递归拒绝非有限或绝对值超过9007199254740991的数字；业务标识长度按Unicode码点计数；非枚举的不透明文本只拒绝全空白并保留原值，不能静默trim。patient.sex仅允许unknown补成male/female一次，并要求sexSource={system:"PCIE_MANUAL",recordId:UUID}，姓名/年龄和已明确性别更正须新origin。需要更换 PHIS 原记录版本或映射时重新 assist 并创建新 origin。
+
+回写意图中的目标必须是启动白名单的非空子集；每项 `sourceSections` 必须完整等于对应冻结目标，不能只写合并字段的一部分。空白值不清空，未返回字段保持原值，整批原子保存。请求/回执所有ID与业务身份精确匹配。保存幂等以writebackRequestId为准，传输去重以event.id为准。未获终态时，显式重传同ID同内容confirm会入队并投递一条新的event.id，writebackRequestId、confirmedAt及整个payload均保持不变；返回本次投递eventId及duplicate=true，不创建第二份保存意图。重传同样受每会话128条事件上限约束，超限拒绝且不改旧意图。SDK须将不同event.id的同一保存意图再次交给PHIS，由PHIS按writebackRequestId幂等保存或重发真实回执。failed/success 均为终态，矛盾终态拒绝。已获终态后迟到的同ID同内容confirm返回最近投递eventId和duplicate=true，并仅向当前主窗口重放原回执，不再次发送PHIS保存WS；不会覆盖后来保存尝试的状态。明确失败后重试保存必须新 writebackRequestId，保存成功后不能为该任务创建新保存意图。
+
+反馈 HTTP200为 `status:"accepted"`，携带原业务身份、`requestId/originRequestId/generationId/writebackRequestId/feedbackStatus/receivedAt`，只表示 Bridge 收到了经校验的回执。
+
+### 8.3 同路径 WebSocket 的公卫独立通道
+
+地址为 `ws://127.0.0.1:8081/api/consultation/events/ws?channel=public-health`。查询只选择通道，不能携带令牌。此连接不订阅或重放任何门诊数据；未认证10秒关闭。首个业务帧：
+
+```json
+{"type":"public-health-subscribe","schemaVersion":"public-health.v1","bridgeSessionId":"30000000-0000-4000-8000-000000000001","publicHealthBridgeToken":"<当前令牌>","after":"<可选，最后已消费event.id>"}
+```
+
+认证成功先发 `{ "type":"public-health-subscribed", "schemaVersion":"public-health.v1", "bridgeSessionId":"…", "expiresAt":"…" }`，再投递/补发该会话的事件。失败发 `{ "type":"public-health-error", "errorCode":"…", "message":"…" }` 并关闭，不暴露其他会话事件。`after` 必须属于该会话已保留事件；未知游标报 `EVENT_CURSOR_INVALID`，不退回全量其他数据。只允许一个成功订阅控制帧；ping/pong用于保活。业务消息使用 `state/traceId/event` 包装，event含 `id/type:"public-health-result-confirmed"/bridgeSessionId/timestamp/payload`；payload是医生确认的冻结内容，不是生成成功通知。
+
+公卫 registry 的通知与队列按会话分隔，不使用咨询广播或最新结果槽。容量：最多32会话、128任务、每任务16个生成快照、32次保存意图、每会话128条事件。超限显式429，不能驱逐未完成任务或静默丢写回。当前实现不承诺跨进程恢复；仅清理已超过renewUntil的会话及所属数据，未到期会话的容量超限仍显式拒绝。
+
+### 8.4 Tauri 内部接线
+
+以下命令仅允许主窗口 `main` 调用。不得把这些命令暴露给 PHIS 网页，也不将桥接凭据发给 Vue。
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `get_active_public_health_task` | 无 | `PublicHealthTaskSnapshot` 或null |
+| `prepare_public_health_generation` | `{bridgeSessionId,request}` | `{originRequestId,requestId,requestHash,preparedAt}` |
+| `confirm_public_health_result` | `{bridgeSessionId,payload}` | `{status:"accepted",originRequestId,requestId,generationId,writebackRequestId,eventId,duplicate}` |
+| `close_public_health_task` | `{originRequestId}` | `{status:"closed",originRequestId}` |
+
+`PublicHealthTaskSnapshot={bridgeSessionId,originRequestId,request,phase,pendingWriteback,lastFeedback}`。phase取 `ready/prepared/awaiting-writeback/saved/failed/closed`；request为最新已登记快照，后两项为null或冻结payload/feedback。prepare必须在远端请求前登记，不允许confirm时注入未登记request。prepare只登记输入，不证明生成已完成；Vue须仅在权威completed校验通过后开放医生确认。
+
+补充资料后的桌面展示以新 request 为准：减重身高/体重采用 weightProfile 的显式 observation 引用并核对 code、单位和数值，历史同类测量仍保留在 facts 中；运动/饮食采用 profile 当前值。展示投影不修改请求字段或 PHIS recordVersion，不以历史排序代替引用；重新生成将完整新快照交给 prepare 和远端生成。
+
+主窗口定向事件：`start-public-health-assist={bridgeSessionId,request}`；`public-health-writeback-feedback={bridgeSessionId,feedback}`。重复受理可重新打开已有任务；关闭/切换时拒绝迟到确认。close只是本地放弃，保留已发意图以接收真实迟到回执，但不改变当前其他任务，也不停止服务端模型执行。
+
+### 8.5 SDK 调用
+
+`new MedHermes({publicHealth:{pairingKey, sdkInstanceId?}})`，pairingKey由部署方在可信 PHIS 配置提供；sdkInstanceId未传时使用浏览器安全随机UUID，保存在SDK实例内存。不需要为公卫调用门诊 `init()`：
+
+1. `await sdk.initPublicHealth()`完成独立握手/订阅。
+2. `sdk.on('public-health-result-confirmed', handler)`在assist之前注册。handler按originRequestId匹配业务记录，保存前检查recordVersion，按writebackRequestId去重。
+3. `await sdk.assistPublicHealth(request)`返回accepted；传入请求须含originRequestId（首次等于requestId）。
+4. PHIS真实保存后 `await sdk.sendPublicHealthFeedback(feedback)`；失败也必须明确回执。
+5. `sdk.destroy()`关闭两类连接并清除内存令牌，不写localStorage/sessionStorage。
+
+SDK公卫连接丢失只重建认证订阅并after补发；认证/所有权/Origin/未知游标拒绝停止自动重连，须接入方处理失效原因。不自动重发assist或执行PHIS保存。回写事件重传必须由PHIS幂等处理；SDK不能将“接收到事件”视为“已保存”。
+
+### 8.6 新增功能的 PHIS 接入示例（2026-10-10）
+
+在公卫居民随访/体检页面增加“随访健康处方”和“智能减重助手”入口；按钮提交当前业务快照，助手由本机 Bridge 唤起。两项能力均服务于医生审阅、编辑健康教育处方的场景。
+
+| 入口 | `capability` | `writebackTargets[].sourceSections` 必须恰好覆盖 |
+| --- | --- | --- |
+| 随访健康处方 | `health_prescription` | `check_plan / medication_guidance / lifestyle_guidance` |
+| 智能减重助手 | `weight_management` | `exercise_plan / meal_plan` |
+
+`scene` 取 `hypertension_followup / diabetes_followup / elderly_exam`。PHIS 提供本次患者、业务记录和 `recordVersion`，每次明确新调入生成 UUID `originRequestId=requestId`。相同调入的传输重试保留整个请求对象；不同能力、更换记录版本或目标映射必须创建新 origin。完整合成请求和减重测量引用规则见 [服务端 API 的“调入与生成参数”](../pcie-server/API.md)，本地与远端共用该结构。
+
+#### 8.6.1 随访健康处方（需求 3.4.1）
+
+实现边界已按用户确认调整：发起方直接传入多源资料，PCIE 不主动取数。页面新增只读“居民健康画像”，显示当前疾病、用药、生活方式、已有风险分层与资料来源；晚于快照的观察和同时间冲突不作为选定当前值。已有风险分层放在普通观察中，编码约定为 `risk_level / hypertension_risk_level / diabetes_risk_level / cardiovascular_risk_level`。三个生成章节继续医生编辑与选择，AI 定性潜在风险及干预建议随生活方式正文回传，不增加风险概率或画像字段。
+
+“随访健康处方”是独立的 `health_prescription` 入口。PHIS 适配器按当前居民汇集随访记录、历史就诊、体检报告、慢病档案，归一为 `facts.observations / conditions / medicationClasses / lifestyle / historySummary`，并附当前 `businessRecordId / recordVersion`；医生在助手内核对资料、生成、编辑和勾选回写范围。随访健康教育中的疾病预防、饮食及运动内容归入 `lifestyle_guidance`，用药归入 `medication_guidance`，不要求减重 `weightProfile`。
+
+推荐使用以下三个独立目标，便于医生按章选择；示例字段名须替换为 PHIS 实际字段。
+
+| `targetFieldId` 示例 | `sourceSections` | PHIS 接收内容 |
+| --- | --- | --- |
+| `checkPlanEducation` | `["check_plan"]` | 检查检验计划正文 |
+| `medicationEducation` | `["medication_guidance"]` | 用药健康教育正文 |
+| `lifestyleEducation` | `["lifestyle_guidance"]` | 疾病预防、饮食与运动健康教育正文 |
+
+五项需求的接入覆盖、资料来源映射、完整随访请求和确认 payload 见 [服务端 API：3.4.1 随访健康处方](../pcie-server/API.md#341-随访健康处方)。资料由发起方直接传入；助手派生只读健康画像，并在生活方式章节生成带事实引用和干预建议的 AI 定性潜在风险。观察时间对照保留 ISO 小数精度，不把未来亚毫秒观察并入当前快照。不向 `public-health.v1` 追加 `riskLevel / riskPrediction / healthProfile` 等未知字段。检查适配由批准规则的年龄/性别/病种/已有风险约束控制，项目优先级不等于居民风险等级；现场编码映射、真实 PHIS、正式资产及医学审核仍另验。
+
+检查最早安排日由程序按批准间隔和全部同编码非未来实施日期派生为内部 `checkScheduleConstraints`，包含例行/异常复查的窗口可用状态和最早日期；近期本次测量、其他来源及冲突日期不能被模型当成未做过。最终输出仍校验原批准规则，内部日期清单不改变 PHIS 调入和回写字段。
+
+随访教育模型草稿不包含 BMI/BMR、减重目标/目标体重、三餐参考食谱/备选食谱或 kcal/千卡/卡路里，严格拒绝混入减重内容。血压/血糖原值和单位由程序证据行展示，模型正文不重复 mmHg/mmol/L 或编造量化阈值，不以单次测量判定正常/异常；医生仍可编辑和确认文本，关键词检查不等于医学验收。
+
+两项功能分别调入、生成、编辑及确认。随访不要求 `weightProfile`、不计算 BMI/BMR、不返回减重食谱；减重不返回检查/用药/随访风险章节，也不显示随访健康画像。共享传输与页面基础组件不改变各自的任务身份、结果范围或目标字段。
+
+#### 8.6.2 PHIS SDK 接线与保存
+
+下面展示 PHIS 侧接线：先加载 `http://127.0.0.1:8081/sdk/med-hermes-sdk.js`，示例放在 module 脚本或等价的异步初始化函数中。`trustedIntegrationConfig`、`phisAdapter`、错误展示函数和按钮对象由接入方提供，不是新增 SDK API；配置只在可信接入运行时读取，不能把配对凭据写入代码、URL或日志。`buildAssistRequest` 必须从当前记录构建并登记冻结快照、实际允许字段映射；`saveOnce` 的服务端要求见下表。
+
+```javascript
+const sdk = new MedHermes({
+  baseUrl: 'http://127.0.0.1:8081/api',
+  publicHealth: { pairingKey: trustedIntegrationConfig.publicHealthPairingKey }
+});
+
+async function handlePublicHealthConfirmation(payload) {
+  // 接入方事务保存；重复 ID 返回原终态，不能再次执行字段写入。
+  const terminal = await phisAdapter.saveOnce(payload);
+  await sdk.sendPublicHealthFeedback({
+    schemaVersion: payload.schemaVersion,
+    capability: payload.capability,
+    scene: payload.scene,
+    patientId: payload.patientId,
+    businessRecordId: payload.businessRecordId,
+    recordVersion: payload.recordVersion,
+    snapshotAt: payload.snapshotAt,
+    originRequestId: payload.originRequestId,
+    requestId: payload.requestId,
+    generationId: payload.generationId,
+    writebackRequestId: payload.writebackRequestId,
+    ...terminal,
+    feedbackAt: new Date().toISOString()
+  });
+}
+
+// 在任何 assist 调用前注册；SDK handler 收到的是 payload，不是 SSE 或 WS envelope。
+sdk.on('public-health-result-confirmed', payload => {
+  handlePublicHealthConfirmation(payload).catch(showIntegrationError);
+});
+sdk.on('public-health-error', showIntegrationError);
+await sdk.initPublicHealth();
+
+// 每次明确新调入构建一次；网络重试直接复用这个 request，不能重新生成 UUID。
+let lastAssistRequest = null;
+async function launchPublicHealth(capability) {
+  const request = await phisAdapter.buildAssistRequest(capability);
+  lastAssistRequest = request;
+  await sdk.assistPublicHealth(request);
+}
+async function retryCurrentAssist() {
+  if (!lastAssistRequest) throw new Error('尚无可重试的公卫调入');
+  await sdk.assistPublicHealth(lastAssistRequest);
+}
+healthPrescriptionButton.onclick = () => {
+  launchPublicHealth('health_prescription').catch(showIntegrationError);
+};
+weightManagementButton.onclick = () => {
+  launchPublicHealth('weight_management').catch(showIntegrationError);
+};
+```
+
+`saveOnce` 由 PHIS 后端实现，不能仅靠网页内存去重或直接更新当前页面上随意匹配的字段。SDK 校验与 PHIS 后端事务校验均需保留：
+
+| 要求 | 接入方行为 |
+| --- | --- |
+| 任务绑定 | 以已登记 `originRequestId` 查原记录，再匹配居民、场景、能力、业务记录和原 `recordVersion`；不能只按页面当前居民回填 |
+| 目标范围 | 只接受启动白名单中的 `targetFieldId` 及完全一致的 `sourceSections`；每项 `value` 为非空文本 |
+| 并发与原子性 | 保存前检查当前记录版本；整批 `items` 在同一事务内保存，未返回字段保留原值 |
+| 业务幂等 | 持久记录 `writebackRequestId` 的冻结内容与终态；相同 ID 同内容重放原终态，内容不同拒绝 |
+| 成功返回 | 只返回 `{status:'success',savedRecordVersion:'真实保存后版本'}`，不带 `errorCode` |
+| 明确失败返回 | 只返回 `{status:'failed',errorCode:'稳定错误码',message:'可读原因'}`，不带 `savedRecordVersion`；版本冲突用 `RECORD_VERSION_CONFLICT` |
+| 保存结果不明 | 先按保存 ID 核实终态；不把超时或网络请求已发出当作 success/failed |
+
+反馈字段必须复制本次确认 payload 的身份，特别是 `requestId / snapshotAt`：医生在桌面补充资料后，它们可能与首次调入不同，而 `originRequestId` 仍指向原调入。不要把含 `items / confirmedAt` 的整个 payload 展开进 feedback，严格契约会拒绝未知字段。
+
+回执传输失败时保留原真实保存终态，并用同一身份/保存 ID 重发回执；不得再建保存 ID 或重复写入。不同 `event.id` 可能携带相同 `writebackRequestId`，仍须交给业务幂等处理。明确 failed 后，医生重新确认会建立新保存 ID；版本冲突须从 PHIS 最新版本重新调入。保持 SDK 实例直到任务/回执处理完成，释放页面时调用 `sdk.destroy()`，不能在收到 assist 的 accepted 后立即销毁。
+
+### 8.7 食谱选择与确认内容
+
+完整生成结果通过校验后，页面默认采用 `meal_plan.options[0]`，另外两项位于折叠的“备选食谱（2）”中；展开后可以单选切换，切换前医生对各项的编辑保留在当前生成内。新任务/新生成清空选项状态，等待回执及保存终态不允许切换；未返回 `options` 时仍显示单份食谱。
+
+PHIS 收到的确认结果只包含当前勾选章节映射出的 `items`。选中食谱变更会改变 `items[].value`，不会新增 PHIS 字段，也不向 PHIS 发送食谱 `options`、选中 ID、BMI 或 BMR。下例为医生补充后只确认食谱字段的合成 payload；`requestId` 已变化，`originRequestId` 保持原调入 ID：
+
+```json
+{
+  "schemaVersion": "public-health.v1",
+  "originRequestId": "11111111-1111-4111-8111-111111111111",
+  "requestId": "22222222-2222-4222-8222-222222222222",
+  "generationId": "33333333-3333-4333-8333-333333333333",
+  "writebackRequestId": "44444444-4444-4444-8444-444444444444",
+  "capability": "weight_management",
+  "scene": "hypertension_followup",
+  "patientId": "synthetic-resident-001",
+  "businessRecordId": "synthetic-followup-001",
+  "recordVersion": "7",
+  "snapshotAt": "2026-10-10T09:05:00+08:00",
+  "items": [
+    { "targetFieldId": "mealEducation", "sourceSections": ["meal_plan"], "value": "三餐参考食谱\n医生当前采用并编辑的合成方案B正文" }
+  ],
+  "confirmedAt": "2026-10-10T09:10:00+08:00"
+}
+```
+
+同一保存 ID 的冻结正文重传须完全相同。单个合并目标不能在医生只选其中一章时写入半份内容；需要分别选择运动和食谱时，应在首次调入中配置两个独立目标。

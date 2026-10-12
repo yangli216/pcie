@@ -9,6 +9,8 @@ use tauri_plugin_updater::UpdaterExt;
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
 
 mod http_server;
+mod public_health;
+mod public_health_http;
 mod win7_window_region;
 
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,7 @@ const CONSULTATION_EVENT_QUEUE_LIMIT: usize = 100;
 mod commands;
 
 pub struct AppState {
+    pub public_health: Mutex<public_health::PublicHealthRegistry>,
     pub current_consultation: Mutex<Option<PatientInfo>>,
     pub last_result: Mutex<Option<ConsultationResult>>,
     pub event_queue: Mutex<VecDeque<ConsultationResult>>,
@@ -918,6 +921,7 @@ struct MousePosPayload {
 pub fn run() {
     let (result_tx, _) = tokio::sync::broadcast::channel(16);
     let state = Arc::new(AppState {
+        public_health: Mutex::new(public_health::PublicHealthRegistry::new(public_health::BridgeConfig::from_env())),
         current_consultation: Mutex::new(None),
         last_result: Mutex::new(None),
         event_queue: Mutex::new(VecDeque::new()),
@@ -942,6 +946,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            commands::public_health::get_active_public_health_task,
+            commands::public_health::prepare_public_health_generation,
+            commands::public_health::confirm_public_health_result,
+            commands::public_health::close_public_health_task,
             start_drag,
             get_window_position,
             set_window_position,

@@ -56,3 +56,7 @@ docs/*
 !docs/current-information-medication-uat.md
 !docs/physical-exam-guidance-uat.md
 documents/*
+
+# Public-health local debugging and process evidence are not feature delivery.
+/output/public-health-runtime/
+/output/playwright/public-health-*

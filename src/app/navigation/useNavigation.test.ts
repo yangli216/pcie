@@ -58,3 +58,11 @@ describe('useNavigation outpatient EMR entry', () => {
     expect(transitionToView).toHaveBeenCalledWith('outpatient-emr');
   });
 });
+
+describe('independent public health entry', () => {
+  it('uses the coordinated public health view rather than a consultation view', async () => {
+    const { navigation, transitionToView } = createNavigation('consultation');
+    await navigation.openPublicHealth();
+    expect(transitionToView).toHaveBeenCalledWith('public-health');
+  });
+});

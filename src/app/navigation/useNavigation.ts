@@ -191,6 +191,11 @@ export function useNavigation(options: NavigationOptions) {
     await openView('outpatient-emr');
   }
 
+  async function openPublicHealth(): Promise<void> {
+    trackViewChange(currentView.value, 'public-health');
+    await openView('public-health');
+  }
+
   async function openDifferentialDiagnosis(): Promise<void> {
     trackViewChange(currentView.value, 'differential-diagnosis', {
       patientId: currentPatient.value?.patientId,
@@ -237,6 +242,7 @@ export function useNavigation(options: NavigationOptions) {
     openPatientMemory,
     openInpatientEmr,
     openOutpatientEmr,
+    openPublicHealth,
     openDifferentialDiagnosis,
     openKnowledgeBase,
     startVoiceInteraction,
