@@ -105,9 +105,25 @@ function binaryPaths(dir) {
   });
 }
 
+export function expectedMsiExecutable(source) {
+  // Tauri patches this token before bundling, then restores the build EXE.
+  // Reproduce only that exact operation, not a general binary normalization.
+  const original = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK');
+  const msi = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_MSI');
+  const offset = source.indexOf(original);
+  if (offset < 0 || source.indexOf(original, offset + 1) >= 0 || source.includes(msi)) {
+    throw new Error('Expected exactly one unpatched Tauri bundle type token in the compiled EXE');
+  }
+  const expected = Buffer.from(source);
+  msi.copy(expected, offset);
+  return expected;
+}
+
 export function checkInstalledBinaries({ directory, executable, reportPath }) {
   const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
-  const sourceHash = sha256(fs.readFileSync(executable));
+  const source = fs.readFileSync(executable);
+  const sourceHash = sha256(source);
+  const expectedMsiHash = sha256(expectedMsiExecutable(source));
   const paths = binaryPaths(directory);
   if (!paths.length) throw new Error('MSI extraction contains no EXE/DLL');
   const files = paths.map((file) => {
@@ -115,11 +131,12 @@ export function checkInstalledBinaries({ directory, executable, reportPath }) {
     const pe = readPeImports(data);
     return { path: path.relative(directory, file), sha256: sha256(data), ...pe, issues: validatePeForWin7(pe) };
   });
-  const main = files.filter((file) => path.basename(file.path).toLowerCase() === 'pcie.exe');
+  const main = files.filter((file) => /\.exe$/i.test(file.path) && file.sha256 === expectedMsiHash);
   const issues = files.flatMap((file) => file.issues.map((issue) => `${file.path}: ${issue}`));
-  if (main.length !== 1 || main[0].sha256 !== sourceHash) issues.push('Installed pcie.exe does not uniquely match this build SHA-256');
+  if (main.length !== 1) issues.push('Installed main EXE does not uniquely match this build and the exact Tauri MSI token patch SHA-256');
   const report = {
-    passed: issues.length === 0, sourceExecutableSha256: sourceHash, files, issues,
+    passed: issues.length === 0, sourceExecutableSha256: sourceHash, expectedMsiExecutableSha256: expectedMsiHash,
+    installedMainExecutable: main[0]?.path, files, issues,
     scope: 'Known incompatible static/delay imports only; real Win7 SP1 x64 smoke test remains required',
     prerequisites: ['External WebView2 109', 'Universal CRT (applicable KB2999226 or superseding update)'],
   };
@@ -139,7 +156,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     if (!options.directory || !options.executable || !options.reportPath) throw new Error('All three paths are required');
     const report = checkInstalledBinaries(options);
-    console.log(`Win7 installed PE gate passed: ${report.files.length} files; pcie.exe SHA-256 ${report.sourceExecutableSha256}`);
+    console.log(`Win7 installed PE gate passed: ${report.files.length} files; ${report.installedMainExecutable} SHA-256 ${report.expectedMsiExecutableSha256}`);
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

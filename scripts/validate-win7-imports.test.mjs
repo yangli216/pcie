@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readPeImports, validatePeForWin7, checkInstalledBinaries } from './validate-win7-imports.mjs';
+import { readPeImports, validatePeForWin7, checkInstalledBinaries, expectedMsiExecutable } from './validate-win7-imports.mjs';
 
 function peFixture({ dll = 'ole32.dll', symbol = 'CoTaskMemAlloc', delay = false, ordinal = false } = {}) {
   const b = Buffer.alloc(0x600);
@@ -23,6 +23,7 @@ function peFixture({ dll = 'ole32.dll', symbol = 'CoTaskMemAlloc', delay = false
   }
   b.write(dll + '\0', 0x280); b.writeBigUInt64LE(ordinal ? (1n << 63n) | 7n : 0x1100n, 0x2c0);
   b.write(symbol + '\0', 0x302);
+  b.write('__TAURI_BUNDLE_TYPE_VAR_UNK', 0x500);
   return b;
 }
 
@@ -53,17 +54,28 @@ test('rejects malformed binaries and unsupported subsystem versions', () => {
   assert.match(validatePeForWin7(pe).join('\n'), /Subsystem 6.2/);
 });
 
+test('only allows the exact Tauri MSI token patch, rejecting missing or ambiguous markers', () => {
+  const source = peFixture();
+  const expected = expectedMsiExecutable(source);
+  assert.ok(expected.includes(Buffer.from('__TAURI_BUNDLE_TYPE_VAR_MSI')));
+  assert.ok(source.includes(Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK')));
+  assert.throws(() => expectedMsiExecutable(Buffer.alloc(100)), /exactly one/);
+  const ambiguous = Buffer.concat([source, Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK')]);
+  assert.throws(() => expectedMsiExecutable(ambiguous), /exactly one/);
+  assert.deepEqual(expected.subarray(0, 0x500), source.subarray(0, 0x500));
+});
+
 test('checks every installed DLL and verifies the MSI main executable provenance', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcie-win7-pe-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const installed = path.join(dir, 'installed'); fs.mkdirSync(installed);
   const executable = path.join(dir, 'source.exe'); fs.writeFileSync(executable, peFixture());
-  fs.copyFileSync(executable, path.join(installed, 'pcie.exe'));
+  fs.writeFileSync(path.join(installed, 'pcie.exe'), expectedMsiExecutable(peFixture()));
   const options = { directory: installed, executable, reportPath: path.join(dir, 'report.json') };
   assert.equal(checkInstalledBinaries(options).passed, true);
   fs.writeFileSync(path.join(installed, 'helper.dll'), peFixture({ dll: 'combase.dll' }));
   assert.throws(() => checkInstalledBinaries(options), /helper.dll.*combase/);
   fs.unlinkSync(path.join(installed, 'helper.dll'));
-  fs.writeFileSync(path.join(installed, 'pcie.exe'), peFixture({ ordinal: true }));
+  fs.writeFileSync(path.join(installed, 'pcie.exe'), expectedMsiExecutable(peFixture({ ordinal: true })));
   assert.throws(() => checkInstalledBinaries(options), /SHA-256/);
 });

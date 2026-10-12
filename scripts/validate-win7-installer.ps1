@@ -17,4 +17,12 @@ if ($process.ExitCode -ne 0) {
   throw "Win7 MSI administrative extraction failed: $($process.ExitCode)"
 }
 node "$PSScriptRoot/validate-win7-imports.mjs" --directory "$extractionPath" --executable "$Executable" --report "$Report"
-if ($LASTEXITCODE -ne 0) { throw 'Installed Win7 PE compatibility gate failed.' }
+if ($LASTEXITCODE -ne 0) {
+  if (Test-Path -LiteralPath $Report) {
+    $diagnostics = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
+    Write-Host "Compiled EXE SHA-256: $($diagnostics.sourceExecutableSha256)"
+    Write-Host "Expected MSI EXE SHA-256: $($diagnostics.expectedMsiExecutableSha256)"
+    $diagnostics.files | ForEach-Object { Write-Host "$($_.path): $($_.sha256)" }
+  }
+  throw 'Installed Win7 PE compatibility gate failed.'
+}

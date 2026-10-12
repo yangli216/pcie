@@ -66,6 +66,8 @@ Win7 原生依赖固定在 `src-tauri/Cargo.win7.lock`，runner 以 `--locked` �
 
 ### 独立发布通道
 
+来源哈希核对须处理 Tauri bundler 的确定性转换：MSI 内主程序的唯一 `__TAURI_BUNDLE_TYPE_VAR_UNK` 会被改成同长度的 `__TAURI_BUNDLE_TYPE_VAR_MSI`，打包后编译目录中的 EXE 又被恢复。校验器只在源文件中存在唯一标记时执行这一步预期转换，按完整转换后 SHA-256 在安装 EXE 中唯一匹配；不忽略其他字节差异。报告同时保留原编译文件、预期 MSI 主程序和实际安装文件的哈希。
+
 验证通过后，可手动运行 `Win7 Legacy Release Build` 生成供 PCIE Server 后台上传的签名更新包：
 
 1. 源 commit 必须位于 `main`，版本只在 CI 构建期间临时注入，不提交三处版本、不创建 tag、GitHub Release、draft 或普通 Windows `latest.json`。公开发布版本必须为与源码稳定版本同基线的 `X.Y.Z-win7[.N]`；Win7 热修只递增末尾修订号，不占用普通客户端的下一个稳定版本。三处临时版本使用 `X.Y.Z-0 / X.Y.Z-N` 内部映射以满足 MSI，禁止把该内部版本写入 Win7 更新通道。
