@@ -46,7 +46,7 @@ jobs:
         uses: swatinem/rust-cache@v2.8.2
         with:
           workspaces: './src-tauri -> target'
-          key: ${{ env.WIN7_RUST_TOOLCHAIN }}-${{ env.WIN7_TARGET }}-tauri-utils-win7
+          key: ${{ env.WIN7_RUST_TOOLCHAIN }}-${{ env.WIN7_TARGET }}-slim-errors-${{ hashFiles('src-tauri/Cargo.win7.lock', 'scripts/win7/windows-link/**') }}
 
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
@@ -98,6 +98,14 @@ jobs:
             Move-Item $hiddenRustupPath $rustupPath
           }
 
+      - name: Check installed Win7 PE imports and build provenance
+        shell: pwsh
+        run: |
+          ./scripts/validate-win7-installer.ps1 `
+            -BundlePath "src-tauri/target/$env:WIN7_TARGET/release/bundle/msi" `
+            -Executable "src-tauri/target/$env:WIN7_TARGET/release/pcie.exe" `
+            -Report dist/win7-import-report.json
+
       - name: Verify installer and record provenance
         id: artifact
         shell: pwsh
@@ -134,6 +142,8 @@ jobs:
             published = $false
             updaterEnabled = $false
             realWin7SmokeTestRequired = $true
+            nativeImportReport = 'win7-import-report.json'
+            dependencyLock = 'Cargo.win7.lock'
           }
           $manifest | ConvertTo-Json | Set-Content dist/win7-build-manifest.json -Encoding utf8
           "bundle_path=$bundlePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -145,6 +155,8 @@ jobs:
           path: |
             ${{ steps.artifact.outputs.bundle_path }}
             dist/win7-build-manifest.json
+            dist/win7-import-report.json
+            src-tauri/Cargo.win7.lock
           if-no-files-found: error
           retention-days: 14
 

@@ -1616,6 +1616,12 @@ describe('useWindowManagement', () => {
 
 两类女性病史的编辑状态由 `useFemaleHistoryFields.ts`（Composable Controller）管理，独立比较各字段生成基线，避免流式后到分区覆盖医生修改；快照缺失字段清空，不继承上次患者内容。现有 `useClinicalResultIntentReset.ts` 继续统一结果切换，两者不维护第二份权威病历状态。
 
+### Win7 原生依赖与安装包门禁
+
+Win7 Cargo runner 使用独立、受版本控制的 `src-tauri/Cargo.win7.lock`，构建时仅同步根包临时内部版本，以 `--locked` 禁止依赖漂移，结束后恢复普通 `Cargo.lock`。仅此 runner 启用 `windows_slim_errors`（保留 HRESULT 和系统错误文案，关闭 WinRT 扩展错误信息），并通过 `scripts/win7/windows-link` 的最小补丁将 `CoTaskMemAlloc / CoTaskMemFree / CoCreateFreeThreadedMarshaler` 从 `combase.dll` 映射回 Win7 的 `ole32.dll`；不伪造 WinRT 实现，也不修改普通构建依赖。
+
+两条 Win7 CI 在上传前使用 `scripts/validate-win7-installer.ps1` 对 MSI 执行 administrative extraction，再由 `scripts/validate-win7-imports.mjs` 检查所有安装 EXE/DLL 的普通与延迟 PE 导入、x64 架构和 subsystem 版本，并核对安装的 `pcie.exe` 与本次编译文件 SHA-256 一致。已知 Win8+ DLL/API 导入必须失败，检查报告与固定依赖快照随 Artifact 保存；这是静态门禁，不能代替 Win7 SP1 x64 启动和升级冒烟。Universal CRT 仍须由院内系统预置（KB2999226 或包含它的适用更新），与外置 WebView2 109 分别验收。
+
 ### 体格检查结构化回写
 
 `recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段及身高、体重、腰围测量槽位剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，人体测量值继续保留在完整正文或 PHIS 独立字段中，仅剩余描述性查体正文同时投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。

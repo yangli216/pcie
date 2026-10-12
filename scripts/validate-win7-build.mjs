@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TAURI_UTILS_WIN7_REVISION } from './win7-cargo-runner.mjs';
 
 export const WIN7_TARGET = 'x86_64-win7-windows-msvc';
 export const WIN7_REQUIRED_WEBVIEW_MAJOR = '109';
@@ -34,6 +35,8 @@ export function validateWin7Configuration({
   releaseConfigBuilder,
   candidateBuilder,
   versionRules,
+  win7Lock,
+  windowsLinkPatch,
 }) {
   assert(win7Config.productName === 'PCIE-Win7-Legacy', 'Win7 productName must identify the legacy build');
   assert(
@@ -78,6 +81,13 @@ export function validateWin7Configuration({
     'Win7 flavor must isolate native ball/menu region clipping and restore full region before geometry changes',
   );
   assert(viteConfig.includes('PCIE_WIN7_BUILD') && viteConfig.includes('chrome109'), 'Vite must explicitly target WebView2/Chrome 109 for Win7');
+  assert(cargoRunner.includes('windows_slim_errors') && cargoRunner.includes("['--locked']") && cargoRunner.includes('Cargo.win7.lock'), 'Win7 runner must enforce the dedicated lock and slim errors');
+  assert(win7Lock.includes('name = "windows-link"') && win7Lock.includes(TAURI_UTILS_WIN7_REVISION), 'Win7 lock must include the fixed upstream patch');
+  assert(windowsLinkPatch.includes('"ole32.dll" $abi fn CoTaskMemAlloc') && windowsLinkPatch.includes('"ole32.dll" $abi fn CoCreateFreeThreadedMarshaler'), 'Win7 COM imports must use ole32.dll');
+  for (const ci of [workflow, releaseWorkflow]) {
+    assert(ci.includes('validate-win7-installer.ps1') && ci.includes('win7-import-report.json') && ci.includes('Cargo.win7.lock'), 'Both Win7 workflows must validate installed PE imports and retain their report and dependency lock');
+    assert(ci.indexOf('validate-win7-installer.ps1') < ci.indexOf('uses: actions/upload-artifact@'), 'Win7 native import gate must run before uploading artifacts');
+  }
   assert(workflow.includes('workflow_dispatch:'), 'Win7 workflow must be manual-only');
   assert(workflow.includes(WIN7_TARGET), `Win7 workflow must build ${WIN7_TARGET}`);
   assert(workflow.includes("WIN7_REQUIRED_WEBVIEW2_MAJOR: '109'"), 'Win7 workflow must record external WebView2 109');
@@ -181,6 +191,8 @@ export function readWin7Configuration(rootDir) {
     releaseConfigBuilder: readText('scripts/prepare-win7-release-config.mjs'),
     candidateBuilder: readText('scripts/test-release.mjs'),
     versionRules: readText('scripts/win7-version.mjs'),
+    win7Lock: readText('src-tauri/Cargo.win7.lock'),
+    windowsLinkPatch: readText('scripts/win7/windows-link/src/lib.rs'),
   };
 }
 

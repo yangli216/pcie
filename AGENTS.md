@@ -115,6 +115,8 @@
 
 ## 最小质量门禁
 
+Win7 构建额外执行 `yarn test:win7-build`、`yarn test:release`，使用独立 `src-tauri/Cargo.win7.lock + --locked`，并由两条 Win7 工作流解包最终 MSI、校验安装 PE 普通/延迟导入与主程序 SHA-256。Win7 专用 windows-link 补丁及 `windows_slim_errors` 禁止进入普通构建；更新锁快照须审查完整依赖差异并重新进行 Win7 SP1 x64 实机冒烟。
+
 1. 前端至少执行 `yarn type-check` 与 `yarn build`
 2. Tauri/Rust 侧至少执行 `cargo check`
 3. 新增生产代码默认同步新增或更新单元测试；确实不适合自动化覆盖时，交付说明必须写明原因和替代验证方式

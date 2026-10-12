@@ -43,3 +43,11 @@ test('rejects a Win7 release workflow that probes the intranet server', () => {
   configuration.releaseWorkflow += '\nInvoke-WebRequest http://intranet/latest.json\n';
   assert.throws(() => validateWin7Configuration(configuration), /Invoke-WebRequest/);
 });
+
+test('rejects missing installed binary gates in either Win7 workflow', () => {
+  for (const key of ['workflow', 'releaseWorkflow']) {
+    const configuration = readWin7Configuration(rootDir);
+    configuration[key] = configuration[key].replace('validate-win7-installer.ps1', 'skip-native-check.ps1');
+    assert.throws(() => validateWin7Configuration(configuration), /validate installed PE imports/);
+  }
+});

@@ -1114,6 +1114,13 @@
 - **解决方案**: 对外继续使用 `X.Y.Z-win7[.N]`；构建期三处临时版本映射为 `X.Y.Z-0 / X.Y.Z-N`，公开版本通过编译期环境进入 Rust updater comparator 和前端版本适配层，更新清单、请求头、强更策略及界面仍使用公开版本。
 - **后续防护**: 发布脚本单测必须覆盖映射唯一性、`1–65535` 边界、构建环境注入与文件恢复；Win7 静态验证必须拒绝把公开字母版本直接写入 Tauri/MSI，也必须拒绝把内部版本上传到更新通道。
 
+### RETRO-149: Win7 安装包编译成功却导入 Win8+ 系统 DLL [待实机验证]
+
+- **现象**: `1.4.8-win7` 的 MSI 可生成且通过签名校验，Win7 启动 `pcie.exe` 却提示缺少 `api-ms-win-core-winrt-error-l1-1-0.dll`。
+- **根因**: 从实际 MSI 提取的主程序导入 `RoOriginateErrorW`，还从 `combase.dll` 导入 Win7 已支持但应由 `ole32.dll` 提供的 COM 函数。Cargo.lock 未受版本控制，宽版本约束在 CI 解析到 Tauri 2.12 / windows-core 0.62；Tier 3 Win7 Rust target 只约束标准库，不能保证第三方依赖兼容。
+- **解决方案**: Win7 runner 使用独立依赖锁、slim errors 和最小 COM 导入补丁；两条 CI 在上传前解包 MSI 检查实际安装 PE 与来源哈希。普通构建不启用这些修复。
+- **后续防护**: 保留旧错误包作为导入门禁的反例；静态检查通过后仍要求 Win7 SP1 x64 安装、启动、Bridge/SDK 与升级实测。
+
 ### RETRO-148: Win7 签名 MSI 因 direct-install 同名副本被误判为跨批次重复 [已解决]
 
 - **现象**: Win7 release flavor 已成功生成并签名 MSI，但组装 PCIE Server 上传包时，校验器报 `release contains multiple files named ...msi`，导致 `latest.json` 与发布 Artifact 未能上传。

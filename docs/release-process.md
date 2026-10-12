@@ -52,6 +52,10 @@ Windows 7 不属于普通 Windows 正式客户端支持范围。为仍在使用 
 
 ### 技术验证
 
+Win7 原生依赖固定在 `src-tauri/Cargo.win7.lock`，runner 以 `--locked` 构建并在结束后恢复普通锁文件。依赖更新须显式执行 `PCIE_WIN7_BUILD=1 node scripts/win7-cargo-runner.mjs --refresh-lock`，审查快照差异后重跑测试构建与实机冒烟；不得在 CI 自动刷新。Win7 独有 `windows_slim_errors` 和 windows-link COM 导入补丁用于避开 Win8+ 系统 DLL，普通构建不受影响。
+
+上传 Artifact 前必须对最终 MSI 做行政解包，扫描全部安装 EXE/DLL（含 delay imports），确认主程序 SHA-256 与本次编译一致。`win7-import-report.json` 和 `Cargo.win7.lock` 随产物保存；任何已知 Win8+ 导入都会阻断上传。该报告不承诺全面 OS API 兼容，仍须完成 Win7 SP1 x64 手测。实机除 WebView2 109 外，须预置适用的 Universal CRT 系统更新（KB2999226 或其替代更新）；不得从网上复制缺失 DLL。
+
 1. `Win7 Legacy Test Build` 只允许手动触发，只生成 GitHub Actions Artifact，不创建 tag、Release、draft、`.sig` 或 `latest.json`，也不上传任何更新源。候选公开版本必须使用 `X.Y.Z-win7` 或 `X.Y.Z-win7.N`，其中基础 `X.Y.Z` 与所选源码 commit 的三处稳定版本一致，`N` 为 `1–65535`；例如普通源码为 `1.4.8` 时，首次 Win7 候选为 `1.4.8-win7`，后续热修为 `1.4.8-win7.1`、`1.4.8-win7.2`。构建器会把它们临时映射为 WiX 可接受的内部版本 `1.4.8-0`、`1.4.8-1`、`1.4.8-2`，但 Artifact 名称和来源清单仍使用公开版本。
 2. 构建使用固定 nightly 工具链、`x86_64-win7-windows-msvc` Tier 3 目标和 `build-std`，不得复用普通正式构建的 `stable-x86_64-pc-windows-msvc` 产物。该 Tier 3 target 不在 `rustup target list` 的可下载组件中，工作流只在调用 Tauri CLI 时临时隐藏 `rustup.exe` 以跳过其 target 预检，并在 `finally` 中恢复；Cargo 和 rustc 仍必须使用固定 nightly 与 `rust-src`。当前 `tauri-utils 2.9.3` 的旧 `ctor 0.8` 不识别 `target_vendor = win7`，Win7 专用 Cargo runner 仅在该 flavor 内将 `tauri-utils` 固定到上游修复提交 `8a97d387a3a1a52f7c501762517e294d8c94e119`；普通构建继续使用原 Cargo.lock。
 3. Win7 包设置 `webviewInstallMode = skip`，CI 不下载、不安装也不内嵌 WebView2。验证人员必须在 Windows 7 SP1 x64 实机上另行安装 WebView2 109，并在冒烟记录中写明实际版本。

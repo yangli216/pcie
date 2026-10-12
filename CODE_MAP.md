@@ -32,6 +32,8 @@
 
 ## 快速导航
 
+Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-tauri/Cargo.win7.lock`、slim errors 与 `scripts/win7/windows-link` 补丁；`scripts/validate-win7-installer.ps1` 解包实际 MSI，`scripts/validate-win7-imports.mjs` 校验安装 EXE/DLL 的普通/延迟导入及主程序来源 SHA-256。普通构建不使用此锁与补丁。
+
 普通语音治疗并行：`features/voice-consultation/model/voiceTreatmentRecommendationGeneration.ts` 在药品与检查 / 检验各分支内部准备目录，检查目录慢响应不阻塞药品结果；同时负责下游确定性采样、模型格式异常单次重试及 `ready_with_items / ready_empty / catalog_unavailable / model_invalid / failed` 分支状态。并发时序、目录空 / 失败、格式重试及整体收口回归见同名 `.test.ts`。
 
 普通语音收起恢复：`features/voice-consultation/model/voiceEditorSnapshotRestoration.ts` 管理轮次资格与恢复期间的自动治疗保护；`voiceConsultationCache.ts` 保存编辑快照轮次，结果页在卸载前补存，并在初始结果应用保护内恢复完整快照。

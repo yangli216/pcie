@@ -89,7 +89,7 @@ jobs:
         uses: swatinem/rust-cache@v2.8.2
         with:
           workspaces: './src-tauri -> target'
-          key: ${{ env.WIN7_RUST_TOOLCHAIN }}-${{ env.WIN7_TARGET }}-tauri-utils-win7-release
+          key: ${{ env.WIN7_RUST_TOOLCHAIN }}-${{ env.WIN7_TARGET }}-slim-errors-${{ hashFiles('src-tauri/Cargo.win7.lock', 'scripts/win7/windows-link/**') }}-release
 
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
@@ -176,6 +176,14 @@ jobs:
             Move-Item $hiddenRustupPath $rustupPath
           }
 
+      - name: Check installed Win7 PE imports and build provenance
+        shell: pwsh
+        run: |
+          ./scripts/validate-win7-installer.ps1 `
+            -BundlePath "src-tauri/target/$env:WIN7_TARGET/release/bundle/msi" `
+            -Executable "src-tauri/target/$env:WIN7_TARGET/release/pcie.exe" `
+            -Report dist/win7-import-report.json
+
       - name: Package and validate PCIE Server upload bundle
         shell: pwsh
         env:
@@ -199,6 +207,8 @@ jobs:
           }
           New-Item -ItemType Directory -Force dist/win7-update/direct-install | Out-Null
           Copy-Item $rawInstaller.FullName dist/win7-update/direct-install/
+          Copy-Item dist/win7-import-report.json dist/win7-update/
+          Copy-Item src-tauri/Cargo.win7.lock dist/win7-update/
 
           node scripts/validate-release-assets.mjs `
             --assets-dir dist/win7-update `
@@ -259,6 +269,8 @@ jobs:
             securityOwner = $env:SECURITY_OWNER
             supportUntil = $env:SUPPORT_UNTIL
             realWin7UpgradeSmokeTestRequired = $true
+            nativeImportReport = 'win7-import-report.json'
+            dependencyLock = 'Cargo.win7.lock'
           }
           $manifest | ConvertTo-Json | Set-Content dist/win7-update/win7-release-manifest.json -Encoding utf8
           Copy-Item src-tauri/tauri.win7.release.generated.conf.json dist/win7-update/tauri.win7.release.conf.json
