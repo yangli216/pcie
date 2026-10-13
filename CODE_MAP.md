@@ -522,3 +522,6 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 女性病史：`maritalReproductiveHistory` 与 `menstrualHistory` 同路独立传递；`patientContext.ts` 提取两类既有病史，`chronicRefillRecord.ts` 补齐慢病患者病史输入；`clinical-result/lib/maritalReproductiveHistory.ts` 解析明确婚育/当前妊娠字典事实，由 `recordConfirmedEmrFieldValues.ts` 输出 PHIS data-id。语音流、结果页快照、重写、部分回写和动态模板映射均保留两字段。
 
 女性字段编辑控制器：`features/consultation-result/model/useFemaleHistoryFields.ts` 统一月经史/婚育史的缓存恢复、逐字段流式基线保护与非女性清理；共享结果页仅编排，不为两字段新增全局状态。
+
+
+公卫患者处方与医生提醒（2026-10-13）：`lib/publicHealthPatientText.ts` 统一患者正文与运动生成格式校验，生成/SSE与确认边界分别检查；`ui/PublicHealthDoctorNotes.vue` 只读展示既有 warnings。健康草稿的证据、风险分析及缺项说明由 renderer 发出医生回调，不进入 editable values；Controller、确认 Builder 和 Bridge.confirm 保护确认/恢复/重传，保留医生编辑与独立任务范围。

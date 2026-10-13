@@ -21,6 +21,87 @@ function setup(request = testRequest()) {
 }
 afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.useRealTimers(); });
 describe('independent public health task lifecycle', () => {
+  it('leaves empty health chapters unselected, permits physician completion, and confirms only existing advice', async () => {
+    const { c, deps } = setup();
+    deps.generate.mockImplementation(async request => {
+      const result = testResult(request);
+      result.sections[0].content = ''; result.sections[1].content = '';
+      result.warnings = [{ code: 'NO_CLASS', sectionId: 'medication_guidance', message: '未提供用药类别资料，请先核对用药信息。' }];
+      return result;
+    });
+    await c.generate(); expect(c.state.value).toBe('reviewable');
+    expect(c.selected.value).toEqual(['lifestyle_guidance']);
+    c.selectSection('check_plan', true); c.selectAll(true);
+    expect(c.selected.value).toEqual(['lifestyle_guidance']);
+    await c.writeback();
+    expect(c.frozen.value!.items.map(item => item.sourceSections)).toEqual([['lifestyle_guidance']]);
+    expect(JSON.stringify(c.frozen.value)).not.toContain('NO_CLASS');
+    expect(JSON.stringify(c.frozen.value)).not.toContain('请先核对');
+  });
+  it('allows a physician to fill an empty chapter and rejects an all-empty generation', async () => {
+    const { c, deps } = setup();
+    deps.generate.mockImplementation(async request => {
+      const result = testResult(request); result.sections[0].content = ''; return result;
+    });
+    await c.generate(); c.editSection('check_plan', '按预约日期携带检查资料到院。'); c.selectSection('check_plan', true);
+    expect(c.selected.value).toContain('check_plan'); expect(c.canWriteback.value).toBe(true);
+    c.editSection('check_plan', ''); expect(c.selected.value).not.toContain('check_plan');
+    deps.generate.mockImplementation(async request => {
+      const result = testResult(request); result.sections.forEach(section => { section.content = ''; }); return result;
+    });
+    await c.generate(); expect(c.state.value).toBe('generation-failed'); expect(c.result.value).toBeNull();
+  });
+  it('requires physician completed chapters for a merged PHIS field and never substitutes doctor warnings for them', async () => {
+    const request = testRequest();
+    request.writebackTargets = [{ targetFieldId: 'combined', label: '综合指导', sourceSections: ['check_plan', 'medication_guidance', 'lifestyle_guidance'], valueType: 'string', mode: 'replace' }];
+    const { c, deps } = setup(request);
+    deps.generate.mockImplementation(async request => {
+      const result = testResult(request); result.sections[0].content = ''; result.sections[1].content = '';
+      result.warnings = [{ code: 'NO_PATIENT_CONTENT', message: '请医生核对资料后补充患者正文。' }]; return result;
+    });
+    await c.generate(); c.selectAll(true);
+    expect(c.canWriteback.value).toBe(false); await c.writeback(); expect(deps.confirm).not.toHaveBeenCalled();
+    c.editSection('check_plan', '按预约时间完成检查。'); c.editSection('medication_guidance', '按现有处方服药，不要自行停药。'); c.selectAll(true);
+    expect(c.canWriteback.value).toBe(true); await c.writeback();
+    expect(c.frozen.value!.items).toHaveLength(1);
+    expect(c.frozen.value!.items[0].value).toContain('用药指导\n按现有处方服药，不要自行停药。');
+    expect(JSON.stringify(c.frozen.value)).not.toContain('请医生核对');
+  });
+  it('blocks contaminated physician edits and preserves physician warnings through meal choice, save failure and retransmission', async () => {
+    const { c, deps, launch } = setup(testWeightRequest()); deps.generate.mockImplementation(async request => testMealResult(request));
+    await c.generate(); c.selectSection('exercise_plan', false);
+    const meal = c.result.value!.sections[1].options!;
+    c.selectMealOption(meal[1].id); c.editSection('meal_plan', '待医生核实事项\n请医生核对食物过敏史。');
+    expect(c.canWriteback.value).toBe(false); await c.writeback(); expect(deps.confirm).not.toHaveBeenCalled();
+    c.editSection('meal_plan', '早餐使用选定食材，避免已知过敏食物。'); c.selectSection('meal_plan', true);
+    await c.writeback(); const first = structuredClone(c.frozen.value!);
+    expect(JSON.stringify(first)).not.toContain('适用性待核实');
+    expect(first).not.toHaveProperty('warnings'); expect(first).not.toHaveProperty('options');
+    expect(c.result.value!.warnings[0].message).toContain('适用性待核实');
+    await c.writeback(); expect(deps.confirm.mock.calls[1]).toEqual(deps.confirm.mock.calls[0]);
+    c.receiveFeedback({ bridgeSessionId: launch.bridgeSessionId, feedback: testFeedback(first, 'failed') });
+    expect(c.values.value.meal_plan).toBe(first.items[0].value); expect(c.result.value!.warnings).toHaveLength(1);
+    c.selectMealOption(meal[2].id); await c.writeback();
+    expect(c.frozen.value!.items[0].value).toBe(meal[2].content);
+    expect(c.frozen.value!.writebackRequestId).not.toBe(first.writebackRequestId);
+    expect(JSON.stringify(c.frozen.value)).not.toContain('适用性待核实');
+  });
+  it('restores an old contaminated draft without stripping it, blocks retransmission, and allows a corrected failed draft', async () => {
+    const first = setup(); await first.c.generate(); await first.c.writeback();
+    const pendingWriteback = structuredClone(first.c.frozen.value!);
+    pendingWriteback.items[0].value = '检查安排\n请医生核对准备事项。';
+    const second = setup();
+    second.c.restore({ ...first.launch, originRequestId: first.launch.request.originRequestId, phase: 'awaiting-writeback', pendingWriteback, lastFeedback: null });
+    expect(second.c.frozen.value!.items[0].value).toBe(pendingWriteback.items[0].value);
+    await second.c.writeback(); expect(second.deps.confirm).not.toHaveBeenCalled();
+    expect(second.c.message.value).toContain('内部说明');
+    second.c.receiveFeedback({ bridgeSessionId: first.launch.bridgeSessionId, feedback: testFeedback(pendingWriteback, 'failed') });
+    expect(second.c.canWriteback.value).toBe(false);
+    second.c.editRestoredTarget(pendingWriteback.items[0].targetFieldId, '检查当天携带既往检查资料。');
+    expect(second.c.canWriteback.value).toBe(true); await second.c.writeback();
+    expect(second.c.frozen.value!.items[0].value).toBe('检查当天携带既往检查资料。');
+    expect(second.c.frozen.value!.writebackRequestId).not.toBe(pendingWriteback.writebackRequestId);
+  });
   it('keeps each meal draft, confirms one option, and freezes selection during retransmission', async () => {
     const { c, deps } = setup(testWeightRequest()); deps.generate.mockImplementation(async request => testMealResult(request));
     await c.generate(); const options = c.result.value!.sections[1].options!;

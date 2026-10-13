@@ -6,8 +6,10 @@ import PublicHealthFactsDialog from './PublicHealthFactsDialog.vue';
 import PublicHealthResultSections from './PublicHealthResultSections.vue';
 import PublicHealthActionBar from './PublicHealthActionBar.vue';
 import PublicHealthHealthProfile from './PublicHealthHealthProfile.vue';
+import PublicHealthDoctorNotes from './PublicHealthDoctorNotes.vue';
 import { CAPABILITY_TITLES, characterCount, SCENE_TITLES } from '../lib/publicHealthContract';
 import { buildPublicHealthHealthProfile } from '../lib/publicHealthHealthProfile';
+import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type { PublicHealthController } from '../model/usePublicHealthController';
 import type { PublicHealthManualFacts } from '../types';
 const props = defineProps<{ controller: PublicHealthController }>();
@@ -28,6 +30,11 @@ function saveFacts(input: PublicHealthManualFacts) {
   catch (error) { localError.value = error instanceof Error ? error.message : '资料核对失败。'; }
 }
 function startGeneration() { if (result.value || frozen.value) regenerateOpen.value = true; else void c.generate(); }
+function restoredNotice(value: string): string {
+  if (characterCount(value) > 64000) return '正文超出 64000 字，请调整后确认。';
+  try { assertPatientFacingContent(value); return ''; }
+  catch { return '原正文包含内部说明或医生核实提醒，请调整患者正文后再确认。'; }
+}
 async function finish() {
   try { if (await c.close()) emit('close'); }
   catch { localError.value = '任务结束状态未确认，请稍后再试。'; }
@@ -53,9 +60,9 @@ async function finish() {
             <PublicHealthResultSections :sections="sections" :values="values" :selected="selected" :selected-meal-option-id="selectedMealOptionId" :meal-option-values="mealOptionValues" :editable="editable" :metrics="metrics" @edit="c.editSection" @meal-option="c.selectMealOption" @select="c.selectSection" @all="c.selectAll" />
             <template v-if="frozen && !result">
               <p class="mapping-note">已恢复上次确认正文及已选范围。保存失败时可调整正文后重新保存；修改章节范围需重新生成。</p>
-              <section v-for="item in frozen.items" :key="item.targetFieldId" class="restored"><h2>{{ request.writebackTargets.find(target => target.targetFieldId === item.targetFieldId)?.label || '已提交正文' }}</h2><textarea v-if="state === 'writeback-failed'" :aria-label="`恢复正文：${request.writebackTargets.find(target => target.targetFieldId === item.targetFieldId)?.label || item.targetFieldId}`" :value="item.value" rows="5" @input="c.editRestoredTarget(item.targetFieldId, ($event.target as HTMLTextAreaElement).value)" /><pre v-else>{{ item.value }}</pre><p v-if="characterCount(item.value) > 64000" class="notice error">正文超出 64000 字，请调整后确认。</p></section>
+              <section v-for="item in frozen.items" :key="item.targetFieldId" class="restored"><h2>{{ request.writebackTargets.find(target => target.targetFieldId === item.targetFieldId)?.label || '已提交正文' }}</h2><textarea v-if="state === 'writeback-failed'" :aria-label="`恢复正文：${request.writebackTargets.find(target => target.targetFieldId === item.targetFieldId)?.label || item.targetFieldId}`" :value="item.value" rows="5" @input="c.editRestoredTarget(item.targetFieldId, ($event.target as HTMLTextAreaElement).value)" /><pre v-else>{{ item.value }}</pre><p v-if="restoredNotice(item.value)" class="notice error">{{ restoredNotice(item.value) }}</p></section>
             </template>
-            <p v-for="warning in result?.warnings ?? []" :key="warning.code + warning.message" class="notice warning">{{ warning.message }}</p>
+            <PublicHealthDoctorNotes :warnings="result?.warnings ?? []" />
             <p v-if="result && request.writebackTargets.some(target => target.sourceSections.length > 1)" class="mapping-note">PHIS 使用合并指导字段，须完整选择该字段对应的全部章节才能回写。</p>
           </div>
         </section>

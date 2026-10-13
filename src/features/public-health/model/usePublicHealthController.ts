@@ -6,6 +6,7 @@ import {
   assertConfirmation, assertRequest, assertResult, buildConfirmation, characterCount, clone, matchesFeedback, missingFacts, SECTION_IDS,
   supplementFacts,
 } from '../lib/publicHealthContract';
+import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type {
   PublicHealthConfirmed, PublicHealthFeedback, PublicHealthFeedbackEvent, PublicHealthLaunch,
   PublicHealthManualFacts, PublicHealthMetrics, PublicHealthRequest, PublicHealthResult,
@@ -55,8 +56,17 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
   const selectedTargets = computed(() => request.value?.writebackTargets.filter(target => target.sourceSections.every(id => selected.value.includes(id))) ?? []);
   const canWriteback = computed(() => {
     if (!editable.value || !request.value) return false;
-    if (result.value) return Boolean(selectedTargets.value.length
-      && selectedTargets.value.every(target => target.sourceSections.every(id => values.value[id]?.trim() && characterCount(values.value[id]!) <= 16000)));
+    if (result.value) {
+      if (!selectedTargets.value.length) return false;
+      try {
+        for (const target of selectedTargets.value) for (const id of target.sourceSections) {
+          const value = values.value[id];
+          if (!value?.trim() || characterCount(value) > 16000) return false;
+          assertPatientFacingContent(value);
+        }
+        return true;
+      } catch { return false; }
+    }
     if (state.value !== 'writeback-failed' || !frozen.value) return false;
     try { assertConfirmation(frozen.value, request.value); return true; } catch { return false; }
   });
@@ -88,7 +98,7 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
   }
   function restore(snapshot: PublicHealthTaskSnapshot | null) {
     if (!snapshot || snapshot.phase === 'closed') return;
-    if (snapshot.pendingWriteback) assertConfirmation(snapshot.pendingWriteback, snapshot.request);
+    if (snapshot.pendingWriteback) assertConfirmation(snapshot.pendingWriteback, snapshot.request, { skipPatientTextValidation: true });
     receiveLaunch(snapshot);
     if (snapshot.pendingWriteback) {
       attempted = true;
@@ -96,6 +106,8 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
       selected.value = [...new Set(snapshot.pendingWriteback.items.flatMap(item => item.sourceSections))];
       state.value = 'awaiting-writeback';
       message.value = '已恢复最近发送的确认内容，等待 PHIS 保存回执。';
+      try { assertConfirmation(snapshot.pendingWriteback, snapshot.request); }
+      catch { message.value = '已恢复原确认正文，其中包含内部说明或医生核实提醒，须在保存失败后调整正文；当前禁止重传。'; }
       if (snapshot.lastFeedback) receiveFeedback({ bridgeSessionId: snapshot.bridgeSessionId, feedback: snapshot.lastFeedback });
     }
   }
@@ -135,7 +147,7 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
       result.value = clone(complete);
       sectionValues.value = Object.fromEntries(complete.sections.map(section => [section.id, section.content]));
       mealSelection.initialize();
-      selected.value = complete.sections.map(section => section.id);
+      selected.value = complete.sections.filter(section => section.content.trim()).map(section => section.id);
       state.value = 'reviewable'; message.value = '请核对并编辑建议，确认后回写 PHIS。';
     } catch (error) {
       if (token !== run) return;
@@ -157,6 +169,7 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
   function editSection(id: PublicHealthSectionId, value: string) {
     if (!editable.value || !result.value || !request.value || !SECTION_IDS[request.value.capability].includes(id)) return;
     if (id !== 'meal_plan' || !mealSelection.edit(value)) sectionValues.value = { ...sectionValues.value, [id]: value };
+    if (!value.trim()) selected.value = selected.value.filter(section => section !== id);
     frozen.value = null;
   }
   function selectMealOption(id: string) {
@@ -164,12 +177,12 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
   }
   function selectSection(id: PublicHealthSectionId, checked: boolean) {
     if (!editable.value || !result.value || !request.value || !SECTION_IDS[request.value.capability].includes(id)) return;
-    selected.value = checked ? [...new Set([...selected.value, id])] : selected.value.filter(item => item !== id);
+    selected.value = checked && values.value[id]?.trim() ? [...new Set([...selected.value, id])] : selected.value.filter(item => item !== id);
     frozen.value = null;
   }
   function selectAll(checked: boolean) {
     if (!editable.value || !result.value || !request.value) return;
-    selected.value = checked ? [...SECTION_IDS[request.value.capability]] : []; frozen.value = null;
+    selected.value = checked ? SECTION_IDS[request.value.capability].filter(id => values.value[id]?.trim()) : []; frozen.value = null;
   }
   function editRestoredTarget(targetFieldId: string, value: string) {
     if (state.value !== 'writeback-failed' || result.value || !frozen.value) return;
@@ -180,6 +193,7 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
     const retransmit = state.value === 'awaiting-writeback' && frozen.value;
     if (!retransmit && !canWriteback.value) return;
     try {
+      if (retransmit) assertConfirmation(frozen.value!, launch.value.request);
       if (!retransmit) {
         frozen.value = result.value
           ? buildConfirmation(launch.value.request, result.value, values.value, selected.value, uuid(), now())

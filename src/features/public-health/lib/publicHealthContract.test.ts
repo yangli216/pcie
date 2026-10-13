@@ -4,6 +4,50 @@ import { testFeedback, testMealResult, testRequest, testResult, testTime, testUu
 import type { PublicHealthRequest, PublicHealthResult, PublicHealthSection } from '../types';
 
 describe('public health facts and writeback boundaries', () => {
+  it('keeps physician warnings outside all confirmed target content and metadata, including combined fields', () => {
+    const request = testRequest(), result = testResult(request);
+    request.writebackTargets = [{ targetFieldId: 'combined', label: '综合指导', sourceSections: ['check_plan', 'medication_guidance', 'lifestyle_guidance'], valueType: 'string', mode: 'replace' }];
+    result.warnings = [{ code: 'DOCTOR_REVIEW', message: '请医生核对证据：合成资料。', sectionId: 'lifestyle_guidance' }];
+    const confirmation = buildConfirmation(request, result, testValues(request), SECTION_IDS.health_prescription, testUuid(9), testTime);
+    expect(confirmation.items).toHaveLength(1);
+    expect(confirmation.items[0].value).toContain('生活方式建议\n合成测试正文-lifestyle_guidance');
+    expect(JSON.stringify(confirmation)).not.toContain('请医生核对');
+    expect(confirmation).not.toHaveProperty('warnings'); expect(confirmation).not.toHaveProperty('doctorNotes');
+    expect(() => assertConfirmation({ ...confirmation, warnings: result.warnings } as never, request)).toThrow('附加字段');
+    const withItemNote = structuredClone(confirmation); Object.assign(withItemNote.items[0], { doctorNotes: ['医生提醒'] });
+    expect(() => assertConfirmation(withItemNote, request)).toThrow('回写范围');
+  });
+  it('accepts empty health-only chapters when another patient chapter exists, and rejects all-empty or weight results', () => {
+    const request = testRequest(), result = testResult(request);
+    result.sections[0].content = ''; result.sections[1].content = '';
+    expect(() => assertResult(result, request)).not.toThrow();
+    const confirmation = buildConfirmation(request, result, { lifestyle_guidance: result.sections[2].content }, ['lifestyle_guidance'], testUuid(9), testTime);
+    expect(confirmation.items.map(item => item.sourceSections)).toEqual([['lifestyle_guidance']]);
+    expect(() => buildConfirmation(request, result, { check_plan: '' }, ['check_plan'], testUuid(9), testTime)).toThrow('为空');
+    result.sections[2].content = ''; expect(() => assertResult(result, request)).toThrow('未生成');
+    const weight = testWeightRequest(), weightResult = testResult(weight); weightResult.sections[0].content = '';
+    expect(() => assertResult(weightResult, weight)).toThrow('章节无效');
+  });
+  it('rejects explanatory text from every meal option and edited confirmation while retaining long physician edits', () => {
+    const request = testWeightRequest(), result = testMealResult(request);
+    result.sections[1].options![2].content += '\n待医生核实事项\n适用性待核实。';
+    expect(() => assertResult(result, request)).toThrow('内部说明');
+    const clean = testMealResult(request);
+    expect(() => buildConfirmation(request, clean, { exercise_plan: '制定依据\n当前资料如下' }, ['exercise_plan'], testUuid(9), testTime)).toThrow('内部说明');
+    const edited = '每天记录身体活动，出现不适停止运动。'.repeat(30);
+    const confirmation = buildConfirmation(request, clean, { exercise_plan: edited }, ['exercise_plan'], testUuid(9), testTime);
+    expect(confirmation.items[0].value).toBe(edited);
+  });
+  it('rejects an over-sentence generated exercise section but permits a physician to edit the valid generated result beyond its style limit', () => {
+    const request = testWeightRequest(), result = testResult(request);
+    const invalid = structuredClone(result);
+    invalid.sections[0].content = invalid.sections[0].content.replace('1. ', '1. 先准备。开始运动。');
+    expect(() => assertResult(invalid, request)).toThrow('每条最多 2 句');
+    expect(() => assertResult(result, request)).not.toThrow();
+    const edited = '按医生安排完成活动，出现不适停止运动并及时就诊。'.repeat(25);
+    const payload = buildConfirmation(request, result, { exercise_plan: edited }, ['exercise_plan'], testUuid(9), testTime);
+    expect(payload.items[0].value).toBe(edited);
+  });
   it('accepts three meal options bound to the default, while confirmation still contains only current text', () => {
     const request = testWeightRequest(), result = testMealResult(request), meal = result.sections[1];
     expect(() => assertResult(result, request)).not.toThrow();

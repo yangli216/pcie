@@ -52,6 +52,10 @@ describe('public health facts editing through the production page', () => {
   it('starts with a recommended meal and collapsed alternatives, switches independent drafts, and submits only the chosen meal', async () => {
     const deps = mount(testWeightRequest(), testMealResult); button('生成建议').click(); await settle();
     const textarea = () => host.querySelector<HTMLTextAreaElement>('[aria-label="食谱推荐正文"]')!;
+    const doctorNotes = host.querySelector('[aria-label="医生提醒（不回写）"]')!;
+    expect(doctorNotes.textContent).toContain('食谱推荐'); expect(doctorNotes.textContent).toContain('适用性待核实');
+    expect(doctorNotes.querySelector('textarea')).toBeNull();
+    expect(Array.from(host.querySelectorAll('textarea')).every(item => !item.value.includes('适用性待核实'))).toBe(true);
     const alternatives = Array.from(host.querySelectorAll<HTMLDetailsElement>('details')).find(item => item.querySelector('summary')?.textContent?.includes('备选食谱（2）'))!;
     expect(alternatives.open).toBe(false); expect(textarea().value).toContain('合成方案1');
     const edit = async (text: string) => { textarea().value = text; textarea().dispatchEvent(new Event('input', { bubbles: true })); await settle(); };
@@ -66,9 +70,51 @@ describe('public health facts editing through the production page', () => {
     button('确认回写 PHIS').click(); await settle();
     expect(deps.confirm).toHaveBeenCalledTimes(1);
     expect(deps.confirm.mock.calls[0][1].items).toEqual([{ targetFieldId: 'target-meal_plan', sourceSections: ['meal_plan'], value: '合成备选2医生编辑' }]);
+    expect(JSON.stringify(deps.confirm.mock.calls[0][1])).not.toContain('适用性待核实');
+    expect(deps.confirm.mock.calls[0][1]).not.toHaveProperty('warnings');
     expect(textarea().readOnly).toBe(true); expect(host.textContent).toContain('等待 PHIS 保存');
     expect(Array.from(alternatives.querySelectorAll<HTMLInputElement>('input')).every(input => input.disabled)).toBe(true);
     await choose(1); expect(textarea().value).toBe('合成备选2医生编辑');
+  });
+  it('shows independent doctor notes, keeps two absent chapters empty and selectable only after physician completion', async () => {
+    const deps = mount(testRequest(), request => {
+      const result = testResult(request);
+      result.sections[0].content = ''; result.sections[1].content = '';
+      result.sections[2].content = '日常散步，若胸闷或头晕应停止活动，持续不适及时就诊。';
+      result.warnings = [{ code: 'NO_MEDICATION_FACTS', sectionId: 'medication_guidance', message: '未提供用药类别资料，请医生核对。' },
+        { code: 'RISK_EVIDENCE', sectionId: 'lifestyle_guidance', message: '证据：合成随访资料；AI 定性分析，待医生审核。' }];
+      return result;
+    });
+    button('生成建议').click(); await settle();
+    const check = host.querySelector<HTMLInputElement>('[aria-label="选择检查计划"]')!;
+    const medication = host.querySelector<HTMLInputElement>('[aria-label="选择用药指导"]')!;
+    expect(check.disabled).toBe(true); expect(check.checked).toBe(false);
+    expect(medication.disabled).toBe(true); expect(medication.checked).toBe(false);
+    const all = Array.from(host.querySelectorAll('label')).find(label => label.textContent?.includes('全选章节'))!.querySelector<HTMLInputElement>('input')!;
+    expect(all.checked).toBe(true);
+    const doctor = host.querySelector('[aria-label="医生提醒（不回写）"]')!;
+    expect(doctor.textContent).toContain('未提供用药类别资料'); expect(doctor.textContent).toContain('证据：合成随访资料');
+    const empty = host.querySelector<HTMLTextAreaElement>('[aria-label="用药指导正文"]')!;
+    expect(empty.value).toBe(''); expect(empty.placeholder).toBe('');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="生活方式建议正文"]')!.value).toContain('持续不适及时就诊');
+    const checkText = host.querySelector<HTMLTextAreaElement>('[aria-label="检查计划正文"]')!;
+    checkText.value = '按预约日期携带检查资料到院。'; checkText.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(check.disabled).toBe(false); check.click(); await settle();
+    checkText.value = ''; checkText.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(check.disabled).toBe(true); expect(check.checked).toBe(false);
+    button('确认回写 PHIS').click(); await settle();
+    expect(deps.confirm.mock.calls[0][1].items).toEqual([{ targetFieldId: 'target-lifestyle_guidance', sourceSections: ['lifestyle_guidance'], value: '日常散步，若胸闷或头晕应停止活动，持续不适及时就诊。' }]);
+    expect(JSON.stringify(deps.confirm.mock.calls[0][1])).not.toContain('证据：');
+    expect(JSON.stringify(deps.confirm.mock.calls[0][1])).not.toContain('请医生核对');
+  });
+  it('shows a separate correction notice and disables confirmation when a physician adds internal explanation', async () => {
+    mount(testRequest()); button('生成建议').click(); await settle();
+    const text = host.querySelector<HTMLTextAreaElement>('[aria-label="检查计划正文"]')!;
+    text.value = '制定依据\n参考资料'; text.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(button('确认回写 PHIS').disabled).toBe(true);
+    expect(host.textContent).toContain('正文含内部说明或医生核实提醒');
+    text.value = '按预约日期携带检查资料。'; text.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(button('确认回写 PHIS').disabled).toBe(false);
   });
   it('resets meal choices and folding after confirmed regeneration', async () => {
     const deps = mount(testWeightRequest(), testMealResult); button('生成建议').click(); await settle();

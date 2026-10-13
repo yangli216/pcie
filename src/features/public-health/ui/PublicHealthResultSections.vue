@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import PublicHealthMealOptions from './PublicHealthMealOptions.vue';
 import { characterCount } from '../lib/publicHealthContract';
+import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type { PublicHealthMetrics, PublicHealthSection, PublicHealthSectionId } from '../types';
 const props = defineProps<{
   sections: PublicHealthSection[]; values: Partial<Record<PublicHealthSectionId, string>>;
@@ -12,8 +13,17 @@ const emit = defineEmits<{
   edit: [id: PublicHealthSectionId, value: string]; select: [id: PublicHealthSectionId, selected: boolean]; all: [selected: boolean];
   mealOption: [id: string];
 }>();
-const allSelected = computed(() => props.sections.length > 0 && props.sections.every(section => props.selected.includes(section.id)));
+const selectableSections = computed(() => props.sections.filter(section => (props.values[section.id] ?? section.content).trim()));
+const allSelected = computed(() => selectableSections.value.length > 0 && selectableSections.value.every(section => props.selected.includes(section.id)));
 const metricsSource = computed(() => /^(mock|runtime)\./.test(props.metrics?.formulaVersion ?? '') ? '工程计算' : '服务端计算');
+function sectionNote(section: PublicHealthSection): string {
+  const value = props.values[section.id] ?? section.content;
+  if (!value.trim()) return props.editable ? '暂无患者处方内容，可由医生补充正文后选择回写' : '暂无患者处方内容';
+  if (characterCount(value) > 16000) return '正文超出 16000 字，请调整后确认';
+  try { assertPatientFacingContent(value); }
+  catch { return '正文含内部说明或医生核实提醒，请移至医生提醒区后再确认'; }
+  return props.editable ? '由医生核对并确认' : '仅供阅读，当前不可修改或回写';
+}
 </script>
 <template>
   <div class="result-sections">
@@ -23,17 +33,17 @@ const metricsSource = computed(() => /^(mock|runtime)\./.test(props.metrics?.for
       <p class="formula">{{ metricsSource }} · {{ metrics.formulaVersion }} · 指标不单独回写</p>
     </div>
     <div v-if="sections.length" class="selection">
-      <label><input type="checkbox" :checked="allSelected" :disabled="!editable" @change="emit('all', ($event.target as HTMLInputElement).checked)">全选章节</label>
+      <label><input type="checkbox" :checked="allSelected" :disabled="!editable || !selectableSections.length" @change="emit('all', ($event.target as HTMLInputElement).checked)">全选章节</label>
       <span>{{ editable ? `已选 ${selected.length} / ${sections.length} 项 · 正文可编辑` : '结果核验完成后可编辑确认' }}</span>
     </div>
     <section v-for="(section, index) in sections" :key="section.id" class="section-card" :class="{ unselected: editable && !selected.includes(section.id) }">
       <div class="section-heading">
-        <label><input type="checkbox" :aria-label="`选择${section.title}`" :checked="selected.includes(section.id)" :disabled="!editable" @change="emit('select', section.id, ($event.target as HTMLInputElement).checked)">{{ section.title }}</label>
+        <label><input type="checkbox" :aria-label="`选择${section.title}`" :checked="selected.includes(section.id)" :disabled="!editable || !(values[section.id] ?? section.content).trim()" @change="emit('select', section.id, ($event.target as HTMLInputElement).checked)">{{ section.title }}</label>
         <span>0{{ index + 1 }}</span>
       </div>
       <PublicHealthMealOptions v-if="section.id === 'meal_plan' && section.options" :options="section.options" :selected-id="selectedMealOptionId" :drafts="mealOptionValues" :value="values[section.id] ?? section.content" :editable="editable" @edit="emit('edit', 'meal_plan', $event)" @select="emit('mealOption', $event)" />
       <textarea v-else :aria-label="`${section.title}正文`" :value="values[section.id] ?? section.content" :readonly="!editable" @input="emit('edit', section.id, ($event.target as HTMLTextAreaElement).value)" />
-      <p class="section-note">{{ characterCount(values[section.id] ?? section.content) > 16000 ? '正文超出 16000 字，请调整后确认' : editable ? '由医生核对并确认' : '仅供阅读，当前不可修改或回写' }}</p>
+      <p class="section-note">{{ sectionNote(section) }}</p>
     </section>
   </div>
 </template>

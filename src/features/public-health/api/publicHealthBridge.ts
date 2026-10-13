@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PublicHealthConfirmed, PublicHealthFeedback, PublicHealthLaunch, PublicHealthRequest } from '../types';
+import { assertConfirmation } from '../lib/publicHealthContract';
 
 export interface PublicHealthTaskSnapshot extends PublicHealthLaunch {
   originRequestId: string;
@@ -23,9 +24,12 @@ export const publicHealthBridge = {
   prepare: (bridgeSessionId: string, request: PublicHealthRequest) => bridgeInvoke<{
     originRequestId: string; requestId: string; requestHash: string; preparedAt: string;
   }>('prepare_public_health_generation', { bridgeSessionId, request }),
-  confirm: (bridgeSessionId: string, payload: PublicHealthConfirmed) => bridgeInvoke<{
-    status: 'accepted'; originRequestId: string; requestId: string;
-    generationId: string; writebackRequestId: string; eventId: string; duplicate: boolean;
-  }>('confirm_public_health_result', { bridgeSessionId, payload }),
+  confirm: async (bridgeSessionId: string, payload: PublicHealthConfirmed) => {
+    assertConfirmation(payload);
+    return bridgeInvoke<{
+      status: 'accepted'; originRequestId: string; requestId: string;
+      generationId: string; writebackRequestId: string; eventId: string; duplicate: boolean;
+    }>('confirm_public_health_result', { bridgeSessionId, payload });
+  },
   close: (originRequestId: string) => bridgeInvoke('close_public_health_task', { originRequestId }),
 };

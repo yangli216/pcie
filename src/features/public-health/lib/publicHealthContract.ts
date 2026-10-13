@@ -3,6 +3,7 @@ import type {
   PublicHealthManualFacts, PublicHealthMetrics, PublicHealthRequest, PublicHealthResult,
   PublicHealthSection, PublicHealthSectionId,
 } from '../types';
+import { assertGeneratedExerciseContent, assertPatientFacingContent } from './publicHealthPatientText';
 
 export const CAPABILITY_TITLES = { health_prescription: '随访健康处方', weight_management: '智能减重助手' } as const;
 export const SCENE_TITLES = { hypertension_followup: '高血压随访', diabetes_followup: '糖尿病随访', elderly_exam: '老年人体检' } as const;
@@ -173,7 +174,9 @@ export function assertMetrics(value: PublicHealthMetrics): void {
 }
 export function assertSection(section: PublicHealthSection, capability: PublicHealthCapability): void {
   if (!keysWithin(section, ['id', 'title', 'content', 'options']) || !SECTION_IDS[capability].includes(section.id)
-    || !textWithin(section.title, 100) || !textWithin(section.content, 16000)) throw new Error('服务端返回的章节无效。');
+    || !textWithin(section.title, 100) || !(textWithin(section.content, 16000)
+      || capability === 'health_prescription' && section.content === '')) throw new Error('服务端返回的章节无效。');
+  if (section.content) assertPatientFacingContent(section.content);
   if (section.options !== undefined) {
     if (section.id !== 'meal_plan' || !Array.isArray(section.options) || section.options.length !== 3
       || section.options.some(option => !keysWithin(option, ['id', 'title', 'content'])
@@ -183,7 +186,9 @@ export function assertSection(section: PublicHealthSection, capability: PublicHe
     if (new Set(section.options.map(option => option.id)).size !== 3 || section.content !== section.options[0].content) {
       throw new Error('食谱选项重复或默认正文不一致。');
     }
+    section.options.forEach(option => assertPatientFacingContent(option.content));
   }
+  if (section.id === 'exercise_plan') assertGeneratedExerciseContent(section.content);
 }
 export function assertResult(result: PublicHealthResult, request: PublicHealthRequest): void {
   if (!result || result.schemaVersion !== 'public-health.v1' || !sameIdentity(result, request)
@@ -203,18 +208,29 @@ export function assertResult(result: PublicHealthResult, request: PublicHealthRe
     throw new Error('服务端结果的版本溯源或提示信息无效。');
   }
   result.sections.forEach(section => assertSection(section, request.capability));
+  if (!result.sections.some(section => section.content.trim())) throw new Error('本次未生成可提供给患者的处方内容，请核对资料后重新生成。');
   if (request.capability === 'weight_management') assertMetrics(result.metrics!);
   else if (result.metrics) throw new Error('健康处方结果包含不适用的指标。');
 }
-export function assertConfirmation(value: PublicHealthConfirmed, request: PublicHealthRequest): void {
-  if (!value || value.schemaVersion !== 'public-health.v1' || !sameIdentity(value, request)
+export function assertConfirmation(value: PublicHealthConfirmed, request?: PublicHealthRequest, options?: { skipPatientTextValidation: true }): void {
+  if (!value || value.schemaVersion !== 'public-health.v1' || request && !sameIdentity(value, request)
+    || !isUuid(value.requestId) || !isUuid(value.originRequestId) || !SECTION_IDS[value.capability] || !SCENE_TITLES[value.scene]
+    || !textWithin(value.patientId, 128) || !textWithin(value.businessRecordId, 128) || !textWithin(value.recordVersion, 128)
+    || !isZonedDate(value.snapshotAt)
     || !isUuid(value.generationId) || !isUuid(value.writebackRequestId) || !isZonedDate(value.confirmedAt)
     || !Array.isArray(value.items) || !value.items.length
     || new Set(value.items.map(item => item.targetFieldId)).size !== value.items.length) throw new Error('已确认正文与当前公卫任务不一致。');
+  if (!keysWithin(value, ['schemaVersion', ...IDENTITY_KEYS, 'generationId', 'writebackRequestId', 'items', 'confirmedAt'])) {
+    throw new Error('已确认正文包含不允许的附加字段。');
+  }
   for (const item of value.items) {
-    const target = request.writebackTargets.find(entry => entry.targetFieldId === item.targetFieldId);
-    if (!target || JSON.stringify(item.sourceSections) !== JSON.stringify(target.sourceSections)
+    const target = request?.writebackTargets.find(entry => entry.targetFieldId === item.targetFieldId);
+    if (request && (!target || JSON.stringify(item.sourceSections) !== JSON.stringify(target.sourceSections))
+      || !keysWithin(item, ['targetFieldId', 'sourceSections', 'value']) || !textWithin(item.targetFieldId, 128)
+      || !Array.isArray(item.sourceSections) || !item.sourceSections.length
+      || JSON.stringify(item.sourceSections) !== JSON.stringify(SECTION_IDS[value.capability].filter(id => item.sourceSections.includes(id)))
       || typeof item.value !== 'string' || !item.value.trim() || characterCount(item.value) > 64000) throw new Error('已确认正文超出 PHIS 允许的回写范围。');
+    if (!options?.skipPatientTextValidation) assertPatientFacingContent(item.value);
   }
 }
 export function buildConfirmation(request: PublicHealthRequest, result: PublicHealthResult, values: Partial<Record<PublicHealthSectionId, string>>, selected: PublicHealthSectionId[], writebackRequestId: string, confirmedAt: string): PublicHealthConfirmed {
@@ -223,6 +239,7 @@ export function buildConfirmation(request: PublicHealthRequest, result: PublicHe
     const valuesForTarget = target.sourceSections.map(id => {
       const value = values[id];
       if (!value?.trim() || characterCount(value) > 16000) throw new Error('选中章节为空或超出长度限制。');
+      assertPatientFacingContent(value);
       return target.sourceSections.length > 1 ? `${SECTION_TITLES[id]}\n${value}` : value;
     });
     return { targetFieldId: target.targetFieldId, sourceSections: [...target.sourceSections], value: valuesForTarget.join('\n\n') };

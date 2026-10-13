@@ -1645,3 +1645,6 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 - `lib/publicHealthPresentation.ts` 从当前请求纯派生展示资料：仅将与 weightProfile 引用、code、单位和数值一致的身高/体重列为“本次采用”，其余同类原始测量可展开核对；不按数组顺序或日期推断采用值。减重运动/饮食展示 profile 的当前值。事实面板始终从 request 派生，不另存展示快照，不删改原始 observations/lifestyle；补充后生成仍使用控制器的完整新请求。
 - 只有完整 completed 结果可首次编辑并确认。重建页面时若仅恢复已确认目标快照，正文与 sourceSections 先校验业务身份及允许范围；明确失败后可编辑这些目标正文并新建保存尝试，不伪造丢失的原始章节分割。启动恢复期间最多缓冲 16 条回执，快照恢复后仍经完整身份匹配应用。停止等待只停止本页消费，不声称取消服务端或停止计费。知识缺失明确阻断，不生成客户端占位医疗正文。
 - 冻结快照仅在等待回执时可沿用 `writebackRequestId` 重传；failed 为终态，重新保存必须新 ID。成功只来自匹配的 PHIS success 回执；超时保留等待身份并接受匹配迟到回执。版本冲突保留草稿，要求 PHIS 重新调入最新记录，不在客户端虚构新版本。
+
+
+公卫患者处方与医生提醒（2026-10-13）：`lib/publicHealthPatientText.ts` 统一患者正文与运动生成格式校验，生成/SSE与确认边界分别检查；`ui/PublicHealthDoctorNotes.vue` 只读展示既有 warnings。健康草稿的证据、风险分析及缺项说明由 renderer 发出医生回调，不进入 editable values；Controller、确认 Builder 和 Bridge.confirm 保护确认/恢复/重传，保留医生编辑与独立任务范围。

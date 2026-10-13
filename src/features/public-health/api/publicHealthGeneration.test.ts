@@ -30,6 +30,24 @@ describe('signed named public health SSE', () => {
     expect(() => validator.accept(frames[1])).not.toThrow();
     expect(onEvent).toHaveBeenCalledTimes(2);
   });
+  it('refuses internal doctor explanations in streamed patient content before notifying the page', () => {
+    const { request, frames } = streamFrames(), onEvent = vi.fn();
+    const validator = createPublicHealthStreamValidator(request, onEvent);
+    validator.accept(frames[0]);
+    const base = JSON.parse(frames[1].data); delete base.result;
+    const section = { id: 'lifestyle_guidance', title: '生活方式建议', content: '制定依据\n请医生核对资料。' };
+    expect(() => validator.accept({ ...frames[1], event: 'section', data: JSON.stringify({ ...base, section }) })).toThrow('内部说明');
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(() => validator.completed()).toThrow('中断');
+  });
+  it('rejects an authoritative result with internal explanations even when physician warnings are separately present', () => {
+    const { request, result, frames } = streamFrames();
+    result.sections[0].content = '检查计划\n证据：原始随访资料。';
+    result.warnings = [{ code: 'REVIEW', sectionId: 'check_plan', message: '证据：原始随访资料。' }];
+    const validator = createPublicHealthStreamValidator(request, () => undefined); validator.accept(frames[0]);
+    expect(() => validator.accept({ ...frames[1], data: JSON.stringify({ ...JSON.parse(frames[1].data), result }) })).toThrow('内部说明');
+    expect(() => validator.completed()).toThrow('中断');
+  });
   it('rejects other patients, old streams, missing terminal and failed knowledge', () => {
     const { request, frames } = streamFrames(); const validator = createPublicHealthStreamValidator(request, () => undefined);
     const wrong = JSON.parse(frames[0].data); wrong.patientId = 'other';
