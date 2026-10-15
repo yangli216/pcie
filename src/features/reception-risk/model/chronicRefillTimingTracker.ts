@@ -158,6 +158,7 @@ function formatChronicRefillTimingReport(
       amount(count('inventory_prompt_scoped') ?? count('inventory_prompt_full'), ' 项')
     } / ${amount(count('inventory_prompt_chars'), ' 字符')}`,
     `  历史依据：${amount(count('history_evidence_chars'), ' 字符')}｜待归类原始项：${amount(count('medication_scope_items'), ' 项')}｜合并后：${amount(count('medication_scope_groups'), ' 组')}`,
+    `  药品归类：通过 ${amount(count('medication_scope_accepted'), ' 项')}｜排除 ${amount(count('medication_scope_excluded'), ' 项')}｜最终历史基线 ${amount(count('historical_medications_final'), ' 项')}`,
     `  模型消息：${amount(count('llm_prompt_chars'), ' 字符')}`,
     '【分区到达：距点击确认】',
     ...rows

@@ -636,6 +636,80 @@ describe('generateChronicRefillRecord', () => {
     expect(prompt).not.toContain('不应传入全量目录');
   });
 
+  it('keeps every accepted historical medicine when the model recommends only one in a mixed visit', async () => {
+    const medicines = [
+      ['rx-gliclazide', 'med-gliclazide', '格列齐特缓释片'],
+      ['rx-amlodipine', 'med-amlodipine', '苯磺酸氨氯地平片'],
+      ['rx-acarbose', 'med-acarbose', '阿卡波糖片'],
+      ['rx-febuxostat', 'med-febuxostat', '非布司他片'],
+      ['rx-eye', 'med-eye', '左氧氟沙星滴眼液'],
+      ['rx-skin', 'med-skin', '盐酸特比萘芬乳膏'],
+    ] as const;
+    vi.mocked(loadAvailableMedicineInventoryContext).mockResolvedValue({
+      items: medicines.map(([, productId, productName]) => ({
+        productId,
+        productName,
+        spec: '测试规格',
+        unit: '盒',
+        availableQuantity: 10,
+        storeIds: ['1760'],
+        storeNames: ['西药房'],
+      })),
+      promptContext: '不应传入全量目录',
+      pharmacyCount: 1,
+      staleStoreCount: 0,
+    });
+    const candidate = assessChronicRefillCandidate({
+      patientId: 'patient-1',
+      visits: [{
+        visitId: 'mixed-five-diagnoses',
+        visitTime: Date.parse('2026-06-01T08:00:00+08:00'),
+        diagnoses: ['原发性高血压', '2型糖尿病', '痛风', '结膜炎', '脚癣'],
+        medicationOrders: medicines.map(([orderId, productId, name]) => ({
+          orderId,
+          productId,
+          name,
+          spec: '测试规格',
+        })),
+      }],
+    })!;
+    const scoped = scopeChronicRefillCandidate(candidate, ['高血压', '糖尿病'])!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk('{"event":"record_core","data":{}}\n');
+      onChunk('{"event":"medication_scope","data":{"accepted":[["M1","C2","h"],["M2","C1","h"],["M3","C2","m"]]}}\n');
+      onChunk('{"event":"review_plan","data":{"patches":[]}}\n');
+      onChunk('{"event":"recommended_medicines","data":[{"name":"苯磺酸氨氯地平片","reason":"用于控制血压"}]}\n');
+      onChunk('{"event":"record_extra","data":{}}\n{"event":"done","data":{}}');
+    });
+    const timing = {
+      mark: vi.fn(), span: vi.fn(() => vi.fn()), measure: vi.fn(), finish: vi.fn(),
+    };
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'current-visit' },
+    })!;
+
+    const result = await generateChronicRefillRecord(patient, scoped, { timing });
+
+    expect(result.currentMedicationHistory).toBe('格列齐特缓释片、苯磺酸氨氯地平片、阿卡波糖片');
+    expect(result.treatments.map((item) => item.name)).toEqual([
+      '苯磺酸氨氯地平片',
+      '格列齐特缓释片',
+      '阿卡波糖片',
+    ]);
+    expect(result.treatments[0]).toMatchObject({
+      reason: '用于控制血压',
+      sourceType: 'explicit',
+    });
+    expect(result.treatments.map((item) => item.name)).not.toEqual(expect.arrayContaining([
+      '非布司他片',
+      '左氧氟沙星滴眼液',
+      '盐酸特比萘芬乳膏',
+    ]));
+    expect(timing.mark).toHaveBeenCalledWith('medication_scope_accepted', 3);
+    expect(timing.mark).toHaveBeenCalledWith('medication_scope_excluded', 3);
+    expect(timing.mark).toHaveBeenCalledWith('historical_medications_final', 3);
+  });
+
   it('keeps ambiguous historical medicines excluded when medication_scope is missing', async () => {
     const candidate = assessChronicRefillCandidate({
       patientId: 'patient-1',

@@ -50,6 +50,7 @@ import {
   buildChronicRefillMedicationScopePromptContext,
   buildCompactChronicRefillHistoryEvidence,
 } from '../lib/chronicRefillPromptContext';
+import { getAutoIncludedChronicRefillMedicationAttributions } from '../lib/chronicRefillMedicationAttribution';
 import {
   chronicRefillTimingTracker,
   type ChronicRefillTimingSession,
@@ -180,6 +181,27 @@ function buildHistoricalMedicationNames(candidate: ChronicRefillCandidate): stri
   ));
 }
 
+function medicationComparisonKey(value: ChronicRefillMedicineInput): string {
+  const name = typeof value === 'string' ? value : value.name;
+  return standardizeMedicineName(name).replace(/\s+/gu, '').toLowerCase();
+}
+
+function mergeHistoricalMedicationBaseline(
+  recommendations: ChronicRefillMedicineInput[],
+  candidate: ChronicRefillCandidate,
+): ChronicRefillMedicineInput[] {
+  const represented = new Set(
+    recommendations.map(medicationComparisonKey).filter(Boolean),
+  );
+  const missingHistoricalMedications = candidate.medications.filter((medication) => {
+    const key = medicationComparisonKey(medication);
+    if (!key || represented.has(key)) return false;
+    represented.add(key);
+    return true;
+  });
+  return [...recommendations, ...missingHistoricalMedications];
+}
+
 function isMedicationRecommendationInScope(
   recommendation: ChronicRefillMedicineInput,
   candidate: ChronicRefillCandidate,
@@ -281,12 +303,16 @@ function normalizeDraft(
     value.healthEducation,
     'precautions',
   ).text;
-  const recommendedMedicines = Array.isArray(value.recommendedMedicines)
+  const modelRecommendedMedicines = Array.isArray(value.recommendedMedicines)
     ? value.recommendedMedicines
       .map((item) => normalizeMedicineRecommendation(item, inventoryByRef))
       .filter((item): item is ChronicRefillMedicineInput => Boolean(item))
       .filter((item) => isMedicationRecommendationInScope(item, candidate))
     : [];
+  const recommendedMedicines = mergeHistoricalMedicationBaseline(
+    modelRecommendedMedicines,
+    candidate,
+  );
   return {
     physicalExamSuggestions: normalizeClinicalRecordFactSuggestions({ items: value.physicalExamSuggestions })
       .filter((item) => item.field === 'physicalExam')
@@ -306,9 +332,7 @@ function normalizeDraft(
       healthEducation,
       fallback.healthEducation,
     ),
-    recommendedMedicines: recommendedMedicines.length > 0
-      ? recommendedMedicines
-      : fallback.recommendedMedicines,
+    recommendedMedicines,
     reviewPlan: normalizeChronicRefillConfirmationPlan(value.reviewPlan, candidate),
   };
 }
@@ -527,6 +551,15 @@ export async function generateChronicRefillRecord(
         baseCandidate,
         medicationScopeContext.decode(event.data),
       );
+      const accepted = getAutoIncludedChronicRefillMedicationAttributions(
+        resolvedCandidate.medicationAttributions || [],
+        new Set(resolvedCandidate.diagnosisGroups),
+      );
+      timing?.mark('medication_scope_accepted', accepted.length);
+      timing?.mark(
+        'medication_scope_excluded',
+        Math.max(0, (resolvedCandidate.medicationAttributions?.length || 0) - accepted.length),
+      );
     }
     if (event.event !== 'done') emitStreamPartial();
   });
@@ -670,6 +703,7 @@ export async function generateChronicRefillRecord(
     },
   );
   endFinalTreatments?.(treatments.length);
+  timing?.mark('historical_medications_final', resolvedCandidate.medications.length);
 
   return buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, treatments);
 }

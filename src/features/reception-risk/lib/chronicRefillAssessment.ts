@@ -254,8 +254,9 @@ function collectMedicationEvidence(visits: HisVisitRecord[]): {
   visits.forEach((visit) => {
     (visit.medicationOrders || []).forEach((medication) => {
       const normalized = normalizeMedicationName(medication.name);
-      if (!normalized || medicationOrders.has(normalized)) return;
-      medicationOrders.set(normalized, medication);
+      if (!normalized) return;
+      if (!medications.has(normalized)) medications.set(normalized, medication.name.trim());
+      if (!medicationOrders.has(normalized)) medicationOrders.set(normalized, medication);
     });
     (visit.medications || []).forEach((medication) => {
       const normalized = normalizeMedicationName(medication);
@@ -264,9 +265,9 @@ function collectMedicationEvidence(visits: HisVisitRecord[]): {
     });
   });
 
-  const normalizedOrders = Array.from(medicationOrders.values()).slice(0, 8);
+  const normalizedOrders = Array.from(medicationOrders.values());
   return {
-    medications: Array.from(medications.values()).slice(0, 8),
+    medications: Array.from(medications.values()),
     medicationOrders: normalizedOrders.length > 0 ? normalizedOrders : undefined,
   };
 }

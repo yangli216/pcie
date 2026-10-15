@@ -75,6 +75,39 @@ describe('assessChronicRefillCandidate', () => {
     ]);
   });
 
+  it('keeps every unique historical medicine instead of truncating the candidate at eight', () => {
+    const now = new Date('2026-06-25T08:00:00+08:00').getTime();
+    const medications = Array.from({ length: 10 }, (_, index) => `慢病药品${index + 1}`);
+
+    const result = assessChronicRefillCandidate(history([{
+      visitTime: now - 7 * DAY,
+      diagnoses: ['高血压'],
+      medications,
+    }]));
+
+    expect(result?.medications).toEqual(medications);
+    expect(result?.medications).toHaveLength(10);
+  });
+
+  it('uses structured prescription names when the visit has no medication text list', () => {
+    const now = new Date('2026-06-25T08:00:00+08:00').getTime();
+
+    const result = assessChronicRefillCandidate(history([{
+      visitTime: now - 7 * DAY,
+      diagnoses: ['2型糖尿病'],
+      medicationOrders: [
+        { orderId: 'metformin', name: '盐酸二甲双胍片' },
+        { orderId: 'acarbose', name: '阿卡波糖片' },
+      ],
+    }]));
+
+    expect(result?.medications).toEqual(['盐酸二甲双胍片', '阿卡波糖片']);
+    expect(result?.medicationOrders).toEqual([
+      expect.objectContaining({ orderId: 'metformin' }),
+      expect.objectContaining({ orderId: 'acarbose' }),
+    ]);
+  });
+
   it('scopes a multi-condition candidate to the chronic disease confirmed by the doctor', () => {
     const now = new Date('2026-06-25T08:00:00+08:00').getTime();
     const candidate = assessChronicRefillCandidate(history([
