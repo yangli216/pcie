@@ -1,5 +1,19 @@
 # CODE_MAP.md
 
+## 药品卡片说明书浮窗
+
+- `features/knowledge/index.ts`：公开 `DrugInstructionPopover`，供治疗卡片引用。
+- `features/knowledge/ui/DrugInstructionPopover.vue`：按商品 ID 惰性加载、浮窗定位和焦点/关闭交互，用法用量优先及完整原文阅读；复用已有详情 controller 和章节 parser。
+- `features/knowledge/lib/drugInstructionPresentation.ts`：按明确患者年龄决定是否将非空儿童用药专章排在标准用法用量前，保留原文及药品年龄限制。
+- `features/consultation-result/ui/TreatmentRecommendationCard.vue`：`summary-action` 插槽放在用药行末；`TreatmentRecommendationSection.vue` 使用已绑定商品 ID 接入上述浮窗，不改变选药或回写。
+
+## 药品说明书
+
+- `features/knowledge/api/drugInstructions.ts`：签名检索/详情 DTO 与接口。
+- `features/knowledge/model/useDrugInstructionsController.ts`：分页、详情和请求生命周期。
+- `features/knowledge/lib/drugInstructionSections.ts`：保留原文的章节识别。
+- `features/knowledge/ui/DrugInstructionsPanel.vue`：知识库中药品说明书检索和正文。
+
 ## 机构知识检索
 
 - features/knowledge/api/knowledgeRetrieval.ts：签名集合/检索请求与双端DTO。

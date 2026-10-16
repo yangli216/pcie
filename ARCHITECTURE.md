@@ -1,5 +1,17 @@
 # 架构文档 (ARCHITECTURE.md)
 
+## 治疗药品卡片说明书浮窗（2026-10-15）
+
+`TreatmentRecommendationCard` 提供用法用量行的 `summary-action` 插槽，`TreatmentRecommendationSection` 在药品行接入 knowledge 公开导出的 `DrugInstructionPopover`。商品 ID 复用 `getMatchedOrderServiceId` 的已绑定目录事实源（优先 raw.idMedPro，随后已匹配商品 ID），不得以 AI 推荐名、候选项或历史同名药猜测 ID；未绑定商品 ID 时入口禁用。该跨功能组件通过 `features/knowledge/index.ts` 公开。
+
+浮窗复用已有签名详情接口、详情 controller 和保留原文的章节 parser；点击时才加载，用法用量章节优先显示，完整 summary 可展开。未单列该章节时明确提示并直接显示原文，不推导剂量。关闭、药品 ID 改变或卸载使进行中的请求失效。浮窗 Teleport 至 body、按按钮位置和视口约束定位，支持外部点击、Escape、关闭后焦点返回及滚动/缩放定位；不创建 Tauri 窗口、不改选择、处方字段或回写状态。
+
+共享结果页与独立治疗方案经 `TreatmentRecommendationSection` 向浮窗传入当前患者的年龄文本。`lib/drugInstructionPresentation.ts` 仅在有明确岁/月/日单位且年龄未满 18 岁时，将有正文的独立【儿童用药】章节原文排在标准用法用量上方；18 岁是阅读排序门槛，不代表药品适用年龄或剂量判断。保留该章节中的禁用、尚未明确、交叉引用等全部文字，不按年龄再次截取。年龄不明、无专章或专章为空时维持原展示；完整说明书顺序不变，不增加请求，不处理其他特殊人群。
+
+## 药品说明书（2026-10-14）
+
+知识库工作台增加独立“药品说明书”入口，复用 `features/knowledge`：`api/drugInstructions.ts` 经 regionalClient 签名访问 PCIE Server 的 MySQL 视图查询接口；`model/useDrugInstructionsController.ts` 管理检索、分页、详情、错误与迟到结果隔离；`ui/DrugInstructionsPanel.vue` 显示名称/规格/厂家候选与完整 summary。`lib/drugInstructionSections.ts` 仅按原文【章节】组织阅读，不删改医学内容；渲染使用文本插值、保留换行，禁止 v-html。客户端不持有 MySQL 凭据、不自动匹配为处方、不修改 HIS 回写。
+
 ## 机构知识检索工作台（2026-09-30）
 
 现有知识库按钮通过useNavigation.openKnowledgeBase进入features/knowledge/ui/KnowledgeBasePanel；App仅编排入口。InstitutionKnowledgePanel使用useInstitutionKnowledgeController管理集合、检索、错误与迟到结果，KnowledgeSearchForm与KnowledgeEvidenceList只展示和发出事件；api/knowledgeRetrieval.ts统一经regionalClient签名消费服务端集合/检索。另提供PMPHAI原有外部页面入口，不持有第三方Key、不直接调用WeKnora。原文按文本显示，来源和版本由服务端批准清单提供；本轮不自动注入ChatPanel/公卫。

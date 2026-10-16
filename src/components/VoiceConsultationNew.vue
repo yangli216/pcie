@@ -3909,6 +3909,7 @@ useChronicRefillTimingPresentation(() => ({
                   v-if="section.items.length > 0"
                   :data-clinical-section="section.type"
                   :section="section"
+                  :patient-age-text="patientAge"
                   :selected-count="section.items.filter((item) => item.selected).length"
                   :total-count="section.items.length"
                   :requires-manual-match-before-select="requiresManualMatchBeforeSelect"

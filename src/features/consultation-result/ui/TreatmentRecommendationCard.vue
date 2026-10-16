@@ -116,16 +116,14 @@
             </div>
           </div>
 
-          <div v-if="purposeDisplay || inlineSummary || originalName || usageToken" class="worklist-bottom-row">
+          <div v-if="purposeDisplay || inlineSummary || originalName || usageToken || $slots['summary-action']" class="worklist-bottom-row">
             <div class="worklist-secondary-row">
             <div v-if="purposeDisplay" class="auxiliary-purpose-line worklist-purpose-line">
               <span class="auxiliary-purpose-text">{{ purposeDisplay }}</span>
             </div>
-              <div
-                v-if="inlineSummary"
-                class="medicine-inline-summary worklist-inline-text"
-              >
-                {{ inlineSummary }}
+              <div v-if="inlineSummary || $slots['summary-action']" class="medicine-usage-row">
+                <div v-if="inlineSummary" class="medicine-inline-summary worklist-inline-text">{{ inlineSummary }}</div>
+                <slot name="summary-action" />
               </div>
               <div v-if="originalName" class="manual-match-origin-note worklist-inline-text worklist-inline-origin">
                 {{ originalNameLabel }}：{{ originalName }}
@@ -264,11 +262,9 @@
             <div v-if="purposeDisplay" class="auxiliary-purpose-line">
               <span class="auxiliary-purpose-text">{{ purposeDisplay }}</span>
             </div>
-              <div
-                v-if="inlineSummary"
-                class="medicine-inline-summary"
-              >
-                {{ inlineSummary }}
+              <div v-if="inlineSummary || $slots['summary-action']" class="medicine-usage-row">
+                <div v-if="inlineSummary" class="medicine-inline-summary">{{ inlineSummary }}</div>
+                <slot name="summary-action" />
               </div>
               <div v-if="originalName" class="manual-match-origin-note">
                 {{ originalNameLabel }}：{{ originalName }}
@@ -1105,6 +1101,23 @@ function handleCardToggle(event: MouseEvent): void {
   margin-top: 0;
   white-space: normal;
   color: #475569;
+}
+
+.medicine-usage-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.medicine-usage-row .medicine-inline-summary {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .default-card-summary .manual-match-origin-note {

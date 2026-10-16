@@ -14,6 +14,11 @@ export default defineConfig({
     { find: '@services/regionalClient', replacement: `${root}/fake-regional.ts` },
     { find: '@services/pmphai', replacement: `${root}/fake-pmphai.ts` },
     { find: '@features', replacement: `${sourceRoot}/features` },
+    { find: '@shared', replacement: `${sourceRoot}/shared` },
+    { find: '@entities', replacement: `${sourceRoot}/entities` },
+    { find: '@app', replacement: `${sourceRoot}/app` },
+    { find: '@services', replacement: `${sourceRoot}/services` },
+    { find: '@', replacement: sourceRoot },
   ] },
   server: { host: '127.0.0.1', port: 5189, strictPort: true, fs: { allow: [projectRoot] } },
 });

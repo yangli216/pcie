@@ -1,4 +1,5 @@
 export { default as KnowledgeBasePanel } from './ui/KnowledgeBasePanel.vue';
+export { default as DrugInstructionPopover } from './ui/DrugInstructionPopover.vue';
 export { default as KnowledgeDetailModal } from './ui/KnowledgeDetailModal.vue';
 export { default as KnowledgePanel } from './ui/KnowledgePanel.vue';
 export { default as KnowledgeResultItem } from './ui/KnowledgeResultItem.vue';
