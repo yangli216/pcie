@@ -179,6 +179,129 @@ describe('useOutpatientScenarioRouter', () => {
     expect(session.executingOpportunity.value).toBeNull();
   });
 
+  it('routes an explicit multi-disease refill transcript into the existing single chronic stream', async () => {
+    const currentPatient = ref(buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'visit-1', name: '张建国' },
+    }));
+    const session = useReceptionSessionController(currentPatient);
+    session.replaceOpportunity('chronic-refill', {
+      type: 'chronic-refill',
+      candidate: {
+        diagnosis: '原发性高血压',
+        diagnoses: ['原发性高血压', '前列腺增生'],
+        diagnosisGroups: ['高血压', '前列腺增生'],
+        medications: [],
+        chronicVisitCount: 1,
+        chronicVisits: [],
+        diagnosisEvidenceText: '历史慢病诊断',
+        medicationEvidenceText: '暂无历史用药',
+        evidenceText: '历史慢病候选',
+        conditions: [
+          {
+            id: '高血压',
+            diagnosis: '原发性高血压',
+            diagnosisGroup: '高血压',
+            hasMedicationEvidence: false,
+          },
+          {
+            id: '前列腺增生',
+            diagnosis: '前列腺增生',
+            diagnosisGroup: '前列腺增生',
+            hasMedicationEvidence: false,
+          },
+        ],
+      },
+    });
+    const generatedResult = { channel: 'chronic-refill' } as any;
+    const generateChronicRefillRecord = vi.fn(async () => generatedResult);
+    const startVoiceInteraction = vi.fn();
+    const router = useOutpatientScenarioRouter({
+      currentPatient,
+      session,
+      hasCachedVoiceResult: () => false,
+      applyFollowUpContext: vi.fn(),
+      generateChronicRefillRecord,
+      beginGeneratedClinicalResult: vi.fn(async () => 'voice-refill-session'),
+      updateGeneratedClinicalResultProgress: vi.fn(() => true),
+      updateGeneratedClinicalResultPartial: vi.fn(() => true),
+      completeGeneratedClinicalResult: vi.fn(() => true),
+      failGeneratedClinicalResult: vi.fn(() => true),
+      resetVoiceSessionState: vi.fn(),
+      openOutpatientFollowUp: vi.fn(),
+      openReportInterpretation: vi.fn(),
+      startVoiceInteraction,
+      showToast: vi.fn(),
+      trackError: vi.fn(),
+    });
+
+    await expect(router.routeVoiceTranscript(
+      '原发性高血压、前列腺增生今天来复诊配药',
+    )).resolves.toBe(true);
+
+    expect(generateChronicRefillRecord).toHaveBeenCalledWith(
+      currentPatient.value,
+      expect.objectContaining({
+        diagnoses: ['原发性高血压', '前列腺增生'],
+        diagnosisGroups: ['高血压', '前列腺增生'],
+      }),
+      expect.objectContaining({ entrySource: 'voice-transcript' }),
+    );
+    expect(startVoiceInteraction).not.toHaveBeenCalled();
+  });
+
+  it('returns ambiguous multi-disease refill speech to the existing scope selector without a model call', async () => {
+    const currentPatient = ref(buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'visit-1', name: '张建国' },
+    }));
+    const session = useReceptionSessionController(currentPatient);
+    session.replaceOpportunity('chronic-refill', {
+      type: 'chronic-refill',
+      candidate: {
+        diagnosis: '原发性高血压',
+        diagnoses: ['原发性高血压', '前列腺增生'],
+        diagnosisGroups: ['高血压', '前列腺增生'],
+        medications: [],
+        chronicVisitCount: 1,
+        chronicVisits: [],
+        diagnosisEvidenceText: '历史慢病诊断',
+        medicationEvidenceText: '暂无历史用药',
+        evidenceText: '历史慢病候选',
+        conditions: [
+          { id: '高血压', diagnosis: '原发性高血压', diagnosisGroup: '高血压', hasMedicationEvidence: false },
+          { id: '前列腺增生', diagnosis: '前列腺增生', diagnosisGroup: '前列腺增生', hasMedicationEvidence: false },
+        ],
+      },
+    });
+    const generateChronicRefillRecord = vi.fn();
+    const requestChronicRefillScopeSelection = vi.fn(async () => undefined);
+    const resetVoiceSessionState = vi.fn();
+    const router = useOutpatientScenarioRouter({
+      currentPatient,
+      session,
+      hasCachedVoiceResult: () => false,
+      applyFollowUpContext: vi.fn(),
+      generateChronicRefillRecord,
+      beginGeneratedClinicalResult: vi.fn(),
+      updateGeneratedClinicalResultProgress: vi.fn(),
+      updateGeneratedClinicalResultPartial: vi.fn(),
+      completeGeneratedClinicalResult: vi.fn(),
+      failGeneratedClinicalResult: vi.fn(),
+      resetVoiceSessionState,
+      openOutpatientFollowUp: vi.fn(),
+      openReportInterpretation: vi.fn(),
+      startVoiceInteraction: vi.fn(),
+      requestChronicRefillScopeSelection,
+      showToast: vi.fn(),
+      trackError: vi.fn(),
+    });
+
+    await expect(router.routeVoiceTranscript('今天来复诊配药')).resolves.toBe(true);
+
+    expect(requestChronicRefillScopeSelection).toHaveBeenCalledOnce();
+    expect(resetVoiceSessionState).toHaveBeenCalledOnce();
+    expect(generateChronicRefillRecord).not.toHaveBeenCalled();
+  });
+
   it('routes voice entry to report follow-up when HIS context is available', async () => {
     const currentPatient = ref(buildPatientContext({
       payload: {

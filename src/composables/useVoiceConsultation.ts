@@ -67,6 +67,8 @@ export interface VoiceConsultationOptions {
   showToast: (msg: string, type?: 'success' | 'error' | 'info', duration?: number) => void;
   /** 打开共享语音结果页 */
   openVoiceConsultation: () => Promise<void>;
+  /** 普通语音模型启动前的门诊场景路由；返回 true 表示转写已由其他场景消费。 */
+  routeVoiceTranscript?: (transcript: string) => Promise<boolean>;
   /** 工作模式 API */
   workMode: {
     exitWork: (sessionStatus?: 'completed' | 'cancelled' | 'error') => Promise<void>;
@@ -326,6 +328,11 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     let timing: ReturnType<typeof voiceTimingTracker.start> | undefined;
     try {
       const normalizedText = transcribedText.trim();
+      if (await options.routeVoiceTranscript?.(normalizedText)) {
+        return;
+      }
+      if (currentToken !== processingToken) return;
+
       const consultationId = resolveVoiceConsultationId(currentPatient.value);
       consultationRoundId.value = crypto.randomUUID();
       const roundId = consultationRoundId.value;

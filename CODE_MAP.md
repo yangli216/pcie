@@ -54,6 +54,8 @@ Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-taur
 
 普通语音路由稳定性：`features/voice-consultation/lib/voiceRecommendationPlan.ts`（模型 mode 到客户端固定执行集合的策略、协议集合归一与决策摘要）+ `model/voiceRoutingDiagnostics.ts`（请求指纹、纯文本决策日志去重）；普通语音识别/修复及药品、检查、检验下游生成通过 `llm.ts` 显式发送低温度，其他场景默认参数不变。
 
+语音复诊配药分流：`features/reception/lib/voiceChronicRefillRouting.ts` 在普通语音模型启动前，以转写文本和当前 `ChronicRefillCandidate` 纯规则判定继续普通语音、直接确认已明确慢病范围或返回现有范围选择器；`features/reception/model/useOutpatientScenarioRouter.ts` 执行患者 / 机会隔离并复用既有 `chronic-refill` 单次生成流，`useVoiceConsultation.ts` 只调用注入的场景路由，不承载慢病规则。
+
 语音流式输出顺序：`features/voice-consultation/lib/voiceIntentStreamProtocol.ts` 统一诊断/路由优先、候选随后到达的当前请求协议，并对托管提示词的完整 NDJSON 示例只重排原行；运行时协议同时固定普通语音西医诊断推荐使用国家医保 ICD-10 2.0 目录口径，确保托管 Prompt override 不能绕过；`prompts.ts` 与 PCIE Server 内置提示词同步 v1.5。
 
 语音耗时观测：`features/voice-consultation/model/voiceTimingTracker.ts`（轮次隔离、阶段/span、控制台报告）+ `useVoiceTimingPresentation.ts`（DOM 更新与初始结果就绪观测）；录音确认、语音 controller、意图识别和结果页只接入探针，不修改临床流程。

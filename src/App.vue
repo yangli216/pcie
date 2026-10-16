@@ -395,11 +395,15 @@ async function completeOutpatientEmrAnalysis(): Promise<void> {
 }
 
 // 初始化语音问诊 composable
+let routeVoiceTranscriptScenario: ((transcript: string) => Promise<boolean>) | null = null;
 const voiceConsultation = useVoiceConsultation({
   currentPatient,
   patientMemoryBrief,
   showToast,
   openVoiceConsultation,
+  routeVoiceTranscript: (transcript) => (
+    routeVoiceTranscriptScenario?.(transcript) || Promise.resolve(false)
+  ),
   workMode: { exitWork },
 });
 
@@ -654,6 +658,7 @@ const handleBlur = () => { isFocused.value = false; };
 
 // 关闭风险提示界面
 const closeRiskAlert = async () => {
+  chronicRefillScopeSelecting.value = false;
   await exitWork();
 };
 
@@ -724,9 +729,14 @@ const eventListeners = useEventListeners({
     new Blob([], { type: 'audio/wav' }),
     transcript,
   ),
+  requestChronicRefillScopeSelection: async () => {
+    chronicRefillScopeSelecting.value = true;
+    await openReceptionCapsule(getCurrentReceptionWindowSize());
+  },
   exiting,
   resizeTimeoutRef,
 });
+routeVoiceTranscriptScenario = eventListeners.routeVoiceTranscript;
 
 async function applyForceUpdateWindowState(state: ForceUpdateState): Promise<void> {
   const wasRequired = forceUpdateState.value.required;
@@ -1063,6 +1073,7 @@ const handleExitApp = async (e: MouseEvent) => {
             :analyzing="isRiskAnalyzing"
             :chronic-refill-candidate="chronicRefillCandidate"
             :chronic-refill-generating="chronicRefillGenerating"
+            :chronic-scope-selecting="chronicRefillScopeSelecting"
             :outpatient-follow-up-context="outpatientFollowUpContext"
             :report-interpretation-visits="reportInterpretationVisits"
             :report-assistant-opening="reportAssistantOpening"

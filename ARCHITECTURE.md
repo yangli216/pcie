@@ -1245,6 +1245,11 @@ RealtimeSpeechService (优先 DashScope，可降级 OpenAI 兼容转写)
     ↓
 voiceConsultation.handleVoiceStop() (停止录音)
     ↓
+voiceChronicRefillRouting.ts（转写文本 + 当前接诊慢病候选的确定性场景判定）
+    ├── 明确且安全的复诊配药范围：useOutpatientScenarioRouter 直接复用 chronic-refill 单次流
+    ├── 多慢病但未明确范围：返回接诊胶囊并展开现有范围选择器，不启动模型
+    └── 报告回诊 / 新发症状 / 急症 / 非续方语义：继续普通语音链路
+    ↓
 llm.ts (调用 LLM API，生成结构化病历)
     ↓
 JSON 解析验证 (useVoiceConsultation.ts)
@@ -1257,6 +1262,8 @@ Tauri Command: complete_consultation（resultType=record-confirmed）
     ↓
 HIS 系统（通过 WebSocket /api/consultation/events/ws 获取）
 ```
+
+语音复诊分流不读取或改写普通语音结果缓存，不新增模型调用。`features/reception/lib/voiceChronicRefillRouting.ts` 是无副作用 Strategy，只返回继续普通语音、直接确认慢病范围或请求范围选择三类决策；`useOutpatientScenarioRouter.ts` 负责校验当前患者 / 当前机会、打开范围选择器或调用既有 `confirmChronicRefill`。直接命中的语音复诊仍由 `generateChronicRefillRecord` 按 `record_core → medication_scope → review_plan → recommended_medicines → record_extra → done` 单次流生成，并继续经过患者锚点、机会身份和生成 session 隔离。App 仅注入路由回调与窗口编排，不承载疾病、关键词或范围规则。
 
 ---
 

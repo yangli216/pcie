@@ -21,6 +21,9 @@ import type {
   OutpatientVoiceEntryDecision,
   ReceptionOpportunity,
 } from '../types';
+import { resolveVoiceChronicRefillRoute } from '../lib/voiceChronicRefillRouting';
+
+type ChronicRefillEntrySource = 'reception-capsule' | 'voice-transcript';
 
 interface ResolveVoiceEntryOptions {
   hasCachedResult: boolean;
@@ -69,6 +72,7 @@ export interface OutpatientScenarioRouterOptions {
   openOutpatientFollowUp: () => Promise<void>;
   openReportInterpretation: () => Promise<void>;
   startVoiceInteraction: (options?: { skipCacheRestore?: boolean }) => Promise<void>;
+  requestChronicRefillScopeSelection?: () => Promise<void>;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   trackError: (name: string, error: unknown) => void;
 }
@@ -90,6 +94,7 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
     openOutpatientFollowUp,
     openReportInterpretation,
     startVoiceInteraction,
+    requestChronicRefillScopeSelection,
     showToast,
     trackError,
   } = options;
@@ -104,6 +109,7 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
 
   async function confirmChronicRefill(
     selection: ChronicRefillSelection | string[] = [],
+    entrySource: ChronicRefillEntrySource = 'reception-capsule',
   ): Promise<void> {
     const patient = currentPatient.value;
     const opportunity = session.getOpportunity('chronic-refill');
@@ -144,6 +150,7 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
       const result = await generateChronicRefillRecord(patient, scopedCandidate, {
         sessionId: generationSessionId,
         timing,
+        entrySource,
         onProgress: (stage) => {
           if (!isCurrentOpportunity(opportunity, patientAnchorId)) return;
           updateGeneratedClinicalResultProgress(generationSessionId, {
@@ -181,6 +188,44 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
         session.setExecutingOpportunity(null);
       }
     }
+  }
+
+  async function routeVoiceTranscript(transcript: string): Promise<boolean> {
+    const opportunity = session.getOpportunity('chronic-refill');
+    if (opportunity?.type !== 'chronic-refill') return false;
+
+    const decision = resolveVoiceChronicRefillRoute(transcript, opportunity.candidate);
+    console.info(
+      `[VoiceScenario] route=${decision.type} reason=${decision.reason}`
+      + ` candidateCount=${getChronicRefillConditionOptions(opportunity.candidate).length}`
+      + ` scopeCount=${decision.type === 'confirm-chronic-refill' ? decision.conditionIds.length : 0}`,
+    );
+    if (decision.type === 'continue-ordinary-voice') return false;
+
+    if (session.executingOpportunity.value) {
+      showToast('当前复诊任务正在处理中，请稍候', 'info');
+      return true;
+    }
+
+    if (decision.type === 'select-chronic-refill-scope') {
+      if (!requestChronicRefillScopeSelection) return false;
+      try {
+        await requestChronicRefillScopeSelection();
+        resetVoiceSessionState();
+        showToast('请确认本次需要续方的慢病范围', 'info');
+        return true;
+      } catch (error) {
+        trackError('open_voice_chronic_refill_scope_failed', error);
+        return false;
+      }
+    }
+
+    chronicRefillTimingTracker.confirm();
+    await confirmChronicRefill(
+      { conditionIds: decision.conditionIds },
+      'voice-transcript',
+    );
+    return true;
   }
 
   async function confirmFollowUp(assessment?: ReportFollowUpAssessment): Promise<void> {
@@ -290,6 +335,7 @@ export function useOutpatientScenarioRouter(options: OutpatientScenarioRouterOpt
     confirmFollowUp,
     confirmReportAssistant,
     openVoiceEntry,
+    routeVoiceTranscript,
   };
 }
 

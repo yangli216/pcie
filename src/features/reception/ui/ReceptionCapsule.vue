@@ -157,6 +157,7 @@ const props = defineProps<{
   analyzing?: boolean;
   chronicRefillCandidate?: ChronicRefillCandidate | null;
   chronicRefillGenerating?: boolean;
+  chronicScopeSelecting?: boolean;
   outpatientFollowUpContext?: HisOutpatientFollowUpContext | null;
   reportInterpretationVisits?: HisVisitRecord[];
   reportAssistantOpening?: boolean;
@@ -174,7 +175,6 @@ const emit = defineEmits<{
 }>();
 
 const expanded = ref(false);
-const chronicScopeSelecting = ref(false);
 const chronicConditionOptions = computed(() => (
   props.chronicRefillCandidate
     ? getChronicRefillConditionOptions(props.chronicRefillCandidate)
@@ -245,13 +245,11 @@ watch(() => props.risks, (r) => {
 
 watch(
   chronicRefillCandidateKey,
-  () => {
-    if (chronicScopeSelecting.value) {
+  (candidateKey, previousCandidateKey) => {
+    if (previousCandidateKey && candidateKey !== previousCandidateKey && props.chronicScopeSelecting) {
       emit('chronic-scope-selecting', false);
     }
-    chronicScopeSelecting.value = false;
   },
-  { immediate: true },
 );
 
 function toggle() {
@@ -271,8 +269,7 @@ function confirmChronicRefill() {
     medicationCount: props.chronicRefillCandidate?.medications.length,
   });
   if (chronicConditionOptions.value.length > 1) {
-    if (!chronicScopeSelecting.value) {
-      chronicScopeSelecting.value = true;
+    if (!props.chronicScopeSelecting) {
       emit('chronic-scope-selecting', true);
     }
     return;
@@ -285,13 +282,11 @@ function confirmChronicRefill() {
 }
 
 function closeChronicScope(): void {
-  chronicScopeSelecting.value = false;
   emit('chronic-scope-selecting', false);
 }
 
 function submitChronicRefill(selection: ChronicRefillSelection): void {
   chronicRefillTimingTracker.confirm();
-  chronicScopeSelecting.value = false;
   emit('chronic-scope-selecting', false);
   emit('confirm-chronic-refill', selection);
 }

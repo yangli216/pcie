@@ -147,6 +147,8 @@ export interface EventListenersOptions {
   getVoiceOutpatientEmrRequestId?: () => string | null;
   /** 把已校验的 debug 模拟转写交给真实语音停止处理链 */
   simulateVoiceTranscript?: (transcript: string) => Promise<void>;
+  /** 从语音采集返回接诊胶囊并展开慢病范围选择。 */
+  requestChronicRefillScopeSelection?: () => Promise<void>;
   /** 退出标志（来自 workMode） */
   exiting: Ref<boolean>;
   /** 窗口大小变化防抖超时 */
@@ -232,6 +234,7 @@ export function useEventListeners(options: EventListenersOptions) {
     openOutpatientFollowUp: navigation.openOutpatientFollowUp,
     openReportInterpretation: navigation.openReportInterpretation,
     startVoiceInteraction: navigation.startVoiceInteraction,
+    requestChronicRefillScopeSelection: options.requestChronicRefillScopeSelection,
     showToast,
     trackError,
   });
@@ -753,6 +756,7 @@ export function useEventListeners(options: EventListenersOptions) {
     confirmChronicRefill: outpatientScenarioRouter.confirmChronicRefill,
     confirmFollowUp: outpatientScenarioRouter.confirmFollowUp,
     confirmReportAssistant: outpatientScenarioRouter.confirmReportAssistant,
+    routeVoiceTranscript: outpatientScenarioRouter.routeVoiceTranscript,
     unregisterAllListeners,
   };
 }

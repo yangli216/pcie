@@ -21,6 +21,10 @@ export {
   type OutpatientScenarioRouter,
   type OutpatientScenarioRouterOptions,
 } from './model/useOutpatientScenarioRouter';
+export {
+  resolveVoiceChronicRefillRoute,
+  type VoiceChronicRefillRouteDecision,
+} from './lib/voiceChronicRefillRouting';
 export type {
   OutpatientVoiceEntryDecision,
   ReceptionOpportunity,

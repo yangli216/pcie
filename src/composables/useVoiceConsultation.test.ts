@@ -129,6 +129,29 @@ describe('useVoiceConsultation result navigation ordering', () => {
     expect(api.intentResult.value?.chiefComplaint).toBe('咳嗽2天');
   });
 
+  it('lets a deterministic follow-up route consume the transcript before ordinary voice generation', async () => {
+    const ordinaryProcessCallCount = mocks.processTranscript.mock.calls.length;
+    const routeVoiceTranscript = vi.fn(async () => true);
+    const openVoiceConsultation = vi.fn(async () => undefined);
+    const api = useVoiceConsultation({
+      currentPatient: ref({ idPi: 'patient-1' } as never),
+      showToast: vi.fn(),
+      openVoiceConsultation,
+      routeVoiceTranscript,
+      workMode: { exitWork: vi.fn(async () => undefined) },
+    });
+
+    await api.handleVoiceStop(
+      new Blob(['voice']),
+      '原发性高血压、前列腺增生今天来复诊配药',
+    );
+
+    expect(routeVoiceTranscript).toHaveBeenCalledWith('原发性高血压、前列腺增生今天来复诊配药');
+    expect(mocks.processTranscript).toHaveBeenCalledTimes(ordinaryProcessCallCount);
+    expect(openVoiceConsultation).not.toHaveBeenCalled();
+    expect(api.consultationRoundId.value).toBeNull();
+  });
+
   it('abandons the capture without exiting work so App can return to the patient capsule', async () => {
     const exitWork = vi.fn(async () => undefined);
     const api = useVoiceConsultation({

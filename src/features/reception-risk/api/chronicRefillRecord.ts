@@ -64,6 +64,7 @@ export interface ChronicRefillRecordGenerationOptions {
   onPartial?: (result: ClinicalResultInput) => void;
   sessionId?: string;
   timing?: ChronicRefillTimingSession;
+  entrySource?: 'reception-capsule' | 'voice-transcript';
 }
 
 interface ChronicRefillDraft {
@@ -640,11 +641,17 @@ export async function generateChronicRefillRecord(
       configProfile: 'fast',
       temperature: 0,
       traceContext: {
-        scene: 'reception-chronic-refill-record',
+        scene: options?.entrySource === 'voice-transcript'
+          ? 'voice-chronic-refill-record'
+          : 'reception-chronic-refill-record',
         sourceModule: 'reception_risk',
         operationModule: 'reception',
-        operationAction: 'generate_chronic_refill_record',
-        title: '接诊生成复诊配药病历',
+        operationAction: options?.entrySource === 'voice-transcript'
+          ? 'generate_voice_chronic_refill_record'
+          : 'generate_chronic_refill_record',
+        title: options?.entrySource === 'voice-transcript'
+          ? '语音生成复诊配药病历'
+          : '接诊生成复诊配药病历',
       },
     });
     streamParser.flush();
