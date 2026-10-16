@@ -4,6 +4,7 @@ import type { RegionalConnectionConfig } from '@services/regionalClient';
 import type { Theme } from '@services/themeService';
 import Icon from '@shared/ui/Icon.vue';
 import KeyboardShortcutSettings from './KeyboardShortcutSettings.vue';
+import AutostartSettings from './AutostartSettings.vue';
 import type { KeyboardShortcutBindings } from '../model/keyboardShortcuts';
 
 type RegionalConnectionDefaults = Pick<RegionalConnectionConfig, 'baseUrl' | 'orgCode'>;
@@ -95,6 +96,8 @@ function readSelectValue(event: Event): string {
         </button>
       </div>
     </div>
+
+    <AutostartSettings />
 
     <KeyboardShortcutSettings
       :model-value="keyboardShortcuts"

@@ -70,6 +70,8 @@ PHIS `HiBdMed.sdMed` 是药品分类事实源：`1` 映射西药 `sdSrv=11`，`2
 
 ## 概述
 
+系统设置的开机自启动采用 settings 功能域内的 Gateway + Composable Controller：`api/autostart.ts` 封装 Tauri autostart 插件，`model/useSettingsAutostart.ts` 管理系统状态读取、串行切换、回读确认与失败提示，`ui/AutostartSettings.vue` 提供独立开关。系统注册项是唯一事实源，不复制到 localStorage、服务端或 Pinia；每次挂载重新读取，切换立即生效，独立于通用设置保存。Rust 只注册插件，不默认启用；macOS 使用 LaunchAgent，Windows 使用当前用户启动注册项。插件权限独立限定主窗口，浏览器预览禁用该能力。
+
 全医慧助（PCIE，Primary Care Intelligent Expert）是一个 Tauri 2.0 + Vue 3 桌面应用，采用**组合式架构 (Composition Architecture)** 模式。运行时由本地桌面 UI、Rust Bridge 与唯一远程业务后端 `PCIE Server` 共同组成：
 
 - **UI 层**: Vue 组件负责渲染和用户交互

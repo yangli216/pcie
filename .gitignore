@@ -54,5 +54,6 @@ docs/*
 !docs/release-process.md
 !docs/report-cross-consistency-uat.md
 !docs/current-information-medication-uat.md
+!docs/autostart-uat.md
 !docs/physical-exam-guidance-uat.md
 documents/*
