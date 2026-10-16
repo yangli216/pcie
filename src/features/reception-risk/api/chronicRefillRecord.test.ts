@@ -183,6 +183,77 @@ describe('generateChronicRefillRecord', () => {
     expect(result.recommendationPolicy?.autoFetchTreatments).toBe(false);
   });
 
+  it('returns disease-specific negative history candidates in the same chronic stream', async () => {
+    const patient = buildPatientContext({ payload: { patientId: 'patient-1', visitId: 'visit-1' } })!;
+    const candidate = assessChronicRefillCandidate({ patientId: 'patient-1', visits: [
+      {
+        visitTime: Date.now() - 86400000,
+        diagnoses: ['原发性高血压', '2型糖尿病'],
+        medications: [],
+      },
+    ] })!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk(`${JSON.stringify({
+        event: 'record_extra',
+        data: {
+          recordSuggestions: [
+            {
+              field: 'historyOfPresentIllness',
+              question: '近期有无高血压相关不适？',
+              negativeRecordText: '无头晕、头痛、视物模糊、胸闷及心悸',
+              rationale: '高血压复诊相关阴性症状',
+              priority: 'general',
+            },
+            {
+              field: 'historyOfPresentIllness',
+              question: '近期有无糖尿病相关不适？',
+              negativeRecordText: '无多饮、多食、多尿，无失眠，精神、饮食可，大小便无殊，体重无明显增减',
+              rationale: '糖尿病复诊相关阴性症状',
+              priority: 'general',
+            },
+            {
+              field: 'historyOfPresentIllness',
+              question: '控制是否平稳？',
+              negativeRecordText: '血压、血糖控制平稳且规律服药',
+              rationale: '未经医生确认的状态',
+              priority: 'general',
+            },
+            {
+              field: 'personalHistory',
+              question: '是否吸烟？',
+              negativeRecordText: '无吸烟史',
+              rationale: '超出慢病现病史候选作用域',
+              priority: 'general',
+            },
+          ],
+        },
+      })}\n`);
+    });
+
+    const result = await generateChronicRefillRecord(patient, candidate);
+
+    expect(result.historyOfPresentIllness).toBe('患者既往确诊原发性高血压、2型糖尿病。今复诊配药。');
+    expect(result.factSuggestions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'historyOfPresentIllness',
+        negativeRecordText: '无头晕、头痛、视物模糊、胸闷及心悸',
+        status: 'pending',
+      }),
+      expect.objectContaining({
+        field: 'historyOfPresentIllness',
+        negativeRecordText: '无多饮、多食、多尿，无失眠，精神、饮食可，大小便无殊，体重无明显增减',
+        status: 'pending',
+      }),
+    ]));
+    expect(result.factSuggestions?.some((item) => item.negativeRecordText.includes('控制平稳'))).toBe(false);
+    expect(result.factSuggestions?.some((item) => item.field === 'personalHistory')).toBe(false);
+    const prompt = vi.mocked(chatStream).mock.calls[0][0].map((message) => message.content).join('\n');
+    expect(prompt).toContain('record_extra.recordSuggestions必须返回1至2条');
+    expect(prompt).toContain('高血压关注头晕、头痛、视物模糊、胸闷、心悸');
+    expect(prompt).toContain('无失眠，精神、饮食可，大小便无殊，体重无明显增减');
+    expect(chatStream).toHaveBeenCalledOnce();
+  });
+
   it('enforces record-extra output bounds after model generation', async () => {
     const patient = buildPatientContext({
       payload: { patientId: 'patient-1', visitId: 'visit-1' },

@@ -69,6 +69,7 @@ export interface ChronicRefillRecordGenerationOptions {
 
 interface ChronicRefillDraft {
   physicalExamSuggestions?: ClinicalRecordFactSuggestionResponse['items'];
+  recordSuggestions?: ClinicalRecordFactSuggestionResponse['items'];
   chiefComplaint?: string;
   historyOfPresentIllness?: string;
   pastMedicalHistory?: string;
@@ -81,7 +82,7 @@ interface ChronicRefillDraft {
 }
 
 interface NormalizedChronicRefillDraft {
-  physicalExamSuggestions: ClinicalRecordFactSuggestion[];
+  factSuggestions: ClinicalRecordFactSuggestion[];
   chiefComplaint: string;
   historyOfPresentIllness: string;
   pastMedicalHistory: string;
@@ -266,7 +267,7 @@ function fallbackDraft(
     ? availableMedications.join('、')
     : (candidate.medications.length > 0 ? '当前库存未匹配到可直接续方的历史药品' : '暂无可直接沿用的历史药品');
   return {
-    physicalExamSuggestions: [],
+    factSuggestions: [],
     chiefComplaint: `${diagnosisText}复诊配药`,
     historyOfPresentIllness: `患者既往确诊${diagnosisText}。今复诊配药。`,
     pastMedicalHistory: buildChronicPastMedicalHistory(patient, candidate),
@@ -314,10 +315,30 @@ function normalizeDraft(
     modelRecommendedMedicines,
     candidate,
   );
+  const normalizedSuggestions = normalizeClinicalRecordFactSuggestions({
+    items: [
+      ...(Array.isArray(value.recordSuggestions) ? value.recordSuggestions : []),
+      ...(Array.isArray(value.physicalExamSuggestions) ? value.physicalExamSuggestions : []),
+    ],
+  });
+  let historySuggestionCount = 0;
+  let physicalExamSuggestionCount = 0;
+  const factSuggestions = normalizedSuggestions.filter((item) => {
+    if (item.field === 'historyOfPresentIllness') {
+      if (historySuggestionCount >= 2) return false;
+      if (!/(?:否认|无|未见|不伴)/u.test(item.negativeRecordText)) return false;
+      if (/(?:控制|平稳|监测|依从|规律(?:服药|用药)|服药|用药|药物|药品|不良反应|库存|续方|配药)/u.test(item.negativeRecordText)) return false;
+      historySuggestionCount += 1;
+      return true;
+    }
+    if (item.field === 'physicalExam' && physicalExamSuggestionCount < 2) {
+      physicalExamSuggestionCount += 1;
+      return true;
+    }
+    return false;
+  });
   return {
-    physicalExamSuggestions: normalizeClinicalRecordFactSuggestions({ items: value.physicalExamSuggestions })
-      .filter((item) => item.field === 'physicalExam')
-      .slice(0, 2),
+    factSuggestions,
     chiefComplaint: chiefComplaint.length >= 6
       && /复诊|续方|配药/u.test(chiefComplaint)
       && candidate.diagnoses.every((diagnosis) => chiefComplaint.includes(diagnosis))
@@ -377,7 +398,7 @@ function buildChronicRefillClinicalResult(
     menstrualHistory: includeFemaleHistory ? getPatientContextMenstrualHistory(patient) : '',
     maritalReproductiveHistory: includeFemaleHistory ? getPatientContextMaritalReproductiveHistory(patient) : '',
   });
-  const factSuggestions = completePhysicalExamSuggestions(outpatientRecord, candidate.diagnoses, draft.physicalExamSuggestions);
+  const factSuggestions = completePhysicalExamSuggestions(outpatientRecord, candidate.diagnoses, draft.factSuggestions);
   return {
     outpatientRecord,
     factSuggestions,
@@ -603,10 +624,11 @@ export async function generateChronicRefillRecord(
         '药品字段只允许ref或name、targetDose、targetDoseUnit、frequency、frequencyKey、route、routeKey、reason。不得输出dosage、dosageUnit、days、totalQty、totalUnit；这些由程序从可靠历史和药品详情计算。reason不超过40字，只写临床依据，不写剂量或包装算术。',
         'review_plan只补充确定性核查骨架。patch id只允许control-status或current-symptoms；最多2项，每项只含id、question、description、basis，文本简短且不写处方属性。没有更具体内容时patches为空。',
         'record_extra.healthEducation不超过160字，包含与已选慢病相关的规律用药、家庭监测、饮食和复诊提醒。不得写“注意休息”“1周内复诊”或笼统建议。',
+        'record_extra.recordSuggestions必须返回1至2条仅作用于historyOfPresentIllness的疾病相关阴性症状和一般情况候选。每项包含field="historyOfPresentIllness"、question、negativeRecordText、rationale、priority；按已选慢病合并组织有临床价值的阴性症状，例如高血压关注头晕、头痛、视物模糊、胸闷、心悸，糖尿病关注多饮、多食、多尿、视物模糊和体重明显变化；可用另一条简洁补充“无失眠，精神、饮食可，大小便无殊，体重无明显增减”等一般情况。客观“神志清”归physicalExamSuggestions，不写入现病史。negativeRecordText必须使用“无/否认/未见/不伴”的规范阴性表述，不写控制平稳、规律服药、监测正常、依从性、不良反应、药品、库存或未选慢病。候选会以AI来源标记合入可编辑现病史，不得描述成问诊已明确事实。',
         '基础查体由程序补齐。physicalExamSuggestions最多2项，只补基础库之外、与已选慢病直接相关的重点专科查体；每项包含field="physicalExam"、question、negativeRecordText、rationale、priority。不得生成测量值，不得把候选当作当前事实或用药依据。没有必要补充时返回空数组。',
         '逐行输出NDJSON，每行一个完整JSON对象，不输出markdown、解释或数组外壳。',
         `严格按${streamOrder}顺序输出。`,
-        `record_core固定为{"event":"record_core","data":{}}。review_plan.data格式为{"patches":[{"id":"control-status","question":"...","description":"...","basis":"..."}]}。recommended_medicines.data为药品数组。record_extra.data包含healthEducation和physicalExamSuggestions。done.data为空对象。`,
+        `record_core固定为{"event":"record_core","data":{}}。review_plan.data格式为{"patches":[{"id":"control-status","question":"...","description":"...","basis":"..."}]}。recommended_medicines.data为药品数组。record_extra.data包含healthEducation、recordSuggestions和physicalExamSuggestions。done.data为空对象。`,
       ].join('\n'),
     },
     {

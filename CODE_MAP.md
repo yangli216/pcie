@@ -528,6 +528,8 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 
 慢病核查正文门禁：`features/clinical-result/lib/chronicRefillReviewRecordText.ts` 是药名/处方明细校验纯规则；`normalizeChronicRefillHistoryOfPresentIllness` 清理流式病历或旧快照中“复诊配药”后的详细处方，`chronicRefillConfirmation.ts` 归一复诊说明/依据，`useChronicRefillReview.ts` 负责点击写入、同会话计划替换时保留合法选择并尊重医生手工编辑，防止初始现病史清理后被核查选项再次带入历史药品。
 
+慢病现病史阴性候选：`features/reception-risk/api/chronicRefillRecord.ts` 在既有单次 `record_extra` 分区接收 `recordSuggestions`，只保留面向已选慢病的 `historyOfPresentIllness` 候选；共享 `clinicalRecordFactConfirmation.ts` 与结果页 controller 继续负责正文质控、语义去重、自动合入和 AI 原文标记，不新增慢病完成后的模型请求。
+
 女性病史：`maritalReproductiveHistory` 与 `menstrualHistory` 同路独立传递；`patientContext.ts` 提取两类既有病史，`chronicRefillRecord.ts` 补齐慢病患者病史输入；`clinical-result/lib/maritalReproductiveHistory.ts` 解析明确婚育/当前妊娠字典事实，由 `recordConfirmedEmrFieldValues.ts` 输出 PHIS data-id。语音流、结果页快照、重写、部分回写和动态模板映射均保留两字段。
 
 女性字段编辑控制器：`features/consultation-result/model/useFemaleHistoryFields.ts` 统一月经史/婚育史的缓存恢复、逐字段流式基线保护与非女性清理；共享结果页仅编排，不为两字段新增全局状态。
