@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { VoiceIntentRecognitionStreamPrompt } from '@/prompts/prompts';
-import { applyVoiceIntentStreamProtocol, VOICE_INTENT_STREAM_ORDER } from './voiceIntentStreamProtocol';
+import {
+  applyVoiceIntentStreamProtocol,
+  VOICE_DIAGNOSIS_CATALOG_STANDARD,
+  VOICE_INTENT_STREAM_ORDER,
+} from './voiceIntentStreamProtocol';
 
 const schemaLines = (system: string) => system.split('\n').filter(line => line.startsWith('{"event":'));
 
@@ -22,6 +26,8 @@ describe('voice stream diagnosis-first protocol', () => {
     expect(formatted).toContain(clinicalRule);
     expect(formatted).toContain('保留附加规则。');
     expect(formatted).toContain('AI候选不是已核实诊断或治疗依据');
+    expect(formatted).toContain(`诊断标准目录=${VOICE_DIAGNOSIS_CATALOG_STANDARD}`);
+    expect(formatted).toContain('无法确定该版本编码时 code 留空');
     expect(formatted).toContain('基础查体候选由客户端');
     expect(formatted).not.toContain('基础项目库（均为未核实的书写候选）');
   });
@@ -32,5 +38,7 @@ describe('voice stream diagnosis-first protocol', () => {
     expect(formatted.startsWith(system)).toBe(true);
     expect(formatted).toContain(VOICE_INTENT_STREAM_ORDER.join('>'));
     expect(formatted).toContain('本段顺序优先于旧说明');
+    expect(formatted).toContain('voice-intent.v1.8');
+    expect(formatted).toContain(VOICE_DIAGNOSIS_CATALOG_STANDARD);
   });
 });

@@ -3,11 +3,18 @@ import {
   VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT,
 } from '@features/clinical-result/lib/physicalExamGuidance';
 
-/** Transport order only; clinical rules and each event's contents remain untouched. */
+/** Transport order; event payloads remain untouched while mandatory runtime rules are appended separately. */
 export const VOICE_INTENT_STREAM_ORDER = [
   'record_core', 'history_context', 'diagnoses', 'recommendation_plan',
   'record_suggestions', 'explicit_orders', 'record_extra', 'done',
 ] as const;
+
+export const VOICE_DIAGNOSIS_CATALOG_STANDARD = '国家医保 ICD-10 2.0';
+
+const VOICE_DIAGNOSIS_CATALOG_RULE = `诊断标准目录=${VOICE_DIAGNOSIS_CATALOG_STANDARD}：`
+  + '西医正式诊断、待鉴别方向和症状性工作诊断的名称与编码只能使用该版本；'
+  + '不得混用 ICD-11、WHO 原版 ICD-10、其他国家临床修订版或机构自定义编码。'
+  + '无法确定该版本编码时 code 留空，禁止猜测或编造。';
 
 function compactPhysicalExamGuidance(system: string): string {
   if (system.includes(VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT)) return system;
@@ -37,7 +44,8 @@ export function applyVoiceIntentStreamProtocol(system: string): string {
       start += example.length - 1;
     } catch { /* Non-example prose is preserved verbatim. */ }
   }
-  return `${lines.join('\n')}\n\n【运行协议 voice-intent.v1.7】`
+  return `${lines.join('\n')}\n\n【运行协议 voice-intent.v1.8】`
     + `只输出NDJSON，顺序=${VOICE_INTENT_STREAM_ORDER.join('>')}；本段顺序优先于旧说明。`
-    + '基于完整输入判断后逐段发送，不省略分区；AI候选不是已核实诊断或治疗依据。';
+    + '基于完整输入判断后逐段发送，不省略分区；AI候选不是已核实诊断或治疗依据。'
+    + VOICE_DIAGNOSIS_CATALOG_RULE;
 }

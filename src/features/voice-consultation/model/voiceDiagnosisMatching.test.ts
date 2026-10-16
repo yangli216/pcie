@@ -121,7 +121,9 @@ describe('voice diagnosis catalog assessment reuse', () => {
       const messages = vi.mocked(chatStream).mock.calls[0][0];
       expect(messages[0].content).toContain('机构诊断规则保持不变');
       expect(messages[0].content).toContain('置信度不得扩大推荐范围');
-      expect(messages[0].content).toContain('voice-intent.v1.7');
+      expect(messages[0].content).toContain('voice-intent.v1.8');
+      expect(messages[0].content).toContain('诊断标准目录=国家医保 ICD-10 2.0');
+      expect(messages[0].content).toContain('无法确定该版本编码时 code 留空');
       expect(vi.mocked(chatStream).mock.calls[0][5]?.temperature).toBe(0);
       expect(messages[0].content.split('\n').filter(line => line.startsWith('{"event":'))
         .map(line => JSON.parse(line).event)).toEqual(VOICE_INTENT_STREAM_ORDER);

@@ -421,7 +421,7 @@ ${VOICE_PHYSICAL_EXAM_EXTENSION_PROMPT}
 6. 正式诊断最多 3 项，按“与本次主诉和现病史的匹配度”排序，不凑数；第一条 formal 为主诊断。每项必须填写 clinicalRole 与 diagnosisKind。正式建议是当前证据支持、供医生确认的临床初步诊断，不要求先排除全部其他疾病；能解释本次主诉且当前可成立的病因性疾病使用 current_diagnosis+disease+formal；仍需补问、查体或检查才能成立但可解释本次主诉的病因候选使用 differential_cause+disease+differential，并填写 missingInformation。
 7. 仅表示既往共病、长期风险或用药背景而不能解释本次主诉的项目使用 history_only 或 risk_modifier，并且不要输出到 diagnoses；高血压、糖尿病、贫血等不得仅因历史已确诊就成为正式诊断或待鉴别。待鉴别必须是本次主诉的可能病因，不是慢病清单或风险因素清单。
 8. 每条输出诊断必须填写 evidenceScope。只有本次主诉、现病史、查体、检验检查结果或医生本次明确判断支持时，才可使用 current_visit 或 both，且 currentVisitEvidenceText 必须非空并只摘录这些本次证据。仅由 HIS 既往史、长期记忆、历史诊断或长期用药支持时不得输出；不得因历史已确诊而标为 high。
-9. 优先输出标准疾病诊断并保留明确解剖部位与侧别。若当前证据不足以形成任何病因性 formal，但本次存在明确肯定、未被否认且无自相矛盾的症状/体征，应在同一 diagnoses 分区输出一项最能代表本次就诊的标准症状名称作为 current_diagnosis+symptom_working+formal；其 code 尽量使用标准 R 类编码，confidence 仅限 high/medium。此时 recommendation_plan 使用 diagnostic_first，只推荐 exam/lab_test，不推荐 medicine。低置信、未明确、仅历史出现或否定/矛盾症状不得作为工作诊断，没有合适症状允许空结果。例：大量饮酒后上腹不适伴明确呕吐，可提出有依据的急性胃炎初步建议并另列胰腺炎等鉴别；若胃炎自身依据不足，则同次输出明确呕吐的症状性工作诊断，不得把上腹不适改成腹痛，不能凭空生成胆囊结石伴慢性胆囊炎。需要排除其他疾病不等于当前初步诊断不能成立。AI 补充查体候选不能充当诊断依据。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
+9. 西医正式诊断、待鉴别方向和症状性工作诊断的名称与编码统一以国家医保 ICD-10 2.0 版为标准目录范围，不得混用 ICD-11、WHO 原版 ICD-10、其他国家临床修订版或机构自定义编码；无法确定该版本编码时 code 留空，禁止猜测或编造。优先输出该目录内的标准疾病诊断并保留明确解剖部位与侧别。若当前证据不足以形成任何病因性 formal，但本次存在明确肯定、未被否认且无自相矛盾的症状/体征，应在同一 diagnoses 分区输出一项最能代表本次就诊的标准症状名称作为 current_diagnosis+symptom_working+formal；其 code 尽量使用该版本的标准 R 类编码，confidence 仅限 high/medium。此时 recommendation_plan 使用 diagnostic_first，只推荐 exam/lab_test，不推荐 medicine。低置信、未明确、仅历史出现或否定/矛盾症状不得作为工作诊断，没有合适症状允许空结果。例：大量饮酒后上腹不适伴明确呕吐，可提出有依据的急性胃炎初步建议并另列胰腺炎等鉴别；若胃炎自身依据不足，则同次输出明确呕吐的症状性工作诊断，不得把上腹不适改成腹痛，不能凭空生成胆囊结石伴慢性胆囊炎。需要排除其他疾病不等于当前初步诊断不能成立。AI 补充查体候选不能充当诊断依据。explicit/inferred/uncertain 必须如实标记，证据和理由保持简洁。
 
 医嘱与路由规则：
 10. explicit_orders 只提取医生本次明确决定开立、继续或调整的项目，sourceType=explicit。每项必须是对象，name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；禁止把 type 输出为数组或对象。没有明确医嘱时输出空数组。患者既往/自行服药只进入 currentMedicationHistory；条件性方案进入 treatmentPlan，并在 recommendation_plan 中 defer。
@@ -443,7 +443,8 @@ export const VoiceIntentRepairPrompt = {
 2. 优先保留原始输出里的医疗内容，不要擅自新增原文没有体现的诊疗信息。
 3. 如果原始输出里存在非标准字段名，请映射到语音抽取契约的标准字段。
 4. 如果字段值类型错误，修正为正确类型：字符串字段输出字符串，数组字段输出数组。
-5. 如果缺少关键结构，请按以下最小合法结构补齐：
+5. 西医诊断名称与编码的标准范围是国家医保 ICD-10 2.0；不要把其他版本或机构自定义编码转换、补写成该版本编码，无法从原始内容确定时将 code 留空。
+6. 如果缺少关键结构，请按以下最小合法结构补齐：
 {
   "recordDraft": {
     "chiefComplaint": "",
@@ -475,14 +476,14 @@ export const VoiceIntentRepairPrompt = {
   "error": false,
   "message": ""
 }
-6. error 必须是 boolean；如果原始输出明确表达“非医疗内容”或“无法识别”，才设置为 true。
-7. 对 diagnosisHints 和 explicitTreatmentHints 中的每一项：
+7. error 必须是 boolean；如果原始输出明确表达“非医疗内容”或“无法识别”，才设置为 true。
+8. 对 diagnosisHints 和 explicitTreatmentHints 中的每一项：
    - explicitTreatmentHints 的 name 必须为非空字符串，type 必须为 medicine、examination、labTest、procedure 之一的字符串；无法确认时删除该条，不得把 type 输出为数组或对象
    - 诊断项能保留的 clinicalRole、diagnosisKind、evidenceText、evidenceScope、currentVisitEvidenceText、sourceType 都尽量保留；不得把历史/风险角色改写为当前诊断，也不得把仅历史依据改写成本次就诊证据
    - 医嘱项能保留的 evidenceText、sourceType、goal、targetDose、targetDoseUnit、frequency、frequencyKey、usage、usageKey、days 都尽量保留
    - 药品 dosage、dosageUnit、totalQty、totalUnit 必须清空，后续由程序结合库存药品详情生成
    - 如果没有足够信息，不要编造，保留空字符串或空数组
-8. 只做结构修复，不改变原始结论倾向。`,
+9. 只做结构修复，不改变原始结论倾向。`,
 
   buildUserPrompt(params: {
     transcribedText: string;
