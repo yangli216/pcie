@@ -615,10 +615,24 @@ describe('generateChronicRefillRecord', () => {
     const patient = buildPatientContext({
       payload: { patientId: 'patient-1', visitId: 'current-visit', name: '测试患者' },
     })!;
+    const partials: ClinicalResultInput[] = [];
 
-    const result = await generateChronicRefillRecord(patient, scoped);
+    const result = await generateChronicRefillRecord(patient, scoped, {
+      onPartial: (partial) => partials.push(partial),
+    });
 
     expect(chatStream).toHaveBeenCalledOnce();
+    const reviewPartial = partials.find((partial) => (
+      partial.generation?.readySections.includes('review_plan')
+    ));
+    expect(partials.filter((partial) => (
+      !partial.generation?.readySections.includes('review_plan')
+    )).every((partial) => partial.chronicRefillReview === undefined)).toBe(true);
+    expect(reviewPartial?.chronicRefillReview?.items[0]).toMatchObject({
+      id: 'current-medication',
+      description: expect.stringContaining('苯磺酸氨氯地平片'),
+      recommendedValue: 'continued',
+    });
     expect(result.currentMedicationHistory).toBe('苯磺酸氨氯地平片');
     expect(result.treatments).toHaveLength(1);
     expect(result.treatments[0]).toMatchObject({
@@ -634,6 +648,50 @@ describe('generateChronicRefillRecord', () => {
     expect(prompt).not.toContain(amlodipineItem.id);
     expect(prompt).not.toContain(metforminItem.id);
     expect(prompt).not.toContain('不应传入全量目录');
+  });
+
+  it('holds an early review_plan until ambiguous medication scope is resolved', async () => {
+    const candidate = assessChronicRefillCandidate({
+      patientId: 'patient-1',
+      visits: [{
+        visitId: 'mixed-visit',
+        visitTime: Date.parse('2026-06-01T08:00:00+08:00'),
+        diagnoses: ['原发性高血压', '2型糖尿病'],
+        medicationOrders: [{
+          orderId: 'rx-amlodipine',
+          productId: 'med-amlodipine',
+          name: '苯磺酸氨氯地平片',
+        }],
+      }],
+    })!;
+    const scoped = scopeChronicRefillCandidate(candidate, ['高血压'])!;
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      onChunk('{"event":"record_core","data":{}}\n');
+      onChunk('{"event":"review_plan","data":{"patches":[]}}\n');
+      onChunk('{"event":"medication_scope","data":{"accepted":[["M1","C1","h"]]}}\n');
+      onChunk('{"event":"recommended_medicines","data":[]}\n');
+      onChunk('{"event":"done","data":{}}\n');
+    });
+    const patient = buildPatientContext({
+      payload: { patientId: 'patient-1', visitId: 'current-visit' },
+    })!;
+    const partials: ClinicalResultInput[] = [];
+
+    await generateChronicRefillRecord(patient, scoped, {
+      onPartial: (partial) => partials.push(partial),
+    });
+
+    const reviewReadyIndex = partials.findIndex((partial) => (
+      partial.generation?.readySections.includes('review_plan')
+    ));
+    expect(reviewReadyIndex).toBeGreaterThanOrEqual(0);
+    expect(partials.slice(0, reviewReadyIndex).every((partial) => (
+      partial.chronicRefillReview === undefined
+    ))).toBe(true);
+    expect(partials[reviewReadyIndex].chronicRefillReview?.items[0]).toMatchObject({
+      description: expect.stringContaining('苯磺酸氨氯地平片'),
+      recommendedValue: 'continued',
+    });
   });
 
   it('keeps every accepted historical medicine when the model recommends only one in a mixed visit', async () => {

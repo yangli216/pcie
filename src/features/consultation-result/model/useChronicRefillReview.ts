@@ -56,6 +56,28 @@ export function useChronicRefillReview(options: ChronicRefillReviewOptions) {
     treatmentReviewTriggered.value = false;
   }
 
+  function updatePlan(value?: ChronicRefillReviewPlan | null): void {
+    if (!plan.value || !value) {
+      reset(value);
+      return;
+    }
+
+    const validSelections = Object.fromEntries(
+      Object.entries(selections.value).filter(([itemId, selectedValue]) => (
+        value.items.some((item) => (
+          item.id === itemId
+          && item.options.some((option) => option.value === selectedValue)
+        ))
+      )),
+    );
+    const validItemIds = new Set(Object.keys(validSelections));
+    plan.value = value;
+    selections.value = validSelections;
+    appliedRecordTexts.value = Object.fromEntries(
+      Object.entries(appliedRecordTexts.value).filter(([itemId]) => validItemIds.has(itemId)),
+    );
+  }
+
   function select(itemId: string, option: ChronicRefillReviewOption): void {
     const item = plan.value?.items.find((candidate) => candidate.id === itemId);
     const selectedOption = item?.options.find((candidate) => candidate.value === option.value);
@@ -108,6 +130,7 @@ export function useChronicRefillReview(options: ChronicRefillReviewOptions) {
     selections,
     treatmentReviewTriggered,
     reset,
+    updatePlan,
     select,
     setExpanded: (value: boolean) => { expanded.value = value; },
   };

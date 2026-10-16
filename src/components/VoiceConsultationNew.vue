@@ -689,6 +689,7 @@ const {
   selections: chronicRefillReviewSelections,
   treatmentReviewTriggered: chronicRefillTreatmentReviewTriggered,
   reset: resetChronicRefillReview,
+  updatePlan: updateChronicRefillReview,
   select: selectChronicRefillReview,
   setExpanded: setChronicRefillReviewExpanded,
 } = chronicRefillReview;
@@ -3430,6 +3431,9 @@ watch(
         resetTreatmentGenerationState();
       } else {
         applyProgressiveIntentRecord(result, applicationPlan.newSections);
+        if (resultChannel.value === 'chronic-refill' && result.chronicRefillReview) {
+          updateChronicRefillReview(result.chronicRefillReview);
+        }
         if (newSections.has('recommendation_plan') && !treatmentLoading.value) {
           resetTreatmentGenerationState();
         }

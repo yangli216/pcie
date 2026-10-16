@@ -398,7 +398,10 @@ function buildChronicRefillClinicalResult(
       allowTreatmentRefresh: false,
       allowedTreatmentTypes: ['medicine'],
     },
-    chronicRefillReview: draft.reviewPlan,
+    chronicRefillReview: generation?.status === 'streaming'
+      && !generation.readySections.includes('review_plan')
+      ? undefined
+      : draft.reviewPlan,
     generation,
     channel: 'chronic-refill',
   };
@@ -411,11 +414,19 @@ export async function generateChronicRefillRecord(
 ): Promise<ClinicalResultInput> {
   const timing = options?.timing || chronicRefillTimingTracker.get(options?.sessionId);
   const baseCandidate = candidate;
+  const medicationScopeContext = buildChronicRefillMedicationScopePromptContext(baseCandidate);
+  const requiresMedicationScope = medicationScopeContext.itemCount > 0;
+  const initialReadySections: NonNullable<ClinicalResultInput['generation']>['readySections'] = [
+    'record_core',
+    'history_context',
+    'diagnoses',
+  ];
+  if (!requiresMedicationScope) initialReadySections.push('review_plan');
   let resolvedCandidate = baseCandidate;
   let draft = fallbackDraft(patient, resolvedCandidate, []);
   options?.onPartial?.(buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, [], {
     status: 'streaming',
-    readySections: ['record_core', 'history_context', 'diagnoses', 'review_plan'],
+    readySections: initialReadySections,
     stage: 'preparing-context',
     message: '已整理历史病历，正在读取院内药品',
   }));
@@ -451,7 +462,7 @@ export async function generateChronicRefillRecord(
   options?.onProgress?.('generating-content');
   options?.onPartial?.(buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, [], {
     status: 'streaming',
-    readySections: ['record_core', 'history_context', 'diagnoses', 'review_plan'],
+    readySections: initialReadySections,
     message: '病历基础内容已就绪，正在生成复诊核查与用药方案',
   }));
 
@@ -476,7 +487,6 @@ export async function generateChronicRefillRecord(
     ? inventoryContext.items.filter((item) => exactInventoryIds.has(item.productId))
     : inventoryContext.items;
   const inventoryPromptContext = buildChronicRefillInventoryPromptContext(inventoryPromptItems);
-  const medicationScopeContext = buildChronicRefillMedicationScopePromptContext(baseCandidate);
   const hasMedicationScope = medicationScopeContext.itemCount > 0;
   const historyEvidence = buildCompactChronicRefillHistoryEvidence(baseCandidate);
   timing?.mark(
@@ -490,10 +500,11 @@ export async function generateChronicRefillRecord(
   endPromptContextBuild?.(
     inventoryPromptContext.prompt.length + medicationScopeContext.prompt.length + historyEvidence.length,
   );
-  const rawDraft: ChronicRefillDraft = { ...draft };
+  const rawDraft: ChronicRefillDraft = { ...draft, reviewPlan: undefined };
   const streamAccumulator = createChronicRefillRecordStreamAccumulator(rawDraft);
   let rawOutput = '';
   let receivedRecommendedMedicines = false;
+  let medicationScopeResolved = !requiresMedicationScope;
 
   const getResolvedAvailableMedicationNames = (): string[] => buildChronicRefillInventoryTreatments(
     resolvedCandidate.medications,
@@ -529,6 +540,9 @@ export async function generateChronicRefillRecord(
         },
       )
       : [];
+    const readySections = streamAccumulator.readySections.filter((section) => (
+      section !== 'review_plan' || medicationScopeResolved
+    ));
     options?.onPartial?.(buildChronicRefillClinicalResult(
       patient,
       resolvedCandidate,
@@ -536,7 +550,7 @@ export async function generateChronicRefillRecord(
       partialTreatments,
       {
         status: 'streaming',
-        readySections: [...streamAccumulator.readySections],
+        readySections,
         message: receivedRecommendedMedicines
           ? '用药候选已就绪，正在完成结果校验'
           : '病历内容正在逐步生成',
@@ -552,6 +566,7 @@ export async function generateChronicRefillRecord(
         baseCandidate,
         medicationScopeContext.decode(event.data),
       );
+      medicationScopeResolved = true;
       const accepted = getAutoIncludedChronicRefillMedicationAttributions(
         resolvedCandidate.medicationAttributions || [],
         new Set(resolvedCandidate.diagnosisGroups),

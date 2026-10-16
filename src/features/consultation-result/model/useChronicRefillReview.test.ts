@@ -124,6 +124,28 @@ describe('useChronicRefillReview', () => {
     expect(history).not.toContain('控制平稳');
   });
 
+  it('updates the streamed plan without reopening it or losing a valid doctor selection', () => {
+    let history = '患者既往确诊高血压。今复诊配药。';
+    const controller = useChronicRefillReview({
+      getHistoryOfPresentIllness: () => history,
+      setHistoryOfPresentIllness: (value) => { history = value; },
+      getTreatments: () => [],
+    });
+    controller.reset(plan);
+    controller.select('control', plan.items[0].options[0]);
+    controller.setExpanded(false);
+
+    const updatedPlan = structuredClone(plan);
+    updatedPlan.summary = '已结合最终历史方案更新';
+    updatedPlan.items[0].description = '近期历史方案已确认';
+    controller.updatePlan(updatedPlan);
+
+    expect(controller.plan.value?.summary).toBe('已结合最终历史方案更新');
+    expect(controller.selections.value).toEqual({ control: 'stable' });
+    expect(controller.expanded.value).toBe(false);
+    expect(history).toBe('患者既往确诊高血压。今复诊配药。近期血压控制平稳');
+  });
+
   it('writes a confirmed fact and clears selected medicines when the answer affects refill safety', () => {
     let history = '患者既往确诊高血压。今复诊配药。';
     const treatments = [{
