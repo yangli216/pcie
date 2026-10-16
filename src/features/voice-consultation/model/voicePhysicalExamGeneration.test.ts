@@ -7,7 +7,13 @@ vi.mock('@/services/llm', () => ({ chat: vi.fn(), chatStream: vi.fn(), chatFast:
 vi.mock('@/services/aliyunSpeech', () => ({ isTestModeEnabled: () => false }));
 vi.mock('@/services/operationTracker', () => ({ trackError: vi.fn() }));
 vi.mock('./explicitTreatmentCatalogResolver', () => ({ resolveExplicitTreatmentCatalogHints: vi.fn(async () => []) }));
-vi.mock('@/services/medicalData', () => ({ medicalDataService: {} }));
+vi.mock('@/services/medicalData', () => ({
+  medicalDataService: {
+    ensureDiagnosisCatalogReady: vi.fn(async () => undefined),
+    getAllDiagnoses: vi.fn(() => []),
+    assessDiagnosisMatch: vi.fn(),
+  },
+}));
 
 describe('voice physical examination same-stream integration', () => {
   it.each(['', '右肺呼吸音粗，可闻及湿啰音。'])('keeps explicit examination separate from AI candidates: %s', async (physicalExam) => {

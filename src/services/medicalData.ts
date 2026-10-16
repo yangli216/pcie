@@ -243,6 +243,8 @@ class MedicalDataService {
   private currentOrgCode: string | null = null;
   private currentTenantId: string | null = null;
   private localSyncPromise: Promise<void> | null = null;
+  private diagnosisCatalogReadyPromise: Promise<void> | null = null;
+  private remoteDataSyncPromise: Promise<void> | null = null;
   private availableExamLabCache: { key: string; items: MedicalItem[] } | null = null;
   private availableExamLabPromise: Promise<MedicalItem[]> | null = null;
   private availableExamLabPromiseKey = '';
@@ -482,6 +484,48 @@ class MedicalDataService {
 
   public getAllDiagnoses(): DiagnosisItem[] {
     return this.catalog.diagnoses;
+  }
+
+  /**
+   * 语音诊断匹配的基础目录门禁。
+   *
+   * 正常启动时目录通常已由 localStorage、SQLite 或区域数据同步恢复；只有
+   * 内存仍为空时才进入 single-flight 恢复，避免首轮语音拿空目录做匹配。
+   */
+  public async ensureDiagnosisCatalogReady(): Promise<void> {
+    if (this.catalog.diagnoses.length > 0) {
+      return;
+    }
+
+    if (!this.diagnosisCatalogReadyPromise) {
+      const readyPromise = (async () => {
+        const snapshot = await this.loadPersistedCatalogSnapshot();
+        if (snapshot?.diagnoses.length) {
+          this.catalog.diagnoses = this.normalizeDiagnosisItems(snapshot.diagnoses);
+          console.log('[MedicalData] Diagnosis cache restored for matching', {
+            itemCount: snapshot.diagnoses.length,
+          });
+        }
+
+        if (this.catalog.diagnoses.length === 0) {
+          await this.syncRemoteData();
+        }
+
+        if (this.catalog.diagnoses.length === 0) {
+          throw new Error('基础诊断目录尚未加载完成，请稍后重试');
+        }
+      })();
+      this.diagnosisCatalogReadyPromise = readyPromise;
+    }
+
+    const activePromise = this.diagnosisCatalogReadyPromise;
+    try {
+      await activePromise;
+    } finally {
+      if (this.diagnosisCatalogReadyPromise === activePromise) {
+        this.diagnosisCatalogReadyPromise = null;
+      }
+    }
   }
 
   public getAllTCMDiagnoses(): TCMDiagnosisItem[] {
@@ -1991,6 +2035,22 @@ class MedicalDataService {
    * 服务端按机构管理数据，返回 CSV 格式数据
    */
   async syncRemoteData(): Promise<void> {
+    if (!this.remoteDataSyncPromise) {
+      const syncPromise = this.performRemoteDataSync();
+      this.remoteDataSyncPromise = syncPromise;
+    }
+
+    const activePromise = this.remoteDataSyncPromise;
+    try {
+      await activePromise;
+    } finally {
+      if (this.remoteDataSyncPromise === activePromise) {
+        this.remoteDataSyncPromise = null;
+      }
+    }
+  }
+
+  private async performRemoteDataSync(): Promise<void> {
     try {
       const currentVersion = localStorage.getItem(MedicalDataService.DATA_VERSION_KEY) || '0';
       const resp = await regionalGet<{

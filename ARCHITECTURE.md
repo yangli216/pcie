@@ -996,9 +996,9 @@ src/styles/
 
 共享结果页药品目录准备由 `features/consultation-result/model/medicineCatalogPreparation.ts` 合并同厂商、机构、租户、药房的进行中请求；完成后立即释放，不在页面记忆“已准备”状态。每次后续操作重新进入 `medicalDataService.ensureMedicineCatalogForStoreIds`，由服务层当日 SQLite 缓存决定是否访问 HIS；网络失败、空结果和目录清理后均可再次准备。库存预热与五分钟库存缓存独立保留，药品定稿和回写门禁不变。
 
-诊断目录匹配性能约束：`diagnosisCatalogMatch.ts` 先按规范名称精确匹配（同名项仍按 ICD 亲和度、中文名称和原目录顺序决胜），未命中才做语义评分；按目录对象弱引用复用名称解析与字符集，名称变更自动失效。模糊匹配仅维护各分组最多 5 项的有序候选，不再全库排序；急慢性、侧别、分型、原发/继发及解剖范围门禁保持不变。`useVoiceIntentRecognition.ts` 在单次 `processTranscript` 内按名称与 ICD 缓存标准库评估，目录数组替换时失效，partial 与 complete 共用；病史过滤、症状工作诊断提升、推荐路由与元数据仍按最新分区重建，不缓存临床决策或跨患者结果。
+诊断目录匹配性能约束：`diagnosisCatalogMatch.ts` 对模型提供的完整 ICD-10 编码先做精确匹配，编码未命中或未提供时再按规范名称精确匹配（同名项按中文名称和原目录顺序决胜），最后才做语义评分；即使编码精确命中，急慢性、侧别、分型、原发/继发及核心疾病范围冲突也不得被编码覆盖。按目录对象弱引用复用名称解析与字符集，名称变更自动失效；模糊匹配仅维护各分组最多 5 项的有序候选，不再全库排序。`useVoiceIntentRecognition.ts` 在启动模型流前必须等待 `medicalDataService.ensureDiagnosisCatalogReady()`：内存目录为空时以 single-flight 从 SQLite 基础目录缓存恢复，再复用或启动服务端 mappings 同步，仍为空则明确失败；同一次 `processTranscript` 继续按名称与 ICD 缓存标准库评估，partial 与 complete 共用，病史过滤、症状工作诊断提升、推荐路由与元数据仍按最新分区重建，不缓存临床决策或跨患者结果。
 
-普通语音诊断推荐的西医标准目录口径固定为国家医保 ICD-10 2.0。该约束由 `voiceIntentStreamProtocol.ts` 作为运行时协议追加到最终 system message，因此本地 Prompt 和服务端托管 Prompt override 都不能绕过；模型无法确定该版本编码时必须留空而不是编造。AI 输出仍由 `medicalDataService.assessDiagnosisMatch()` 对当前 HIS 诊断目录做确定性匹配，只有安全命中或医生显式确认的标准项才能绑定回写 ID；客户端不内置另一份静态目录，也不把“医保 ICD-10 2.0 推荐口径”等同于“当前机构必然可回写”。
+普通语音诊断推荐的西医标准目录口径固定为国家医保 ICD-10 2.0。该约束由 `voiceIntentStreamProtocol.ts` 作为运行时协议追加到最终 system message，因此本地 Prompt 和服务端托管 Prompt override 都不能绕过；模型无法确定该版本编码时必须留空而不是编造。当前 HIS 同步诊断目录就是机构可回写的医保 ICD-10 2.0 标准目录，AI 输出由 `medicalDataService.assessDiagnosisMatch()` 在该目录就绪后做确定性匹配；只有安全命中或医生显式确认的标准项才能绑定回写 ID，客户端不内置另一份静态目录。
 
 服务封装外部系统通信和数据处理。
 

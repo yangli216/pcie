@@ -897,6 +897,11 @@ export function useVoiceIntentRecognition() {
     let rawOutput = '';
 
     try {
+      const timing = options?.timing;
+      const endDiagnosisCatalogWait = timing?.span('diagnosis_catalog_ready');
+      await medicalDataService.ensureDiagnosisCatalogReady();
+      endDiagnosisCatalogWait?.(medicalDataService.getAllDiagnoses().length);
+
       // Step 1: LLM 意图识别 + 结构化提取
       const memoryBlock = options?.memoryContext?.trim() || '';
 
@@ -981,7 +986,6 @@ export function useVoiceIntentRecognition() {
           consultationId: options?.consultationId,
         },
       };
-      const timing = options?.timing;
       timing?.mark('llm_prompt_chars', messages.reduce((sum, message) => sum + message.content.length, 0));
       timing?.mark('context_prepared');
       let streamAccumulator = createVoiceIntentStreamAccumulator();

@@ -36,6 +36,32 @@ describe('assessDiagnosisCatalogMatch', () => {
     expect(result.matchedItem?.name).toBe('急性胃肠炎');
   });
 
+  it('prefers an exact ICD-10 code over duplicate diagnosis names', () => {
+    const catalog = [item('胃肠炎', 'K52.1'), item('胃肠炎', 'A09.1'), item('胃肠炎', 'A09.2')];
+    const result = assessDiagnosisCatalogMatch({
+      queryName: '胃肠炎',
+      icdCode: 'A09.2',
+      catalog,
+    });
+
+    expect(result.status).toBe('exact');
+    expect(result.matchedItem).toBe(catalog[2]);
+    expect(result.reason).toContain('ICD-10 编码精确命中');
+  });
+
+  it('falls back to the diagnosis name when the ICD-10 code does not exist', () => {
+    const catalog = [item('胃肠炎', 'K52.1'), item('其他疾病', 'A09.1')];
+    const result = assessDiagnosisCatalogMatch({
+      queryName: '胃肠炎',
+      icdCode: 'A09.9',
+      catalog,
+    });
+
+    expect(result.status).toBe('exact');
+    expect(result.matchedItem).toBe(catalog[0]);
+    expect(result.reason).toContain('诊断名称精确命中');
+  });
+
   it.each([
     ['急性胃肠炎', '慢性胃肠炎'],
     ['左侧膝关节炎', '右侧膝关节炎'],
@@ -97,9 +123,10 @@ describe('diagnosis catalog performance regressions', () => {
     expect(result.status).toBe('exact');
   });
 
-  it('preserves ICD affinity and stable catalog order for duplicate exact names', () => {
+  it('uses exact ICD codes first and stable catalog order after a code miss', () => {
     const catalog = [item('胃肠炎', 'K52.1'), item('胃肠炎', 'A09.1'), item('胃肠炎', 'A09.2')];
-    expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', icdCode: 'A09.9', catalog }).matchedItem).toBe(catalog[1]);
+    expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', icdCode: 'A09.2', catalog }).matchedItem).toBe(catalog[2]);
+    expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', icdCode: 'A09.9', catalog }).matchedItem).toBe(catalog[0]);
     expect(assessDiagnosisCatalogMatch({ queryName: '胃肠炎', catalog }).matchedItem).toBe(catalog[0]);
     expect(assessDiagnosisCatalogMatch({ queryName: ' a09.2 ', catalog }).matchedItem).toBe(catalog[2]);
   });

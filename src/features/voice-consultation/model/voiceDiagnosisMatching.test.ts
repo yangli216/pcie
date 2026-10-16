@@ -15,7 +15,13 @@ vi.mock('@/services/llm', () => ({ chat: vi.fn(), chatStream: vi.fn(), chatFast:
 vi.mock('@/services/aliyunSpeech', () => ({ isTestModeEnabled: () => false }));
 vi.mock('@/services/operationTracker', () => ({ trackError: vi.fn() }));
 vi.mock('./explicitTreatmentCatalogResolver', () => ({ resolveExplicitTreatmentCatalogHints: vi.fn(async () => []) }));
-vi.mock('@/services/medicalData', () => ({ medicalDataService: { getAllDiagnoses: vi.fn(), assessDiagnosisMatch: vi.fn() } }));
+vi.mock('@/services/medicalData', () => ({
+  medicalDataService: {
+    ensureDiagnosisCatalogReady: vi.fn(),
+    getAllDiagnoses: vi.fn(),
+    assessDiagnosisMatch: vi.fn(),
+  },
+}));
 
 const hint = {
   name: '急性上呼吸道感染', code: 'J06.9', sourceType: 'inferred', confidence: 'high',
@@ -36,6 +42,7 @@ let catalog: DiagnosisItem[];
 
 beforeEach(() => {
   catalog = [{ id: 'dx-1', name: hint.name, code: hint.code, keywords: [] }];
+  vi.mocked(medicalDataService.ensureDiagnosisCatalogReady).mockResolvedValue();
   vi.mocked(medicalDataService.getAllDiagnoses).mockImplementation(() => catalog);
   vi.mocked(medicalDataService.assessDiagnosisMatch).mockImplementation((queryName, context) =>
     assessDiagnosisCatalogMatch({ queryName, icdCode: context?.icdCode, catalog }));
@@ -46,6 +53,35 @@ beforeEach(() => {
 });
 
 describe('voice diagnosis catalog assessment reuse', () => {
+  it('waits for the base diagnosis catalog before starting the model stream', async () => {
+    let releaseCatalog!: () => void;
+    vi.mocked(medicalDataService.ensureDiagnosisCatalogReady).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseCatalog = resolve; }),
+    );
+
+    const resultPromise = useVoiceIntentRecognition().processTranscript('咳嗽2天');
+    await Promise.resolve();
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(medicalDataService.assessDiagnosisMatch).not.toHaveBeenCalled();
+
+    releaseCatalog();
+    const result = await resultPromise;
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(result?.diagnoses[0].matchedItem?.id).toBe('dx-1');
+  });
+
+  it('fails clearly without calling the model when the base diagnosis catalog is unavailable', async () => {
+    vi.mocked(medicalDataService.ensureDiagnosisCatalogReady)
+      .mockRejectedValueOnce(new Error('基础诊断目录尚未加载完成，请稍后重试'));
+    const controller = useVoiceIntentRecognition();
+
+    const result = await controller.processTranscript('咳嗽2天');
+
+    expect(result).toBeNull();
+    expect(controller.processingError.value).toContain('基础诊断目录尚未加载完成');
+    expect(chatStream).not.toHaveBeenCalled();
+  });
+
   it.each([
     { gender: '女性', ageText: '35岁', expected: true },
     { gender: '女性', ageText: '13岁', expected: false },

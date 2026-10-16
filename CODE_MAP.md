@@ -60,7 +60,7 @@ Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-taur
 
 药品目录准备重试：`features/consultation-result/model/medicineCatalogPreparation.ts` 只合并同作用域的进行中请求；`VoiceConsultationNew.vue` 每次准备均进入该 controller，完成缓存仍由 `medicalData.ts` 的当日目录缓存负责，页面不缓存失败或空结果。
 
-语音诊断性能：`services/diagnosisCatalogMatch.ts` 负责精确匹配优先、目录名称解析复用和分组 top-5；`features/voice-consultation/model/useVoiceIntentRecognition.ts` 持有单请求目录评估缓存，跨分区及 complete 复用，目录替换后失效，临床上下文门禁继续实时执行。
+语音诊断性能：`services/medicalData.ts` 的 `ensureDiagnosisCatalogReady()` 负责在普通语音生成前以 single-flight 等待基础诊断目录从内存 / SQLite 缓存或服务端 mappings 同步就绪；`services/diagnosisCatalogMatch.ts` 负责完整 ICD-10 编码精确匹配优先、编码未命中后的名称匹配、语义冲突门禁、目录名称解析复用和分组 top-5；`features/voice-consultation/model/useVoiceIntentRecognition.ts` 持有单请求目录评估缓存，跨分区及 complete 复用，目录替换后失效，临床上下文门禁继续实时执行。
 
 现有信息用药推荐：`features/consultation-result/model/useCurrentInformationMedication.ts`（仅医生手动入口门禁、请求身份与阶段状态）+ `ui/CurrentInformationMedication.vue`（入口、阶段反馈与只读结论）+ `features/clinical-result/currentInformationMedication.ts`（全量库存单请求 Prompt、响应校验、最终可选药品收口、客户端摘要及合并纯规则）；`voiceTreatmentRecommendationGeneration.ts` 负责并行准备完整有效库存、以默认医疗模型一次生成目录内处方候选并对齐同一完整库存；`VoiceConsultationNew.vue` 提供患者/就诊/轮次/主诊断请求键、库存预热、端到端耗时采集，并只合并完整定稿且库存可用的药品。普通自动治疗、慢病复诊和报告回诊继续使用各自既有流程。
 

@@ -162,6 +162,10 @@ function extractIcdCategory(value: string | undefined): string {
   return value?.trim().toUpperCase().match(/[A-Z][0-9]{2}/u)?.[0] || '';
 }
 
+function normalizeIcdCode(value: string | undefined): string {
+  return value?.trim().toUpperCase() || '';
+}
+
 function getIcdScore(sourceCode: string | undefined, targetCode: string): number {
   const sourceCategory = extractIcdCategory(sourceCode);
   const targetCategory = extractIcdCategory(targetCode);
@@ -230,7 +234,7 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
   const normalizedQuery = normalizeName(queryName);
   const queryIsCode = /^[a-z][0-9]{2}(?:\.[a-z0-9]+)?$/iu.test(queryName.trim());
   if (queryIsCode) {
-    const codeMatch = input.catalog.find((item) => item.code.trim().toLowerCase() === queryName.trim().toLowerCase());
+    const codeMatch = input.catalog.find((item) => normalizeIcdCode(item.code) === normalizeIcdCode(queryName));
     return codeMatch
       ? {
           status: 'exact',
@@ -248,17 +252,38 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
         };
   }
 
-  // Exact normalized names have identical semantics and name score. Only compare
-  // their ICD affinity and original names; never score/sort unrelated catalog rows.
+  // The HIS catalog and model both use the medical-insurance ICD-10 2.0
+  // namespace. Prefer a complete code hit, but never let a hallucinated or
+  // mismatched code overwrite explicit clinical semantics in the model name.
+  const source = parseSemantics(queryName);
+  const normalizedIcdCode = normalizeIcdCode(input.icdCode);
+  if (normalizedIcdCode) {
+    for (const item of input.catalog) {
+      if (normalizeIcdCode(item.code) !== normalizedIcdCode) continue;
+      const candidate = buildRankedCandidate(item, source, input.icdCode);
+      const hasEquivalentSemantics = candidate.semantics.coreName === source.coreName
+        && candidate.conflicts.length === 0
+        && candidate.targetAddsModifiers.length === 0
+        && candidate.sourceDropsModifiers.length === 0;
+      if (hasEquivalentSemantics) {
+        return {
+          status: 'exact',
+          matchedItem: item,
+          suggestedMatchItem: null,
+          alternatives: [],
+          reason: 'ICD-10 编码精确命中标准库',
+        };
+      }
+    }
+  }
+
+  // The code was absent, missed, or failed the semantic safety gate. Fall back
+  // to normalized names without letting a merely related code choose another row.
   let exactName: T | undefined;
-  let exactIcdScore = -1;
   for (const item of input.catalog) {
     if (prepareName(item).normalizedName !== normalizedQuery) continue;
-    const icdScore = getIcdScore(input.icdCode, item.code);
-    if (!exactName || icdScore > exactIcdScore
-      || (icdScore === exactIcdScore && nameCollator.compare(item.name, exactName.name) < 0)) {
+    if (!exactName || nameCollator.compare(item.name, exactName.name) < 0) {
       exactName = item;
-      exactIcdScore = icdScore;
     }
   }
   if (exactName) {
@@ -271,7 +296,6 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
     };
   }
 
-  const source = parseSemantics(queryName);
   const compatible: RankedCandidate<T>[] = [];
   const alternatives: RankedCandidate<T>[] = [];
   const related: RankedCandidate<T>[] = [];
