@@ -115,6 +115,7 @@ test('test build workflow uploads artifacts without creating a release channel',
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'));
   const workflow = fs.readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'test-build.yml'), 'utf8');
+  const cargoIgnore = fs.readFileSync(path.join(repositoryRoot, 'src-tauri', '.gitignore'), 'utf8');
   const formalReleaseScript = fs.readFileSync(path.join(repositoryRoot, 'scripts', 'release.mjs'), 'utf8');
 
   assert.equal(packageJson.scripts['release:test'], 'node scripts/test-release.mjs');
@@ -122,6 +123,8 @@ test('test build workflow uploads artifacts without creating a release channel',
   assert.match(workflow, /Verify candidate bundle exists/);
   assert.match(workflow, /-size \+1M/);
   assert.match(workflow, /node scripts\/test-release\.mjs --version/);
+  assert.match(workflow, /cargo check --locked/);
+  assert.match(cargoIgnore, /^!Cargo\.lock$/m);
   assert.doesNotMatch(workflow, /yarn release:test --version/);
   assert.match(workflow, /published: false/);
   assert.doesNotMatch(workflow, /gh release|releaseDraft|latest\.json|git tag/);

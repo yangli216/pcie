@@ -112,13 +112,14 @@
 3. 根目录不得新增或提交 `package-lock.json`、`pnpm-lock.yaml`；若误生成，必须删除后再交付。
 4. 除非任务明确是“统一包管理器”，否则不要顺手刷新或新增另一套锁文件。
 5. 遇到依赖损坏时，先在交付说明中记录现状；不要无理由混用 `npm`/`yarn`/`pnpm` 重新安装。
+6. 普通 Tauri 桌面构建必须提交 `src-tauri/Cargo.lock` 并使用 `cargo check --locked --manifest-path src-tauri/Cargo.toml`；Win7 继续使用独立 `src-tauri/Cargo.win7.lock`，两份锁文件不得互相覆盖或在 CI 中隐式刷新。
 
 ## 最小质量门禁
 
 Win7 构建额外执行 `yarn test:win7-build`、`yarn test:release`，使用独立 `src-tauri/Cargo.win7.lock + --locked`，并由两条 Win7 工作流解包最终 MSI、校验安装 PE 普通/延迟导入与主程序 SHA-256。Win7 专用 windows-link 补丁及 `windows_slim_errors` 禁止进入普通构建；更新锁快照须审查完整依赖差异并重新进行 Win7 SP1 x64 实机冒烟。
 
 1. 前端至少执行 `yarn type-check` 与 `yarn build`
-2. Tauri/Rust 侧至少执行 `cargo check`
+2. Tauri/Rust 侧至少执行 `cargo check --locked --manifest-path src-tauri/Cargo.toml`
 3. 新增生产代码默认同步新增或更新单元测试；确实不适合自动化覆盖时，交付说明必须写明原因和替代验证方式
 4. Vitest 单元测试通过 `yarn test:unit` 执行；修改已覆盖的 service/composable/lib 必须执行该命令
 5. 修改关键路径或本地/远端契约时，必须按工作区 [TESTING_STRATEGY.md](../TESTING_STRATEGY.md) 补充对应单元测试、集成测试或关键手测记录
@@ -176,7 +177,7 @@ Win7 构建额外执行 `yarn test:win7-build`、`yarn test:release`，使用独
 3. 最后附上验证结果：
    - `yarn type-check` / 阻塞原因
    - `yarn build` / 阻塞原因
-   - `cargo check`
+   - `cargo check --locked --manifest-path src-tauri/Cargo.toml`
    - `yarn test:unit`（引入 Vitest 且命中已覆盖模块时）
    - 必要的手测结论
    - 测试构建附上候选版本、源 commit/ref 和 Actions Artifact 名称；不得把 Artifact 描述成已发布版本

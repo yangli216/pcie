@@ -56,7 +56,7 @@ jobs:
 
       - name: Run Rust quality gate
         working-directory: src-tauri
-        run: cargo check
+        run: cargo check --locked
 
   build-candidate:
     needs: quality-gate

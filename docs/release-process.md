@@ -24,7 +24,7 @@ yarn release:test 1.4.4
 
 1. 在运行工作流时选择需要验收的分支或 commit。
 2. 输入候选稳定版本号，例如 `1.4.4`。
-3. 工作流先执行类型检查、单元测试、前端构建和 Rust 检查，再分别生成签名的 Windows 与 macOS 测试包；上传前会检查目标目录中确实存在安装包，只有来源清单时必须失败。
+3. 工作流先执行类型检查、单元测试、前端构建和 `cargo check --locked`，再分别生成签名的 Windows 与 macOS 测试包；普通桌面依赖由仓库内 `src-tauri/Cargo.lock` 固定，CI 不得重新解析或隐式刷新。上传前会检查目标目录中确实存在安装包，只有来源清单时必须失败。
 4. 从该次工作流的 Artifacts 下载测试包；这些文件不会出现在 GitHub Releases，也不会被客户端自动更新发现。
 
 测试包采用候选正式版本号，因此安装过候选包的测试机器不会把后续同版本正式包识别成更高版本。正式 updater 冒烟应另用仍停留在历史正式版本的环境执行。
@@ -52,7 +52,7 @@ Windows 7 不属于普通 Windows 正式客户端支持范围。为仍在使用 
 
 ### 技术验证
 
-Win7 原生依赖固定在 `src-tauri/Cargo.win7.lock`，runner 以 `--locked` 构建并在结束后恢复普通锁文件。依赖更新须显式执行 `PCIE_WIN7_BUILD=1 node scripts/win7-cargo-runner.mjs --refresh-lock`，审查快照差异后重跑测试构建与实机冒烟；不得在 CI 自动刷新。Win7 独有 `windows_slim_errors` 和 windows-link COM 导入补丁用于避开 Win8+ 系统 DLL，普通构建不受影响。
+普通桌面依赖固定在 `src-tauri/Cargo.lock`，候选与正式构建直接消费该锁文件；更新时必须审查完整依赖差异并执行普通双平台候选构建。Win7 原生依赖固定在 `src-tauri/Cargo.win7.lock`，runner 以 `--locked` 构建并在结束后恢复普通锁文件。Win7 依赖更新须显式执行 `PCIE_WIN7_BUILD=1 node scripts/win7-cargo-runner.mjs --refresh-lock`，审查快照差异后重跑测试构建与实机冒烟；两份锁文件不得互相替代，也不得在 CI 自动刷新。Win7 独有 `windows_slim_errors` 和 windows-link COM 导入补丁用于避开 Win8+ 系统 DLL，普通构建不受影响。
 
 上传 Artifact 前必须对最终 MSI 做行政解包，扫描全部安装 EXE/DLL（含 delay imports），确认主程序 SHA-256 与本次编译一致。`win7-import-report.json` 和 `Cargo.win7.lock` 随产物保存；任何已知 Win8+ 导入都会阻断上传。该报告不承诺全面 OS API 兼容，仍须完成 Win7 SP1 x64 手测。实机除 WebView2 109 外，须预置适用的 Universal CRT 系统更新（KB2999226 或其替代更新）；不得从网上复制缺失 DLL。
 
