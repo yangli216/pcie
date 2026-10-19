@@ -1633,6 +1633,8 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 ## 公卫助手桌面边界（2026-09-29）
 
+2026-10-19 公卫接入统一为医疗 `/api/handshake` 的可选 `publicHealth` 扩展；SDK 复用 HIS 上下文采集、连接和协议拉起。删除公卫配对环境配置与独立握手，注册表仍按本次 Origin/SDK 实例隔离令牌、任务及 WS，续期需原令牌；医疗普通握手与结果通道维持原契约。
+
 公卫 Bridge 新增的 SHA-256、Base64 与时间解析依赖同时登记到独立 Win7 锁快照，复用已有固定版本，仅补 root dependency 引用；不升级 Win7 依赖或变更其发布通道。
 
 - `features/public-health/types.ts` 描述 `public-health.v1` 的事实、结果、SSE 和回写结构；`lib` 承担来源引用、身份匹配、流顺序和允许回写范围的纯校验。健康处方固定三章节，减重固定两章节与服务端只读 BMI/BMR。

@@ -19,23 +19,24 @@ class Socket {
   receive(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
 type SDK = {
-  initPublicHealth(): Promise<unknown>;
+  init(extra?: Record<string, unknown>): Promise<unknown>;
+  initPublicHealth(extra?: Record<string, unknown>): Promise<unknown>;
   assistPublicHealth(request: unknown): Promise<unknown>;
   sendPublicHealthFeedback(feedback: unknown): Promise<unknown>;
   on(event: string, callback: (value: unknown) => void): SDK;
   destroy(): void;
 };
 let instances: SDK[] = [];
-function setup() {
+function setup(globals: Record<string, unknown> = {}) {
   const fetch = vi.fn((url: string) => Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(url.endsWith('/handshake') ? {
-    status: 'ready', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId,
-    publicHealthBridgeToken: 'synthetic-session-token', expiresAt: new Date(Date.now() + 1800000).toISOString(),
+    status: 'success', version: 'test', publicHealth: { status: 'ready', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId,
+    publicHealthBridgeToken: 'synthetic-session-token', expiresAt: new Date(Date.now() + 1800000).toISOString() },
   } : { status: 'accepted' })) }));
   const mod: { exports: unknown } = { exports: {} };
   runInNewContext(source, { module: mod, exports: mod.exports, fetch, WebSocket: Socket, AbortController, Date, setTimeout, clearTimeout,
-    console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() }, ...globals });
   const Ctor = mod.exports as new (options: unknown) => SDK;
-  const sdk = new Ctor({ publicHealth: { pairingKey: 'synthetic-deployment-pairing-key', sdkInstanceId: '40000000-0000-4000-8000-000000000001' } });
+  const sdk = new Ctor({ extra: { emrAccessToken:'synthetic-medical-token' }, publicHealth: { sdkInstanceId: '40000000-0000-4000-8000-000000000001' } });
   instances.push(sdk); return { sdk, fetch };
 }
 async function connect(sdk: SDK) {
@@ -63,13 +64,75 @@ function envelope() {
 beforeEach(() => { vi.useFakeTimers(); Socket.all = []; instances = []; });
 afterEach(() => { for (const sdk of instances) sdk.destroy(); vi.useRealTimers(); });
 describe('public-health SDK isolated instance transport', () => {
-  it('handshakes and authenticates without the outpatient init or any URL credentials', async () => {
+  it('collects the same HIS token and personnel context as medical init', async () => {
+    const ajax = vi.fn(() => Promise.resolve({ body: 'synthetic-his-token' }));
+    const urt = { personCd:'synthetic-doctor', userRoleDepts:{ orgId:'synthetic-organization' } };
+    const { sdk, fetch } = setup({
+      $ajax:ajax, $env:{ globalContext:{ get:() => urt } },
+      location:{ origin:'http://localhost:8080', pathname:'/rbmh_chis/', href:'http://localhost:8080/rbmh_chis/#' },
+    });
+    await connect(sdk);
+    expect(ajax).toHaveBeenCalledWith(expect.objectContaining({ url:'api/base.publicService/emrAccessToken' }));
+    const call = fetch.mock.calls[0] as unknown as [string, { body:string }];
+    expect(JSON.parse(call[1].body)).toMatchObject({ origin:'http://localhost:8080/rbmh_chis', extra:{ emrAccessToken:'synthetic-his-token', urt } });
+  });
+  it('reuses an explicitly initialized medical context and keeps its result socket', async () => {
+    const { sdk, fetch } = setup();
+    await sdk.init({ emrAccessToken:'explicit-medical-token' });
+    const pending = sdk.initPublicHealth();
+    await vi.waitFor(() => expect(Socket.all).toHaveLength(2));
+    const medical = fetch.mock.calls[0] as unknown as [string, { body:string }];
+    const publicHealth = fetch.mock.calls[1] as unknown as [string, { body:string }];
+    expect(JSON.parse(medical[1].body)).not.toHaveProperty('publicHealth');
+    expect(JSON.parse(publicHealth[1].body).extra.emrAccessToken).toBe('explicit-medical-token');
+    expect(Socket.all[0].url).not.toContain('channel=public-health');
+    expect(Socket.all[1].url).toContain('channel=public-health');
+    Socket.all[1].onopen?.();
+    Socket.all[1].receive({ type:'public-health-subscribed', schemaVersion:'public-health.v1', bridgeSessionId:sessionId });
+    await pending;
+    await sdk.assistPublicHealth(request());
+    expect(fetch.mock.calls.filter(c => String(c[0]).endsWith('/assist'))).toHaveLength(1);
+  });
+  it('launches the desktop through the medical protocol before retrying a failed connection', async () => {
+    const appendChild = vi.fn();
+    const { sdk, fetch } = setup({ document:{ cookie:'', createElement:() => ({ style:{}, src:'' }), body:{ appendChild, removeChild:vi.fn() } } });
+    fetch.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const pending = sdk.assistPublicHealth(request());
+    await vi.waitFor(() => expect(appendChild).toHaveBeenCalledTimes(1));
+    expect(appendChild.mock.calls[0][0].src).toBe('med-hermes://launch');
+    expect(Socket.all).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(Socket.all).toHaveLength(1);
+    const first = fetch.mock.calls[0] as unknown as [string, { body:string }];
+    const retry = fetch.mock.calls[1] as unknown as [string, { body:string }];
+    expect(JSON.parse(first[1].body).publicHealth.sdkInstanceId).toBe(JSON.parse(retry[1].body).publicHealth.sdkInstanceId);
+    Socket.all[0].onopen?.();
+    Socket.all[0].receive({ type:'public-health-subscribed', schemaVersion:'public-health.v1', bridgeSessionId:sessionId });
+    await pending;
+    expect(fetch.mock.calls.filter(c => String(c[0]).endsWith('/assist'))).toHaveLength(1);
+  });
+  it('does not launch or submit a business request after a rejected medical handshake', async () => {
+    const { sdk, fetch } = setup();
+    fetch.mockImplementationOnce(() => Promise.resolve({ ok:false, status:401, text:() => Promise.resolve(JSON.stringify({ message:'missing medical context' })) }));
+    await expect(sdk.assistPublicHealth(request())).rejects.toMatchObject({ status:401 });
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(Socket.all).toHaveLength(0);
+  });
+  it('rejects a medical-only handshake response before sending public-health data', async () => {
+    const { sdk, fetch } = setup();
+    fetch.mockImplementationOnce(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ status:'success', version:'old-desktop' })) }));
+    await expect(sdk.assistPublicHealth(request())).rejects.toMatchObject({ code:'INVALID_RESPONSE' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(Socket.all).toHaveLength(0);
+  });
+  it('uses the medical handshake and HIS context without any pairing setup or outpatient socket', async () => {
     const { sdk, fetch } = setup(); await connect(sdk);
     expect(fetch).toHaveBeenCalledTimes(1);
     const call = fetch.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }];
-    expect(call[0]).toMatch(/\/api\/public-health\/handshake$/);
-    expect(call[1].headers['X-PCIE-Pairing-Key']).toBe('synthetic-deployment-pairing-key');
-    expect(JSON.parse(call[1].body)).not.toHaveProperty('emrAccessToken');
+    expect(call[0]).toMatch(/\/api\/handshake$/);
+    expect(call[1].headers).not.toHaveProperty('X-PCIE-Pairing-Key');
+    expect(JSON.parse(call[1].body)).toMatchObject({ extra: { emrAccessToken:'synthetic-medical-token' }, publicHealth: { schemaVersion:'public-health.v1' } });
     expect(Socket.all[0].url).toBe('ws://127.0.0.1:8081/api/consultation/events/ws?channel=public-health');
     expect(Socket.all[0].url).not.toContain('token');
     expect(JSON.parse(Socket.all[0].sent[0])).toMatchObject({ type: 'public-health-subscribe', publicHealthBridgeToken: 'synthetic-session-token' });
@@ -119,7 +182,7 @@ describe('public-health SDK isolated instance transport', () => {
     expect(Socket.all).toHaveLength(2); Socket.all[1].onopen?.();
     const control = JSON.parse(Socket.all[1].sent[0]); expect(control.after).toBe(envelope().event.id);
     const call = fetch.mock.calls[2] as unknown as [string, { headers: Record<string, string>; body: string }];
-    expect(JSON.parse(call[1].body).resumeSessionId).toBe(sessionId);
+    expect(JSON.parse(call[1].body).publicHealth.resumeSessionId).toBe(sessionId);
     expect(call[1].headers['X-PCIE-Bridge-Token']).toBe('synthetic-session-token');
     Socket.all[1].receive({ type: 'public-health-subscribed', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId }); await Promise.resolve();
     expect(fetch.mock.calls.filter((c: unknown[]) => String(c[0]).endsWith('/assist'))).toHaveLength(1);
@@ -133,14 +196,14 @@ describe('public-health SDK isolated instance transport', () => {
   it('renews a recovered expired token once before creating the replacement socket', async () => {
     const { sdk, fetch } = setup(); await connect(sdk);
     fetch.mockImplementationOnce(() => Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({
-      status: 'ready', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId,
-      publicHealthBridgeToken: 'recovered-expired-token', expiresAt: new Date(Date.now() - 1).toISOString(),
+      status:'success', version:'test', publicHealth: { status: 'ready', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId,
+      publicHealthBridgeToken: 'recovered-expired-token', expiresAt: new Date(Date.now() - 1).toISOString() },
     })) }));
     Socket.all[0].close(); await vi.advanceTimersByTimeAsync(1000);
     expect(fetch).toHaveBeenCalledTimes(3); expect(Socket.all).toHaveLength(2);
     const call = fetch.mock.calls[2] as unknown as [string, { headers: Record<string, string>; body: string }];
     expect(call[1].headers['X-PCIE-Bridge-Token']).toBe('recovered-expired-token');
-    expect(JSON.parse(call[1].body).resumeSessionId).toBe(sessionId);
+    expect(JSON.parse(call[1].body).publicHealth.resumeSessionId).toBe(sessionId);
     Socket.all[1].onopen?.();
     expect(JSON.parse(Socket.all[1].sent[0]).publicHealthBridgeToken).toBe('synthetic-session-token');
     Socket.all[1].receive({ type: 'public-health-subscribed', schemaVersion: 'public-health.v1', bridgeSessionId: sessionId });

@@ -32,6 +32,8 @@
 
 ## 公卫助手（2026-09-29 实现中）
 
+- `src-tauri/src/http_server.rs` 的 `/api/handshake` 接受医疗 BrowserContext 与可选 `publicHealth` 会话扩展；`public_health.rs` 验证实际 Origin、医疗上下文与实例/令牌，`public_health_http.rs` 管理独立公卫 REST/WS。SDK 共用医疗上下文采集和协议拉起，无独立配对配置。
+
 - `features/public-health`：公开页面/控制器/类型入口；`ui` 仅展示核对、结果与回写状态，`model` 管理独立任务，`lib` 管理身份、来源引用和允许目标纯规则，`api` 封装签名 SSE 与本地 Bridge。
 - `features/public-health/model/usePublicHealthMealSelection.ts` 与 `ui/PublicHealthMealOptions.vue`：当前生成内食谱单选/独立编辑，以及默认推荐、折叠两备选的展示；仅当前采用正文进入既有确认 Builder。
 - `features/public-health/lib/publicHealthHealthProfile.ts`、`publicHealthHealthEducation.ts` 与 `ui/PublicHealthHealthProfile.vue`：仅随访功能使用的事实画像、来源和已知风险展示，以及内部六分区教育/风险引用、检查适配和用药类别校验；减重仍保持独立两节。

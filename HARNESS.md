@@ -14,7 +14,7 @@
 
 ## 公卫功能验证
 
-独立健康处方与减重均从 PHIS 配对 Bridge 调入，生成走签名 `POST /v1/public-health/generations`。运行公卫/SDK/Bridge/签名相关 Vitest、`yarn type-check`、`yarn build`，Rust 运行 `cargo test --lib public_health` 与 `cargo check`；合成/Fake 回归与真实模型、PHIS、医学验收分别报告。公卫本机调试入口和过程截图只保留本地，不随功能分支提交。
+独立健康处方与减重均复用医疗 SDK `/api/handshake` 上下文和桌面拉起，通过独立公卫会话调入，生成走签名 `POST /v1/public-health/generations`。运行公卫/SDK/Bridge/签名相关 Vitest、`yarn type-check`、`yarn build`，Rust 运行 `cargo test --lib` 与 `cargo check`，覆盖医疗握手兼容、公卫扩展/Origin/缺失凭据拒绝和实际 WS 帧；合成/Fake 回归与真实模型、PHIS、医学验收分别报告。公卫本机调试入口和过程截图只保留本地，不随功能分支提交。
 
 
 ## 公卫患者正文提交验证（2026-10-13）

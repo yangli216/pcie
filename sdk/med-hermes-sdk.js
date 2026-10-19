@@ -1009,6 +1009,11 @@
    * @returns {Promise<Object>} 握手结果
    */
   MedHermes.prototype.init = function (extra) {
+    return this._initConnection(extra, false);
+  };
+
+  // Shared medical/public-health context collection, handshake and protocol launch.
+  MedHermes.prototype._initConnection = function (extra, publicHealth) {
     var self = this;
     if (typeof WebSocket === 'undefined') {
       var unsupportedError = new Error('当前 HIS 浏览器不支持 WebSocket，无法初始化 MedHermes 结果事件通道');
@@ -1018,21 +1023,26 @@
     }
 
     // 先尝试获取 HIS 上下文，然后再执行握手
-    return this._collectHISContext(extra)
+    var contextExtra = publicHealth ? assign({}, this._browserCtx && this._browserCtx.extra, extra) : extra;
+    return this._collectHISContext(contextExtra)
       .then(function (finalExtra) {
         self._browserCtx = collectBrowserContext(finalExtra);
-        return self._handshake();
+        return self._handshake(publicHealth);
       })
       .then(function (result) {
-        self._connected = true;
-        self._isChannelPersistent = true;
-        self._lastHandshakeResult = result;
-        self._disconnectedNotified = false;
-        self._ensureInteractionChannel(true);
-        self._emitter.emit('connected', result);
+        if (!publicHealth) {
+          self._connected = true;
+          self._isChannelPersistent = true;
+          self._lastHandshakeResult = result;
+          self._disconnectedNotified = false;
+          self._ensureInteractionChannel(true);
+          self._emitter.emit('connected', result);
+        }
         return result;
       })
       .catch(function (err) {
+        // A rejected medical context is actionable; launching again cannot authorize it.
+        if (publicHealth && err && err.status >= 400 && err.status < 500) throw err;
         // 如果是 HIS 接口报错但不是连接报错，记录一下但继续尝试握手（除非是因为桌面端没启动）
         if (err && err.message && err.message.indexOf('MedHermes') === -1) {
           console.warn('[MedHermes] HIS context collection failed:', err);
@@ -1044,14 +1054,16 @@
 
         return new Promise(function (resolve, reject) {
           setTimeout(function () {
-            self._handshake()
+            self._handshake(publicHealth)
               .then(function (result) {
-                self._connected = true;
-                self._isChannelPersistent = true;
-                self._lastHandshakeResult = result;
-                self._disconnectedNotified = false;
-                self._ensureInteractionChannel(true);
-                self._emitter.emit('connected', result);
+                if (!publicHealth) {
+                  self._connected = true;
+                  self._isChannelPersistent = true;
+                  self._lastHandshakeResult = result;
+                  self._disconnectedNotified = false;
+                  self._ensureInteractionChannel(true);
+                  self._emitter.emit('connected', result);
+                }
                 resolve(result);
               })
               .catch(function () {
@@ -1114,9 +1126,18 @@
   };
 
   /** 内部握手方法 */
-  MedHermes.prototype._handshake = function () {
+  MedHermes.prototype._handshake = function (publicHealth) {
     var ctx = this._browserCtx || collectBrowserContext(this._opts.extra);
-    return this._http.post('/handshake', ctx);
+    var headers = {};
+    if (publicHealth) {
+      var ph = this._publicHealthState();
+      ctx = assign({}, ctx, { publicHealth: { schemaVersion:'public-health.v1', sdkInstanceId:ph.instanceId } });
+      if (ph.session) {
+        ctx.publicHealth.resumeSessionId = ph.session.bridgeSessionId;
+        headers['X-PCIE-Bridge-Token'] = ph.session.publicHealthBridgeToken;
+      }
+    }
+    return this._http.post('/handshake', ctx, headers);
   };
 
   /**
@@ -1801,33 +1822,28 @@
     }
     return this._publicHealth;
   };
-  MedHermes.prototype.initPublicHealth = function () {
+  MedHermes.prototype.initPublicHealth = function (extra) {
     var self = this;
     if (this._destroyed) return Promise.reject(publicHealthError('SDK_DESTROYED', 'SDK 已销毁'));
-    var options = this._opts.publicHealth || {};
-    if (!options.pairingKey || typeof WebSocket === 'undefined') return Promise.reject(publicHealthError('BRIDGE_NOT_CONFIGURED', '请配置公卫配对凭据并使用支持 WebSocket 的浏览器'));
+    if (typeof WebSocket === 'undefined') return Promise.reject(publicHealthError('WEBSOCKET_UNSUPPORTED', '公卫接入需要支持 WebSocket 的浏览器'));
     var ph;
     try { ph = this._publicHealthState(); } catch (err) { return Promise.reject(err); }
     if (!publicHealthId(ph.instanceId)) return Promise.reject(publicHealthError('INVALID_REQUEST', 'sdkInstanceId 必须为 UUID'));
     if (ph.ready && ph.session && Date.parse(ph.session.expiresAt) > Date.now()) return Promise.resolve(ph.session);
     if (ph.promise) return ph.promise;
-    var request = { schemaVersion: 'public-health.v1', sdkInstanceId: ph.instanceId };
-    var headers = { 'X-PCIE-Pairing-Key': options.pairingKey };
-    if (ph.session) { request.resumeSessionId = ph.session.bridgeSessionId; headers['X-PCIE-Bridge-Token'] = ph.session.publicHealthBridgeToken; }
-    function acceptSession(result) {
+    function acceptSession(response) {
       if (self._destroyed) throw publicHealthError('SDK_DESTROYED', 'SDK 已销毁');
+      var result = response && response.publicHealth;
       if (!result || result.schemaVersion !== 'public-health.v1' || !publicHealthId(result.bridgeSessionId)
           || typeof result.publicHealthBridgeToken !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))) throw publicHealthError('INVALID_RESPONSE', '公卫握手响应无效');
       if (ph.session && ph.session.bridgeSessionId !== result.bridgeSessionId) throw publicHealthError('BRIDGE_OWNER_MISMATCH', '续期不能改变任务所属会话');
       ph.session = result;
       return result;
     }
-    ph.promise = this._http.post('/public-health/handshake', request, headers).then(acceptSession).then(function (result) {
+    ph.promise = this._initConnection(extra, true).then(acceptSession).then(function (result) {
       // A retry with the previous token may recover an already-expired current token.
       // Obtain a fresh token once, without starting any business operation.
-      if (Date.parse(result.expiresAt) <= Date.now()) return self._http.post('/public-health/handshake',
-        { schemaVersion:'public-health.v1', sdkInstanceId:ph.instanceId, resumeSessionId:result.bridgeSessionId },
-        { 'X-PCIE-Pairing-Key':options.pairingKey, 'X-PCIE-Bridge-Token':result.publicHealthBridgeToken }).then(acceptSession);
+      if (Date.parse(result.expiresAt) <= Date.now()) return self._handshake(true).then(acceptSession);
       return result;
     }).then(function (result) {
       if (Date.parse(result.expiresAt) <= Date.now()) throw publicHealthError('BRIDGE_SESSION_EXPIRED', '公卫会话未获得有效续期');
