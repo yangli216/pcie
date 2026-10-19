@@ -6,6 +6,8 @@
 2. 文档/契约先更新，再实现生产代码和Vitest测试；跨仓任务使用development-harness/HARNESS.md。
 3. 默认执行yarn type-check、yarn test:unit、yarn build；Rust变化补cargo check。真实Tauri运行、HIS/PHIS和第三方服务验收与合成测试分别报告。
 
+2026-10-19 候选构建：`tauri-plugin-deep-link` 使用 `>=2.0.0, <2.6.2` 约束，避开上游 Linux `ParseOption` 编译回归；由 Test Build 的 Ubuntu Rust quality gate 验证，Windows/macOS 构建继续使用同一源码快照。不得为此刷新 Win7 独立锁。
+
 ## 机构知识检索
 
 按[知识服务设计](../development-harness/KNOWLEDGE_BASE_DESIGN.md)和机器契约实现；API经regionalClient签名，UI/控制器进入features/knowledge。执行knowledgeRetrieval、useInstitutionKnowledgeController与InstitutionKnowledgePanel测试及默认构建。机构、文档批准和版本由后端确定，不把DRAFT/示例数据当可用医学知识，不新增供应商密钥或自动聊天/公卫注入。

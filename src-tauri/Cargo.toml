@@ -44,7 +44,8 @@ actix-ws = "0.3.0"
 tokio = { version = "1.49.0", features = ["full"] }
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 tauri-plugin-updater = "2.10.1"
-tauri-plugin-deep-link = "2"
+# 2.6.2 fails on Linux with rust-ini 0.21.3 (upstream issue #3710).
+tauri-plugin-deep-link = ">=2.0.0, <2.6.2"
 tauri-plugin-single-instance = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 futures-util = "0.3"

@@ -113,6 +113,8 @@
 4. 除非任务明确是“统一包管理器”，否则不要顺手刷新或新增另一套锁文件。
 5. 遇到依赖损坏时，先在交付说明中记录现状；不要无理由混用 `npm`/`yarn`/`pnpm` 重新安装。
 
+普通 Rust 构建暂将 `tauri-plugin-deep-link` 限定为 `>=2.0.0, <2.6.2`，避开 2.6.2 与 `rust-ini 0.21.3` 的 Linux 编译回归；约束仍兼容 Win7 独立锁中的 2.4.6，不刷新该锁。解除约束前须验证上游修复版本的 Linux quality gate 和桌面协议拉起。
+
 ## 最小质量门禁
 
 Win7 构建额外执行 `yarn test:win7-build`、`yarn test:release`，使用独立 `src-tauri/Cargo.win7.lock + --locked`，并由两条 Win7 工作流解包最终 MSI、校验安装 PE 普通/延迟导入与主程序 SHA-256。Win7 专用 windows-link 补丁及 `windows_slim_errors` 禁止进入普通构建；更新锁快照须审查完整依赖差异并重新进行 Win7 SP1 x64 实机冒烟。
