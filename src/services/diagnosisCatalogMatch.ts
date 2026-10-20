@@ -221,6 +221,41 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
   input: AssessDiagnosisCatalogMatchInput<T>,
 ): DiagnosisCatalogAssessment<T> {
   const queryName = input.queryName.trim();
+  const queryIsCode = /^[a-z][0-9]{2}(?:\.[a-z0-9]+)?$/iu.test(queryName.trim());
+  const normalizedIcdCode = normalizeIcdCode(queryIsCode ? queryName : input.icdCode);
+  // Observation policy: a unique full ICD code is authoritative for the catalog
+  // identity and name. Duplicate codes require selection, never first-row wins.
+  if (normalizedIcdCode) {
+    const codeMatches = input.catalog.filter((item) => normalizeIcdCode(item.code) === normalizedIcdCode);
+    if (codeMatches.length === 1) {
+      return {
+        status: 'exact',
+        matchedItem: codeMatches[0],
+        suggestedMatchItem: null,
+        alternatives: [],
+        reason: 'ICD-10 编码精确命中标准库（唯一条目，采用目录名称）',
+      };
+    }
+    if (codeMatches.length > 1) {
+      return {
+        status: 'ambiguous',
+        matchedItem: null,
+        suggestedMatchItem: null,
+        alternatives: codeMatches.slice(0, 5),
+        reason: '同一完整 ICD-10 编码对应多个标准诊断项，需医生选择',
+      };
+    }
+    if (queryIsCode) {
+      return {
+        status: 'unmatched',
+        matchedItem: null,
+        suggestedMatchItem: null,
+        alternatives: [],
+        reason: '诊断编码未命中标准库',
+      };
+    }
+  }
+
   if (!queryName) {
     return {
       status: 'unmatched',
@@ -231,54 +266,9 @@ export function assessDiagnosisCatalogMatch<T extends DiagnosisCatalogCandidate>
     };
   }
 
+  // A missing full-code hit falls back to the existing name/semantic rules.
   const normalizedQuery = normalizeName(queryName);
-  const queryIsCode = /^[a-z][0-9]{2}(?:\.[a-z0-9]+)?$/iu.test(queryName.trim());
-  if (queryIsCode) {
-    const codeMatch = input.catalog.find((item) => normalizeIcdCode(item.code) === normalizeIcdCode(queryName));
-    return codeMatch
-      ? {
-          status: 'exact',
-          matchedItem: codeMatch,
-          suggestedMatchItem: null,
-          alternatives: [],
-          reason: '诊断编码精确命中标准库',
-        }
-      : {
-          status: 'unmatched',
-          matchedItem: null,
-          suggestedMatchItem: null,
-          alternatives: [],
-          reason: '诊断编码未命中标准库',
-        };
-  }
-
-  // The HIS catalog and model both use the medical-insurance ICD-10 2.0
-  // namespace. Prefer a complete code hit, but never let a hallucinated or
-  // mismatched code overwrite explicit clinical semantics in the model name.
   const source = parseSemantics(queryName);
-  const normalizedIcdCode = normalizeIcdCode(input.icdCode);
-  if (normalizedIcdCode) {
-    for (const item of input.catalog) {
-      if (normalizeIcdCode(item.code) !== normalizedIcdCode) continue;
-      const candidate = buildRankedCandidate(item, source, input.icdCode);
-      const hasEquivalentSemantics = candidate.semantics.coreName === source.coreName
-        && candidate.conflicts.length === 0
-        && candidate.targetAddsModifiers.length === 0
-        && candidate.sourceDropsModifiers.length === 0;
-      if (hasEquivalentSemantics) {
-        return {
-          status: 'exact',
-          matchedItem: item,
-          suggestedMatchItem: null,
-          alternatives: [],
-          reason: 'ICD-10 编码精确命中标准库',
-        };
-      }
-    }
-  }
-
-  // The code was absent, missed, or failed the semantic safety gate. Fall back
-  // to normalized names without letting a merely related code choose another row.
   let exactName: T | undefined;
   for (const item of input.catalog) {
     if (prepareName(item).normalizedName !== normalizedQuery) continue;

@@ -10,6 +10,8 @@ import * as promptOverride from '@/services/promptOverride';
 import { VOICE_INTENT_STREAM_ORDER } from '../lib/voiceIntentStreamProtocol';
 import { useClinicalResultGenerationSequence } from '@features/consultation-result/model/useClinicalResultGenerationSequence';
 import { useClinicalResultProgressiveIntentApplication } from '@features/consultation-result/model/useClinicalResultProgressiveIntentApplication';
+import { initClinicalDiagnoses } from '@features/clinical-result/clinicalResultInitialization';
+import { buildDiagnosisSuggestionSections } from '@features/clinical-result/diagnosisSuggestionPresentation';
 
 vi.mock('@/services/llm', () => ({ chat: vi.fn(), chatStream: vi.fn(), chatFast: vi.fn() }));
 vi.mock('@/services/aliyunSpeech', () => ({ isTestModeEnabled: () => false }));
@@ -53,6 +55,34 @@ beforeEach(() => {
 });
 
 describe('voice diagnosis catalog assessment reuse', () => {
+  it.each(['formal', 'differential'] as const)('uses the unique ICD catalog name and preserves the original %s role', async (suggestionType) => {
+    catalog = [{ id: 'dx-rhinitis', name: '变应性鼻炎', code: 'J30.400' }];
+    vi.mocked(chatStream).mockImplementation(async (_messages, onChunk) => {
+      for (const event of events()) {
+        const data = event.event === 'record_core'
+          ? { chiefComplaint: '鼻痒、打喷嚏4天', historyOfPresentIllness: '本次鼻痒、打喷嚏4天，晨起加重。' }
+          : event.event === 'diagnoses'
+            ? [{ ...hint, name: '过敏性鼻炎', code: 'J30.400', suggestionType,
+                clinicalRole: suggestionType === 'formal' ? 'current_diagnosis' : 'differential_cause',
+                currentVisitEvidenceText: '本次鼻痒、打喷嚏4天', rationale: '鼻痒、喷嚏，晨起加重' }]
+            : event.data;
+        onChunk(`${JSON.stringify({ ...event, data })}\n`);
+      }
+    });
+    const result = await useVoiceIntentRecognition().processTranscript('鼻痒、打喷嚏4天，晨起加重');
+    expect(result?.diagnoses[0].matchedItem).toEqual(catalog[0]);
+    const diagnoses = initClinicalDiagnoses(result!.diagnoses, { buildRationale: () => '本次症状依据' });
+    expect(diagnoses[0]).toMatchObject({
+      id: 'dx-rhinitis', code: 'J30.400', name: '变应性鼻炎',
+      originalName: '过敏性鼻炎', catalogMatchStatus: 'exact', suggestionType,
+    });
+    const sections = buildDiagnosisSuggestionSections(diagnoses);
+    expect(sections.formal).toHaveLength(suggestionType === 'formal' ? 1 : 0);
+    expect(sections.differential).toHaveLength(suggestionType === 'differential' ? 1 : 0);
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it('waits for the base diagnosis catalog before starting the model stream', async () => {
     let releaseCatalog!: () => void;
     vi.mocked(medicalDataService.ensureDiagnosisCatalogReady).mockImplementationOnce(

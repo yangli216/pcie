@@ -89,15 +89,51 @@ describe('assessDiagnosisCatalogMatch', () => {
     expect(result.matchedItem).toBeNull();
   });
 
-  it('does not let an exact but semantically conflicting AI code overwrite the AI name', () => {
+  it('uses the unique ICD entry even when the AI name differs', () => {
     const result = assessDiagnosisCatalogMatch({
       queryName: '急性胃肠炎',
       icdCode: 'K52.909',
       catalog: [item('慢性胃肠炎', 'K52.909'), item('胃肠炎', 'A09.901')],
     });
 
-    expect(result.status).toBe('compatible');
-    expect(result.suggestedMatchItem?.name).toBe('胃肠炎');
+    expect(result.status).toBe('exact');
+    expect(result.matchedItem?.name).toBe('慢性胃肠炎');
+  });
+
+  it.each([
+    ['过敏性鼻炎', '变应性鼻炎'],
+    ['左侧膝关节炎', '右侧膝关节炎'],
+    ['双侧结膜炎', '左侧结膜炎'],
+    ['1型糖尿病', '2型糖尿病'],
+    ['原发性高血压', '继发性高血压'],
+    ['急性胃肠炎', '急性胃炎'],
+    ['', '变应性鼻炎'],
+  ])('adopts the catalog identity for a unique complete code: %s -> %s', (queryName, name) => {
+    const standard = item(name, 'J30.400');
+    const result = assessDiagnosisCatalogMatch({ queryName, icdCode: ' j30.400 ', catalog: [standard] });
+    expect(result.status).toBe('exact');
+    expect(result.matchedItem).toBe(standard);
+    expect(result.suggestedMatchItem).toBeNull();
+  });
+
+  it.each(['变应性鼻炎', 'J30.400'])('requires a choice for duplicate ICD codes instead of picking a row: %s', (queryName) => {
+    const catalog = [
+      { id: 'dx-1', name: '变应性鼻炎', code: 'J30.400' },
+      { id: 'dx-2', name: '变应性鼻炎', code: ' j30.400 ' },
+    ];
+    const result = assessDiagnosisCatalogMatch({ queryName, icdCode: 'J30.400', catalog });
+    expect(result.status).toBe('ambiguous');
+    expect(result.matchedItem).toBeNull();
+    expect(result.suggestedMatchItem).toBeNull();
+    expect(result.alternatives).toEqual(catalog);
+  });
+
+  it.each(['J30', 'J30.4', 'J30.400x001'])('does not infer a full code from a prefix or different extension: %s', (icdCode) => {
+    const result = assessDiagnosisCatalogMatch({
+      queryName: '过敏性鼻炎', icdCode, catalog: [item('变应性鼻炎', 'J30.400')],
+    });
+    expect(result.matchedItem).toBeNull();
+    expect(result.suggestedMatchItem).toBeNull();
   });
 
   it('does not treat anatomy narrowing as a compatible match', () => {
