@@ -46,7 +46,7 @@
 
 ## 快速导航
 
-开机自启动：`features/settings/api/autostart.ts` 封装系统插件；`model/useSettingsAutostart.ts` 为局部状态 controller，处理读取、切换、回读与错误；`ui/AutostartSettings.vue` 由 `SettingsGeneralTab.vue` 挂载，切换立即生效。Rust `lib.rs` 注册 autostart 插件，`src-tauri/capabilities/autostart.json` 只授权主窗口的读取、开启、关闭动作。验证记录与平台手测见 `docs/autostart-uat.md`。
+开机自启动：`features/settings/api/autostart.ts` 封装系统插件；`model/useSettingsAutostart.ts` 为局部状态 controller，处理读取、切换、回读与错误；`ui/AutostartSettings.vue` 由 `SettingsGeneralTab.vue` 挂载，切换立即生效。Rust `lib.rs` 经 `src-tauri/src/autostart.rs` 注册平台 Adapter（Windows 注册表命令加引号、状态校验及旧命令修复；其余平台复用原插件），`src-tauri/capabilities/autostart.json` 只授权主窗口的读取、开启、关闭动作。验证记录与平台手测见 `docs/autostart-uat.md`。
 
 Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-tauri/Cargo.win7.lock`、slim errors 与 `scripts/win7/windows-link` 补丁；`scripts/validate-win7-installer.ps1` 解包实际 MSI，`scripts/validate-win7-imports.mjs` 校验安装 EXE/DLL 的普通/延迟导入及主程序来源 SHA-256。普通构建不使用此锁与补丁。
 

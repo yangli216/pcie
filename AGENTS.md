@@ -124,6 +124,7 @@ Win7 构建额外执行 `yarn test:win7-build`、`yarn test:release`，使用独
 4. Vitest 单元测试通过 `yarn test:unit` 执行；修改已覆盖的 service/composable/lib 必须执行该命令
 5. 修改关键路径或本地/远端契约时，必须按工作区 [TESTING_STRATEGY.md](../TESTING_STRATEGY.md) 补充对应单元测试、集成测试或关键手测记录
 6. 若无法完成构建或测试，必须说明阻塞原因，并补充关键路径手测或静态审查结论
+7. Windows 自启动原生回归执行 `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib autostart::`；`Test Build` 的 Windows job 必须在打包前执行该命令，测试只操作独立临时 HKCU 分支，不改真实用户启动项。macOS/Linux 的测试通过不能替代 Windows 注册表测试和实机登录启动验收。
 
 ## 关键手测清单
 

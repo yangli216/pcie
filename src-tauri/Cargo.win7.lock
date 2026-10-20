@@ -3298,6 +3298,7 @@ dependencies = [
  "uuid",
  "window-vibrancy 0.5.3",
  "windows-sys 0.61.2",
+ "winreg 0.10.1",
 ]
 
 [[package]]

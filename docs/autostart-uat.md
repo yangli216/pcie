@@ -20,3 +20,13 @@
 ## 本机依赖环境
 
 初次类型检查发现本机 TypeScript 5.6.3 的 `lib/tsc.js` 与 Yarn 缓存副本均被截断（约 905 KB），导致 `vue-tsc` 报 `Failed to locate tsc module path from shim`。从同版本官方包恢复本机文件后检查通过；未修改 TypeScript 版本或仓库依赖约束。
+
+## Windows 重启未运行修复（2026-10-19）
+
+代码确认 `auto-launch 0.5.0` 将 `current_exe + 空格` 原样写入 HKCU Run，不给可执行文件路径加引号，且 `is_enabled` 只检查值存在。默认安装目录在 Program Files 下，因此原开关的成功回读不足以证明启动命令正确。用户反馈来自另一台 Windows 电脑，尚未取得该机路径、进程或注册表记录，不能认定这是该机唯一原因。
+
+Windows 现由 `src-tauri/src/autostart.rs` 提供原有 `plugin:autostart` 命令：写入完整带引号路径、核对当前 exe 和 StartupApproved 状态、首次无 Run key 时创建，关闭操作幂等。启动时仅将原有且精确指向当前 exe 的无引号旧命令修复为带引号命令，既不创建缺失启动项，也不修改系统禁用记录。路径失效显示关闭，医生可显式重新开启。macOS/Linux 保留官方插件，主窗口 capability 与前端 gateway 不变。
+
+回归命令：`cargo test --locked --manifest-path src-tauri/Cargo.toml --lib autostart::`。跨平台纯规则覆盖路径引号、中文/空格、错误路径/额外参数及系统启用位；Windows 专用测试在独立临时 HKCU 分支读写注册表，覆盖首次启用、旧项修复、保留系统禁用、失效路径和重复关闭。`Test Build` Windows job 在打包前执行该测试。测试不改真实 Run 项；本机 macOS 无法替代 Windows 登录验收。
+
+修复包安装后先手动启动一次，以便修复旧项，然后退出并注销/重新登录验证；同时按上方清单确认原安装路径、普通用户权限、任务管理器启动状态、实际进程和悬浮球可见性。若进程存在而悬浮球不可见，应转查窗口恢复，不将它误归因为自启动未执行。

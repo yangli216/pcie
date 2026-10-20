@@ -51,6 +51,7 @@ rfd = "0.17.2"
 window-vibrancy = "0.5"
 
 [target.'cfg(windows)'.dependencies]
+winreg = "=0.10.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 [profile.dev]

@@ -9,6 +9,7 @@ use tauri_plugin_updater::UpdaterExt;
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
 
 mod http_server;
+mod autostart;
 mod win7_window_region;
 
 use serde::{Deserialize, Serialize};
@@ -928,10 +929,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state.clone())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
+        .plugin(autostart::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = app
