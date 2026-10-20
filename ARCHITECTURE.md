@@ -1600,9 +1600,9 @@ describe('useWindowManagement', () => {
 
 ### 场景查体项目库与证据隔离
 
-`features/clinical-result/lib/physicalExamGuidance.ts` 为共享 domain Builder：维护基础查体项目、场景选择、模型提示词、事实冲突与项目去重；普通语音映射、候选 controller 与慢病生成复用同一规则，既有 AI 来源标记负责展示。`physicalExamMeasurements.ts` 仅提供身高/体重/腰围正文槽位及明确数值提取，由现有生命体征 Builder 调用，不改 PHIS 五项结构化生命体征契约。
+`features/clinical-result/lib/physicalExamGuidance.ts` 为共享 domain Builder：维护基础查体项目、场景选择、模型提示词、事实冲突与项目去重，以及正常意识/精神/病容的共享识别规则；普通语音映射、候选 controller 与慢病生成复用同一规则，既有 AI 来源标记负责展示。`physicalExamMeasurements.ts` 仅提供身高/体重/腰围正文槽位及明确数值提取，由现有生命体征 Builder 调用，不改 PHIS 五项结构化生命体征契约。
 
-普通语音在映射同次候选时补齐基础项目；症状的原有候选请求返回后增量补齐；慢病在原 SSE 的 record_extra 返回 physicalExamSuggestions，复用共享候选结构并生成 factSuggestions，不新增模型请求或确认页。候选合并前按最新正文过滤矛盾和重复，异步期间已编辑的查体不自动追加；恢复保留医生已调整/移除状态。`clinicalRecordAnnotation.ts` 提供候选文本剥离的证据投影：展示、缓存和回写保留草稿，后续用药与病历重生成使用剥离 AI 查体候选的事实文本，避免循环把建议当成检查证据。
+基础项目不再生成正常意识、精神或病容候选，模型返回的同类候选也在共享合并入口排除。普通语音在映射同次候选时补齐基础项目；症状的原有候选请求返回后增量补齐；慢病在原 SSE 的 record_extra 返回 physicalExamSuggestions，复用共享候选结构并生成 factSuggestions，不新增模型请求或确认页。候选合并前按最新正文过滤矛盾和重复，异步期间已编辑的查体不自动追加；恢复保留医生已调整/移除状态。`clinicalRecordAnnotation.ts` 提供候选文本剥离的证据投影：展示、缓存和回写保留草稿，后续用药与病历重生成使用剥离 AI 查体候选的事实文本，避免循环把建议当成检查证据。
 
 肺部默认书写候选按试点医生最终确认使用“双肺呼吸音粗”，继续保留 AI 来源与推理证据隔离；本次明确呼吸音结果优先，不回溯替换医生正文或已有缓存草稿。
 
@@ -1650,4 +1650,4 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 ### 体格检查结构化回写
 
 
-`recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段及身高、体重、腰围测量槽位剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，人体测量值继续保留在完整正文或 PHIS 独立字段中，仅剩余描述性查体正文同时投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。
+`recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段及身高、体重、腰围测量槽位剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，人体测量值继续保留在完整正文或 PHIS 独立字段中，投影时同时移除由 HIS 独立字段承载的正常意识、精神及病容表述（含神清、精神佳、无病容及同义表述），保留明确异常和其他描述性查体正文，再投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。

@@ -624,7 +624,7 @@ export async function generateChronicRefillRecord(
         '药品字段只允许ref或name、targetDose、targetDoseUnit、frequency、frequencyKey、route、routeKey、reason。不得输出dosage、dosageUnit、days、totalQty、totalUnit；这些由程序从可靠历史和药品详情计算。reason不超过40字，只写临床依据，不写剂量或包装算术。',
         'review_plan只补充确定性核查骨架。patch id只允许control-status或current-symptoms；最多2项，每项只含id、question、description、basis，文本简短且不写处方属性。没有更具体内容时patches为空。',
         'record_extra.healthEducation不超过160字，包含与已选慢病相关的规律用药、家庭监测、饮食和复诊提醒。不得写“注意休息”“1周内复诊”或笼统建议。',
-        'record_extra.recordSuggestions必须返回1至2条仅作用于historyOfPresentIllness的疾病相关阴性症状和一般情况候选。每项包含field="historyOfPresentIllness"、question、negativeRecordText、rationale、priority；按已选慢病合并组织有临床价值的阴性症状，例如高血压关注头晕、头痛、视物模糊、胸闷、心悸，糖尿病关注多饮、多食、多尿、视物模糊和体重明显变化；可用另一条简洁补充“无失眠，精神、饮食可，大小便无殊，体重无明显增减”等一般情况。客观“神志清”归physicalExamSuggestions，不写入现病史。negativeRecordText必须使用“无/否认/未见/不伴”的规范阴性表述，不写控制平稳、规律服药、监测正常、依从性、不良反应、药品、库存或未选慢病。候选会以AI来源标记合入可编辑现病史，不得描述成问诊已明确事实。',
+        'record_extra.recordSuggestions必须返回1至2条仅作用于historyOfPresentIllness的疾病相关阴性症状和一般情况候选。每项包含field="historyOfPresentIllness"、question、negativeRecordText、rationale、priority；按已选慢病合并组织有临床价值的阴性症状，例如高血压关注头晕、头痛、视物模糊、胸闷、心悸，糖尿病关注多饮、多食、多尿、视物模糊和体重明显变化；可用另一条简洁补充“无失眠，精神、饮食可，大小便无殊，体重无明显增减”等一般情况。客观查体不写入现病史；意识、精神和病容已有HIS独立字段，不补神清、精神佳、无病容等正常查体候选。negativeRecordText必须使用“无/否认/未见/不伴”的规范阴性表述，不写控制平稳、规律服药、监测正常、依从性、不良反应、药品、库存或未选慢病。候选会以AI来源标记合入可编辑现病史，不得描述成问诊已明确事实。',
         '基础查体由程序补齐。physicalExamSuggestions最多2项，只补基础库之外、与已选慢病直接相关的重点专科查体；每项包含field="physicalExam"、question、negativeRecordText、rationale、priority。不得生成测量值，不得把候选当作当前事实或用药依据。没有必要补充时返回空数组。',
         '逐行输出NDJSON，每行一个完整JSON对象，不输出markdown、解释或数组外壳。',
         `严格按${streamOrder}顺序输出。`,

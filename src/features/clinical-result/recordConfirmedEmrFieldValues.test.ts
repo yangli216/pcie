@@ -94,8 +94,8 @@ describe('buildRecordConfirmedEmrFieldValues', () => {
 
     expect(values).toMatchObject({
       体格检查: 'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。身高:{身高}cm，体重:{体重}kg，腰围:{腰围}cm。神清，双肺呼吸音粗。',
-      其他体格检查: '神清，双肺呼吸音粗。',
-      其他体格检查文本: '神清，双肺呼吸音粗。',
+      其他体格检查: '双肺呼吸音粗。',
+      其他体格检查文本: '双肺呼吸音粗。',
     });
   });
 
@@ -107,5 +107,13 @@ describe('buildRecordConfirmedEmrFieldValues', () => {
 
     expect(values).not.toHaveProperty('其他体格检查');
     expect(values).not.toHaveProperty('其他体格检查文本');
+  });
+
+  it('keeps the complete record but omits empty other-exam fields for normal general findings', () => {
+    const physicalExam = '神清，精神佳，{无病容}。';
+    expect(buildRecordConfirmedEmrFieldValues({
+      record: { physicalExam },
+      selectedRecordFields: new Set(['physicalExam']),
+    })).toEqual({ 体格检查: physicalExam });
   });
 });

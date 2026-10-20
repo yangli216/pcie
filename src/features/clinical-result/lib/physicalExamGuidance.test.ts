@@ -13,6 +13,17 @@ const suggestion = (text: string): ClinicalRecordFactSuggestion => ({
 });
 
 describe('case-related physical examination', () => {
+  it('omits normal general findings from the baseline and model extensions', () => {
+    const normalFindings = ['神清', '神志清', '意识清楚', '意识{清醒}', '精神佳', '精神可', '精神状态良好', '{无病容}'];
+    const output = completePhysicalExamSuggestions(record({ chiefComplaint: '咳嗽' }), [], normalFindings.map(suggestion));
+    expect(output.map((item) => item.negativeRecordText)).toContain('双肺呼吸音粗');
+    for (const text of normalFindings) {
+      expect(canAppendPhysicalExamCandidate(text, '')).toBe(false);
+      expect(output.map((item) => item.negativeRecordText)).not.toContain(text);
+    }
+    expect(completePhysicalExamSuggestions(record({ chiefComplaint: '复诊' }), [], [])).toEqual([]);
+  });
+
   it.each([
     ['咳嗽发热', '双肺呼吸音粗', '腹部无压痛'],
     ['高血压复诊', '心律齐', '双足背动脉搏动可触及'],

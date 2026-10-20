@@ -44,7 +44,7 @@ describe('physicalExamVitalTemplate', () => {
   it('keeps only descriptive text when projecting the other physical exam field', () => {
     expect(stripPhysicalExamStructuredNarrative(
       'T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{110}/{77}mmHg。意识清楚，精神佳；{无病容}，身高：{身高}cm，体重：{体重}kg，腰围：{腰围}cm。神清。双下肢无水肿。',
-    )).toBe('意识清楚，精神佳；{无病容}，神清。双下肢无水肿。');
+    )).toBe('双下肢无水肿。');
 
     expect(stripPhysicalExamStructuredNarrative(
       '身高168cm，体重55kg，腰围80cm。体重下降3kg，双足皮肤完整。',
@@ -63,5 +63,16 @@ describe('physicalExamVitalTemplate', () => {
         { slotKey: 'diastolicBloodPressure', value: '80', unit: 'mmHg', marker: '{80}' },
       ],
     });
+  });
+
+  it.each(['神清', '神志清楚。', '意识{清楚}，精神{佳}，{无病容}。', '精神状态：良好；神志清晰。'])('omits standalone normal general findings: %s', (text) => {
+    expect(stripPhysicalExamStructuredNarrative(text)).toBe('');
+  });
+
+  it('preserves abnormalities and qualified findings while removing only normal clauses', () => {
+    const text = '神清，精神萎靡；意识模糊，急性病容。意识清楚但反应迟钝，精神可，双肺呼吸音粗。';
+    expect(stripPhysicalExamStructuredNarrative(text)).toBe('精神萎靡；意识模糊，急性病容。意识清楚但反应迟钝，双肺呼吸音粗。');
+    expect(buildPhysicalExamWithVitalTemplate({ physicalExam: text })).toContain(text);
+    expect(stripPhysicalExamStructuredNarrative('腹部柔软，精神尚可。双肺呼吸音粗。')).toBe('腹部柔软。双肺呼吸音粗。');
   });
 });

@@ -1,4 +1,5 @@
 import { buildPhysicalExamMeasurements } from './lib/physicalExamMeasurements';
+import { isNormalGeneralPhysicalExamFinding } from './lib/physicalExamGuidance';
 
 export const PHYSICAL_EXAM_VITAL_SCHEMA_VERSION = 'outpatient-record-physical-exam-vitals.v1' as const;
 
@@ -138,15 +139,21 @@ export function stripPhysicalExamVitalNarrative(value: string): string {
 /**
  * Returns only descriptive examination text for PHIS "other physical exam" fields.
  * The complete physical-exam record keeps these measurements; this projection removes
- * them because PHIS templates may bind them to dedicated fields.
+ * them and normal general findings because PHIS templates bind dedicated fields.
  */
 export function stripPhysicalExamStructuredNarrative(value: string): string {
   return stripPhysicalExamVitalNarrative(value)
     .replace(/身高\s*[:：]?\s*\{?(?:身高|\d+(?:\.\d+)?)\}?\s*(?:cm|厘米)[，,；;。]?/giu, '')
     .replace(/体重\s*[:：]?\s*\{?(?:体重|\d+(?:\.\d+)?)\}?\s*(?:kg|公斤|千克)[，,；;。]?/giu, '')
     .replace(/腰围\s*[:：]?\s*\{?(?:腰围|\d+(?:\.\d+)?)\}?\s*(?:cm|厘米)[，,；;。]?/giu, '')
+    .replace(/[^，,；;。\n]+[，,；;。\n]*/gu, (clause) => (
+      isNormalGeneralPhysicalExamFinding(clause.replace(/[，,；;。\n]+$/u, ''))
+        ? (clause.includes('。') ? '。' : '')
+        : clause
+    ))
     .replace(/([。])[，,；;]+/gu, '$1')
     .replace(/[，,；;]+(?=[。])/gu, '')
+    .replace(/。{2,}/gu, '。')
     .replace(/^[\s，,；;。]+/u, '')
     .replace(/\s+/gu, ' ')
     .trim();
