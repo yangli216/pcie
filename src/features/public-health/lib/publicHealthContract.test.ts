@@ -28,25 +28,36 @@ describe('public health facts and writeback boundaries', () => {
     const weight = testWeightRequest(), weightResult = testResult(weight); weightResult.sections[0].content = '';
     expect(() => assertResult(weightResult, weight)).toThrow('章节无效');
   });
-  it('rejects explanatory text from every meal option and edited confirmation while retaining long physician edits', () => {
+  it('preserves explanatory text in all meal choices and physician edits without adding separate warnings', () => {
     const request = testWeightRequest(), result = testMealResult(request);
-    result.sections[1].options![2].content += '\n待医生核实事项\n适用性待核实。';
-    expect(() => assertResult(result, request)).toThrow('内部说明');
-    const clean = testMealResult(request);
-    expect(() => buildConfirmation(request, clean, { exercise_plan: '制定依据\n当前资料如下' }, ['exercise_plan'], testUuid(9), testTime)).toThrow('内部说明');
-    const edited = '每天记录身体活动，出现不适停止运动。'.repeat(30);
-    const confirmation = buildConfirmation(request, clean, { exercise_plan: edited }, ['exercise_plan'], testUuid(9), testTime);
-    expect(confirmation.items[0].value).toBe(edited);
-  });
-  it('rejects an over-sentence generated exercise section but permits a physician to edit the valid generated result beyond its style limit', () => {
-    const request = testWeightRequest(), result = testResult(request);
-    const invalid = structuredClone(result);
-    invalid.sections[0].content = invalid.sections[0].content.replace('1. ', '1. 先准备。开始运动。');
-    expect(() => assertResult(invalid, request)).toThrow('每条最多 2 句');
+    const content = '待医生核实事项\n请医生核对食物过敏史。';
+    result.sections[1].options!.forEach(option => { option.content = content; });
+    result.sections[1].content = content;
     expect(() => assertResult(result, request)).not.toThrow();
-    const edited = '按医生安排完成活动，出现不适停止运动并及时就诊。'.repeat(25);
-    const payload = buildConfirmation(request, result, { exercise_plan: edited }, ['exercise_plan'], testUuid(9), testTime);
-    expect(payload.items[0].value).toBe(edited);
+    const confirmation = buildConfirmation(request, result, { meal_plan: content }, ['meal_plan'], testUuid(9), testTime);
+    expect(confirmation.items[0].value).toBe(content);
+    expect(confirmation).not.toHaveProperty('warnings');
+  });
+  describe.each(['health_prescription', 'weight_management'] as const)('%s freeform patient content', capability => {
+    it.each([
+      '散步。',
+      '运动建议\n先准备。开始活动。中途休息。结束放松。',
+      '1. 合成第一条。\n4. 合成第二条。',
+      '合成正文'.repeat(200),
+      '制定依据\n来源：合成资料。\n待医生核实事项\n请医生核对记录。',
+      'BMI24、BMR1200 kcal，130 mmHg、6.2 mmol/L；减重目标、目标体重、三餐参考食谱、备选食谱。',
+      '1. 每日坚持散步30至40分钟，可在早晨或傍晚气温适宜时进行，保持匀速，避免剧烈加速或急停。\n2. 每周选择3天进行轻度有氧运动，如太极拳或八段锦，每次练习40分钟，动作缓慢连贯，注意呼吸均匀。\n3. 避免久坐，每小时起身活动2至3分钟，可做原地抬腿或伸展手臂，若运动中出现胸闷、头晕或心悸，立即停止并休息。',
+    ])('receives and confirms the complete original text without style or keyword rejection (case %#)', content => {
+      const request = capability === 'weight_management' ? testWeightRequest() : testRequest();
+      const result = testResult(request);
+      result.sections.forEach(section => { section.content = content; });
+      expect(() => assertResult(result, request)).not.toThrow();
+      const values = Object.fromEntries(result.sections.map(section => [section.id, content]));
+      const confirmation = buildConfirmation(request, result, values, SECTION_IDS[capability], testUuid(9), testTime);
+      expect(confirmation.items).toHaveLength(SECTION_IDS[capability].length);
+      confirmation.items.forEach(item => expect(item.value).toBe(content));
+      expect(() => assertConfirmation(confirmation, request)).not.toThrow();
+    });
   });
   it('accepts three meal options bound to the default, while confirmation still contains only current text', () => {
     const request = testWeightRequest(), result = testMealResult(request), meal = result.sections[1];

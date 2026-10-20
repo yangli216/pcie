@@ -1633,6 +1633,8 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 ## 公卫助手桌面边界（2026-09-29）
 
+2026-10-19 公卫接入统一为医疗 `/api/handshake` 的可选 `publicHealth` 扩展；SDK 复用 HIS 上下文采集、连接和协议拉起。删除公卫配对环境配置与独立握手，注册表仍按本次 Origin/SDK 实例隔离令牌、任务及 WS，续期需原令牌；医疗普通握手与结果通道维持原契约。
+
 公卫 Bridge 新增的 SHA-256、Base64 与时间解析依赖同时登记到独立 Win7 锁快照，复用已有固定版本，仅补 root dependency 引用；不升级 Win7 依赖或变更其发布通道。
 
 - `features/public-health/types.ts` 描述 `public-health.v1` 的事实、结果、SSE 和回写结构；`lib` 承担来源引用、身份匹配、流顺序和允许回写范围的纯校验。健康处方固定三章节，减重固定两章节与服务端只读 BMI/BMR。
@@ -1648,3 +1650,7 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 
 公卫患者处方与医生提醒（2026-10-13）：`lib/publicHealthPatientText.ts` 统一患者正文与运动生成格式校验，生成/SSE与确认边界分别检查；`ui/PublicHealthDoctorNotes.vue` 只读展示既有 warnings。健康草稿的证据、风险分析及缺项说明由 renderer 发出医生回调，不进入 editable values；Controller、确认 Builder 和 Bridge.confirm 保护确认/恢复/重传，保留医生编辑与独立任务范围。
+
+## 公卫客户端正文边界（2026-10-20）
+
+公卫 Contract、Controller 与结果组件只承担正文类型/协议容量、任务身份、章节目标映射及医生确认流程，不再检查正文风格、禁用词或内容关键词。随访结构化草稿渲染仍验证机构规则与事实引用，文本原样输出；独立 warnings 保留在医生区。服务端生成规则独立生效。

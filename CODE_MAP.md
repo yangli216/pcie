@@ -32,6 +32,8 @@
 
 ## 公卫助手（2026-09-29 实现中）
 
+- `src-tauri/src/http_server.rs` 的 `/api/handshake` 接受医疗 BrowserContext 与可选 `publicHealth` 会话扩展；`public_health.rs` 验证实际 Origin、医疗上下文与实例/令牌，`public_health_http.rs` 管理独立公卫 REST/WS。SDK 共用医疗上下文采集和协议拉起，无独立配对配置。
+
 - `features/public-health`：公开页面/控制器/类型入口；`ui` 仅展示核对、结果与回写状态，`model` 管理独立任务，`lib` 管理身份、来源引用和允许目标纯规则，`api` 封装签名 SSE 与本地 Bridge。
 - `features/public-health/model/usePublicHealthMealSelection.ts` 与 `ui/PublicHealthMealOptions.vue`：当前生成内食谱单选/独立编辑，以及默认推荐、折叠两备选的展示；仅当前采用正文进入既有确认 Builder。
 - `features/public-health/lib/publicHealthHealthProfile.ts`、`publicHealthHealthEducation.ts` 与 `ui/PublicHealthHealthProfile.vue`：仅随访功能使用的事实画像、来源和已知风险展示，以及内部六分区教育/风险引用、检查适配和用药类别校验；减重仍保持独立两节。
@@ -523,5 +525,4 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 
 女性字段编辑控制器：`features/consultation-result/model/useFemaleHistoryFields.ts` 统一月经史/婚育史的缓存恢复、逐字段流式基线保护与非女性清理；共享结果页仅编排，不为两字段新增全局状态。
 
-
-公卫患者处方与医生提醒（2026-10-13）：`lib/publicHealthPatientText.ts` 统一患者正文与运动生成格式校验，生成/SSE与确认边界分别检查；`ui/PublicHealthDoctorNotes.vue` 只读展示既有 warnings。健康草稿的证据、风险分析及缺项说明由 renderer 发出医生回调，不进入 editable values；Controller、确认 Builder 和 Bridge.confirm 保护确认/恢复/重传，保留医生编辑与独立任务范围。
+公卫正文边界：`features/public-health/lib/publicHealthContract.ts` 验证身份、章节/目标结构、空值与协议容量；Controller、结果编辑与恢复页原样保留正文，不按风格、禁用词或内容关键词拒绝。`publicHealthHealthEducation.ts` 保留结构化来源校验与独立医生提醒，准备说明不再按关键词切分。

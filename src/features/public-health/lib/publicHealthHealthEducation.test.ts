@@ -44,9 +44,9 @@ describe('strict health education draft rendering', () => {
     renderHealthEducationDraft({ ...education(), doctorNotes: ['医生核对记录。', '医生核对记录。'] }, buildPublicHealthHealthProfile(request()), note => notes.push(note));
     expect(notes.filter(note => note === '医生核对记录。')).toHaveLength(2);
   });
-  it.each(['制定依据\n居民现状', '证据：资料', '请医生核对用药'])('rejects internal language in an otherwise valid patient draft: %s', content => {
-    expect(() => renderHealthEducationDraft({ ...education(), diet: [content] }, buildPublicHealthHealthProfile(request()))).toThrow();
-    expect(() => renderHealthEducationDraft({ ...education(), risks: [{ ...education().risks[0], intervention: content }] }, buildPublicHealthHealthProfile(request()))).toThrow();
+  it.each(['制定依据\n居民现状', '证据：资料', '请医生核对用药'])('preserves freeform language in advice and interventions: %s', content => {
+    expect(renderHealthEducationDraft({ ...education(), diet: [content] }, buildPublicHealthHealthProfile(request()))).toContain(content);
+    expect(renderHealthEducationDraft({ ...education(), risks: [{ ...education().risks[0], intervention: content }] }, buildPublicHealthHealthProfile(request()))).toContain(content);
   });
   it('renders all education topics and fills risk evidence date and source record from the current profile', () => {
     const notes: string[] = [];
@@ -112,15 +112,17 @@ describe('strict health education draft rendering', () => {
     expect(() => renderHealthEducationDraft(draft, buildPublicHealthHealthProfile(request()))).toThrow();
   });
   it.each(['BMI24', 'bmr 1200', '1200KCAL', '130 mm Hg', '130 mm\nHg', '6.2 mmol / l', '6.2 MmOl／L',
-    '减重目标', '目标体重', '三餐参考食谱', '备选食谱', '千卡', '卡路里'])('rejects the model-only keyword %s in risk and advice text', keyword => {
+    '减重目标', '目标体重', '三餐参考食谱', '备选食谱', '千卡', '卡路里'])('preserves the content keyword %s in risk and advice fields', keyword => {
     const profile = buildPublicHealthHealthProfile(request());
     for (const key of ['name', 'intervention'] as const) {
-      const draft = education(); draft.risks[0][key] = `合成正文：${keyword}`;
-      expect(() => renderHealthEducationDraft(draft, profile)).toThrow();
+      const draft = education(), notes: string[] = []; draft.risks[0][key] = `合成正文：${keyword}`;
+      const text = renderHealthEducationDraft(draft, profile, note => notes.push(note));
+      expect(key === 'name' ? notes.join('\n') : text).toContain(`合成正文：${keyword}`);
     }
     for (const key of ['prevention', 'diet', 'exercise', 'followup', 'missingFacts'] as const) {
-      const draft = education(); draft[key] = [`合成正文：${keyword}`];
-      expect(() => renderHealthEducationDraft(draft, profile)).toThrow();
+      const draft = education(), notes: string[] = []; draft[key] = [`合成正文：${keyword}`];
+      const text = renderHealthEducationDraft(draft, profile, note => notes.push(note));
+      expect(key === 'missingFacts' ? notes.join('\n') : text).toContain(`合成正文：${keyword}`);
     }
   });
   it('keeps original measurement units in program-rendered evidence and accepts exercise duration and frequency', () => {
@@ -140,29 +142,16 @@ describe('strict health education draft rendering', () => {
 });
 
 describe('approved health check eligibility and plan validation', () => {
-  it.each(['\n', '\r', '\u2028', '\u2029'])('preserves an unterminated patient preparation line before doctor-only instructions separated by %j', separator => {
-    const rules = policy(), notes: string[] = [];
+  it.each(['\n', '\r', '\u2028', '\u2029'])('preserves the complete preparation across separator %j without keyword filtering', separator => {
+    const rules = policy();
     rules.checkWhitelist[0].prep = `检查前按安排禁食${separator}请医生核对目录`;
-    const text = renderHealthCheckPlan(checks(), request(), rules, note => notes.push(note));
-    expect(text).toContain('准备事项：检查前按安排禁食');
-    expect(text).not.toContain('请医生核对目录');
-    expect(notes.join('\n')).toContain('准备事项：请医生核对目录');
-    expect(notes.join('\n')).not.toContain('检查前按安排禁食');
+    expect(renderHealthCheckPlan(checks(), request(), rules)).toContain(`准备事项：${rules.checkWhitelist[0].prep}`);
   });
-  it('keeps patient preparation, moves separate institution verification sentences and rejects mixed instructions', () => {
-    const rules = policy(), notes: string[] = [];
-    rules.checkWhitelist[0].prep = '检查前空腹 8 小时。机构需核对现场准备规则。';
-    const text = renderHealthCheckPlan({ ...checks(), doctorNotes: ['请医生核对检查适用性。'] }, request(), rules, note => notes.push(note));
-    expect(text).toContain('检查前空腹 8 小时。');
-    expect(text).not.toContain('机构需核对'); expect(notes.join('\n')).toContain('机构需核对现场准备规则。');
-    expect(notes).toContain('请医生核对检查适用性。');
-    rules.checkWhitelist[0].prep = '携带机构就诊卡到院。\n来源：批准规则。';
-    const preparationNotes: string[] = [];
-    const safePreparation = renderHealthCheckPlan(checks(), request(), rules, note => preparationNotes.push(note));
-    expect(safePreparation).toContain('携带机构就诊卡到院。'); expect(safePreparation).not.toContain('来源：');
-    expect(preparationNotes.join('\n')).toContain('来源：批准规则。');
-    rules.checkWhitelist[0].prep = '空腹 8 小时并由机构核对准备规则。';
-    expect(() => renderHealthCheckPlan(checks(), request(), rules)).toThrow();
+  it.each(['检查前空腹 8 小时。机构需核对现场准备规则。', '携带机构就诊卡到院。\n来源：批准规则。', '空腹 8 小时并由机构核对准备规则。'])('preserves mixed preparation text while keeping explicit doctorNotes separate: %s', prep => {
+    const rules = policy(), notes: string[] = []; rules.checkWhitelist[0].prep = prep;
+    const text = renderHealthCheckPlan({ ...checks(), doctorNotes: ['独立医生提醒。'] }, request(), rules, note => notes.push(note));
+    expect(text).toContain(prep); expect(text).not.toContain('独立医生提醒。');
+    expect(notes).toContain('独立医生提醒。');
   });
   it('requires age, sex, condition and caller risk to match together, independently of AI concern', () => {
     const current = request(), rules = policy();
@@ -379,7 +368,7 @@ describe('health medication guidance for supplied classes only', () => {
     expect(text).toContain('按医生处方服药，不要自行加量或停药。');
     expect(text).not.toContain('合成字典核对'); expect(text).not.toContain('请医生核对');
     expect(notes.join('\n')).toContain('合成字典核对提醒'); expect(notes).toContain('请医生核对现有处方。');
-    expect(() => renderHealthMedicationGuidance({ medicationGuidance: [{ classCode: 'synthetic-class', content: '待医生核实具体用法。' }] }, current, policy())).toThrow();
+    expect(renderHealthMedicationGuidance({ medicationGuidance: [{ classCode: 'synthetic-class', content: '待医生核实具体用法。' }] }, current, policy())).toContain('待医生核实具体用法。');
   });
   it('shows missing information when no class was supplied and completes guidance with the policy dictionary', () => {
     const current = request();

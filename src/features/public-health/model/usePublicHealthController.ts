@@ -6,7 +6,6 @@ import {
   assertConfirmation, assertRequest, assertResult, buildConfirmation, characterCount, clone, matchesFeedback, missingFacts, SECTION_IDS,
   supplementFacts,
 } from '../lib/publicHealthContract';
-import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type {
   PublicHealthConfirmed, PublicHealthFeedback, PublicHealthFeedbackEvent, PublicHealthLaunch,
   PublicHealthManualFacts, PublicHealthMetrics, PublicHealthRequest, PublicHealthResult,
@@ -58,14 +57,10 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
     if (!editable.value || !request.value) return false;
     if (result.value) {
       if (!selectedTargets.value.length) return false;
-      try {
-        for (const target of selectedTargets.value) for (const id of target.sourceSections) {
-          const value = values.value[id];
-          if (!value?.trim() || characterCount(value) > 16000) return false;
-          assertPatientFacingContent(value);
-        }
-        return true;
-      } catch { return false; }
+      return selectedTargets.value.every(target => target.sourceSections.every(id => {
+        const value = values.value[id];
+        return Boolean(value?.trim() && characterCount(value) <= 16000);
+      }));
     }
     if (state.value !== 'writeback-failed' || !frozen.value) return false;
     try { assertConfirmation(frozen.value, request.value); return true; } catch { return false; }
@@ -98,7 +93,7 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
   }
   function restore(snapshot: PublicHealthTaskSnapshot | null) {
     if (!snapshot || snapshot.phase === 'closed') return;
-    if (snapshot.pendingWriteback) assertConfirmation(snapshot.pendingWriteback, snapshot.request, { skipPatientTextValidation: true });
+    if (snapshot.pendingWriteback) assertConfirmation(snapshot.pendingWriteback, snapshot.request);
     receiveLaunch(snapshot);
     if (snapshot.pendingWriteback) {
       attempted = true;
@@ -106,8 +101,6 @@ export function usePublicHealthController(deps: PublicHealthControllerDependenci
       selected.value = [...new Set(snapshot.pendingWriteback.items.flatMap(item => item.sourceSections))];
       state.value = 'awaiting-writeback';
       message.value = '已恢复最近发送的确认内容，等待 PHIS 保存回执。';
-      try { assertConfirmation(snapshot.pendingWriteback, snapshot.request); }
-      catch { message.value = '已恢复原确认正文，其中包含内部说明或医生核实提醒，须在保存失败后调整正文；当前禁止重传。'; }
       if (snapshot.lastFeedback) receiveFeedback({ bridgeSessionId: snapshot.bridgeSessionId, feedback: snapshot.lastFeedback });
     }
   }

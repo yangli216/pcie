@@ -921,7 +921,7 @@ struct MousePosPayload {
 pub fn run() {
     let (result_tx, _) = tokio::sync::broadcast::channel(16);
     let state = Arc::new(AppState {
-        public_health: Mutex::new(public_health::PublicHealthRegistry::new(public_health::BridgeConfig::from_env())),
+        public_health: Mutex::new(public_health::PublicHealthRegistry::new()),
         current_consultation: Mutex::new(None),
         last_result: Mutex::new(None),
         event_queue: Mutex::new(VecDeque::new()),

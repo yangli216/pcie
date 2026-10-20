@@ -9,7 +9,6 @@ import PublicHealthHealthProfile from './PublicHealthHealthProfile.vue';
 import PublicHealthDoctorNotes from './PublicHealthDoctorNotes.vue';
 import { CAPABILITY_TITLES, characterCount, SCENE_TITLES } from '../lib/publicHealthContract';
 import { buildPublicHealthHealthProfile } from '../lib/publicHealthHealthProfile';
-import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type { PublicHealthController } from '../model/usePublicHealthController';
 import type { PublicHealthManualFacts } from '../types';
 const props = defineProps<{ controller: PublicHealthController }>();
@@ -32,8 +31,7 @@ function saveFacts(input: PublicHealthManualFacts) {
 function startGeneration() { if (result.value || frozen.value) regenerateOpen.value = true; else void c.generate(); }
 function restoredNotice(value: string): string {
   if (characterCount(value) > 64000) return '正文超出 64000 字，请调整后确认。';
-  try { assertPatientFacingContent(value); return ''; }
-  catch { return '原正文包含内部说明或医生核实提醒，请调整患者正文后再确认。'; }
+  return '';
 }
 async function finish() {
   try { if (await c.close()) emit('close'); }

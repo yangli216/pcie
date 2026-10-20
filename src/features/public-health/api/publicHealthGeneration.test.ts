@@ -3,10 +3,10 @@ vi.mock('@/services/regionalClient', () => ({ regionalRequestResponse: vi.fn() }
 import { regionalRequestResponse } from '@/services/regionalClient';
 import { createPublicHealthSseDecoder, createPublicHealthStreamValidator, generatePublicHealth } from './publicHealthGeneration';
 import { identityOf } from '../lib/publicHealthContract';
-import { testRequest, testResult, testTime, testUuid } from '../testFixtures';
+import { testRequest, testResult, testTime, testUuid, testWeightRequest } from '../testFixtures';
 
-function streamFrames() {
-  const request = testRequest(), result = testResult(request);
+function streamFrames(request = testRequest()) {
+  const result = testResult(request);
   const base = { schemaVersion: 'public-health.v1', ...identityOf(request), generationId: result.generationId, streamId: testUuid(20) };
   return { request, result, frames: [
     { id: `${base.streamId}:1`, event: 'accepted', data: JSON.stringify({ ...base, sequence: 1, mode: 'new', acceptedAt: testTime }) },
@@ -30,23 +30,18 @@ describe('signed named public health SSE', () => {
     expect(() => validator.accept(frames[1])).not.toThrow();
     expect(onEvent).toHaveBeenCalledTimes(2);
   });
-  it('refuses internal doctor explanations in streamed patient content before notifying the page', () => {
-    const { request, frames } = streamFrames(), onEvent = vi.fn();
-    const validator = createPublicHealthStreamValidator(request, onEvent);
+  it.each(['health_prescription', 'weight_management'] as const)('accepts %s freeform streamed sections and the matching final result', capability => {
+    const { request, result, frames } = streamFrames(capability === 'weight_management' ? testWeightRequest() : testRequest());
+    const onEvent = vi.fn(), validator = createPublicHealthStreamValidator(request, onEvent);
+    const content = '合成运动建议\n先准备。活动。休息。结束。\n制定依据：合成资料；BMI24，6.2 mmol/L。';
+    const section = { ...result.sections[0], content }; result.sections[0] = section;
+    result.warnings = [{ code: 'REVIEW', sectionId: section.id, message: '独立医生提醒。' }];
     validator.accept(frames[0]);
     const base = JSON.parse(frames[1].data); delete base.result;
-    const section = { id: 'lifestyle_guidance', title: '生活方式建议', content: '制定依据\n请医生核对资料。' };
-    expect(() => validator.accept({ ...frames[1], event: 'section', data: JSON.stringify({ ...base, section }) })).toThrow('内部说明');
-    expect(onEvent).toHaveBeenCalledTimes(1);
-    expect(() => validator.completed()).toThrow('中断');
-  });
-  it('rejects an authoritative result with internal explanations even when physician warnings are separately present', () => {
-    const { request, result, frames } = streamFrames();
-    result.sections[0].content = '检查计划\n证据：原始随访资料。';
-    result.warnings = [{ code: 'REVIEW', sectionId: 'check_plan', message: '证据：原始随访资料。' }];
-    const validator = createPublicHealthStreamValidator(request, () => undefined); validator.accept(frames[0]);
-    expect(() => validator.accept({ ...frames[1], data: JSON.stringify({ ...JSON.parse(frames[1].data), result }) })).toThrow('内部说明');
-    expect(() => validator.completed()).toThrow('中断');
+    validator.accept({ ...frames[1], event: 'section', data: JSON.stringify({ ...base, section, provisional: true }) });
+    expect(onEvent.mock.calls[1][0].data.section.content).toBe(content);
+    validator.accept({ id: `${base.streamId}:3`, event: 'completed', data: JSON.stringify({ ...base, sequence: 3, result }) });
+    expect(validator.completed()).toEqual(result);
   });
   it('rejects other patients, old streams, missing terminal and failed knowledge', () => {
     const { request, frames } = streamFrames(); const validator = createPublicHealthStreamValidator(request, () => undefined);

@@ -21,6 +21,18 @@ function setup(request = testRequest()) {
 }
 afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.useRealTimers(); });
 describe('independent public health task lifecycle', () => {
+  it.each(['health_prescription', 'weight_management'] as const)('confirms %s freeform generation and editing, then retries the frozen text', async capability => {
+    const { c, deps } = setup(capability === 'weight_management' ? testWeightRequest() : testRequest());
+    const content = '运动建议\n先准备。开始活动。休息。结束。\n来源：合成资料；待医生核实。BMI24、6.2 mmol/L。';
+    deps.generate.mockImplementation(async request => {
+      const result = testResult(request); result.sections.forEach(section => { section.content = content; }); return result;
+    });
+    await c.generate(); expect(c.state.value).toBe('reviewable'); expect(c.canWriteback.value).toBe(true);
+    const section = c.sections.value[0]; c.editSection(section.id, `${content}\n制定依据：医生编辑。`);
+    await c.writeback(); const frozen = structuredClone(c.frozen.value!);
+    expect(frozen.items[0].value).toBe(`${content}\n制定依据：医生编辑。`);
+    await c.writeback(); expect(deps.confirm.mock.calls[1]).toEqual(deps.confirm.mock.calls[0]);
+  });
   it('leaves empty health chapters unselected, permits physician completion, and confirms only existing advice', async () => {
     const { c, deps } = setup();
     deps.generate.mockImplementation(async request => {
@@ -67,14 +79,14 @@ describe('independent public health task lifecycle', () => {
     expect(c.frozen.value!.items[0].value).toContain('用药指导\n按现有处方服药，不要自行停药。');
     expect(JSON.stringify(c.frozen.value)).not.toContain('请医生核对');
   });
-  it('blocks contaminated physician edits and preserves physician warnings through meal choice, save failure and retransmission', async () => {
+  it('accepts freeform physician edits and keeps separate warnings through meal choice, save failure and retransmission', async () => {
     const { c, deps, launch } = setup(testWeightRequest()); deps.generate.mockImplementation(async request => testMealResult(request));
     await c.generate(); c.selectSection('exercise_plan', false);
     const meal = c.result.value!.sections[1].options!;
     c.selectMealOption(meal[1].id); c.editSection('meal_plan', '待医生核实事项\n请医生核对食物过敏史。');
-    expect(c.canWriteback.value).toBe(false); await c.writeback(); expect(deps.confirm).not.toHaveBeenCalled();
-    c.editSection('meal_plan', '早餐使用选定食材，避免已知过敏食物。'); c.selectSection('meal_plan', true);
+    expect(c.canWriteback.value).toBe(true); c.selectSection('meal_plan', true);
     await c.writeback(); const first = structuredClone(c.frozen.value!);
+    expect(first.items[0].value).toBe('待医生核实事项\n请医生核对食物过敏史。');
     expect(JSON.stringify(first)).not.toContain('适用性待核实');
     expect(first).not.toHaveProperty('warnings'); expect(first).not.toHaveProperty('options');
     expect(c.result.value!.warnings[0].message).toContain('适用性待核实');
@@ -86,17 +98,17 @@ describe('independent public health task lifecycle', () => {
     expect(c.frozen.value!.writebackRequestId).not.toBe(first.writebackRequestId);
     expect(JSON.stringify(c.frozen.value)).not.toContain('适用性待核实');
   });
-  it('restores an old contaminated draft without stripping it, blocks retransmission, and allows a corrected failed draft', async () => {
+  it('restores and retransmits an old freeform draft unchanged, and allows editing after save failure', async () => {
     const first = setup(); await first.c.generate(); await first.c.writeback();
     const pendingWriteback = structuredClone(first.c.frozen.value!);
     pendingWriteback.items[0].value = '检查安排\n请医生核对准备事项。';
     const second = setup();
     second.c.restore({ ...first.launch, originRequestId: first.launch.request.originRequestId, phase: 'awaiting-writeback', pendingWriteback, lastFeedback: null });
     expect(second.c.frozen.value!.items[0].value).toBe(pendingWriteback.items[0].value);
-    await second.c.writeback(); expect(second.deps.confirm).not.toHaveBeenCalled();
-    expect(second.c.message.value).toContain('内部说明');
+    await second.c.writeback(); expect(second.deps.confirm).toHaveBeenCalledWith(first.launch.bridgeSessionId, pendingWriteback);
+    expect(second.c.message.value).not.toContain('内部说明');
     second.c.receiveFeedback({ bridgeSessionId: first.launch.bridgeSessionId, feedback: testFeedback(pendingWriteback, 'failed') });
-    expect(second.c.canWriteback.value).toBe(false);
+    expect(second.c.canWriteback.value).toBe(true);
     second.c.editRestoredTarget(pendingWriteback.items[0].targetFieldId, '检查当天携带既往检查资料。');
     expect(second.c.canWriteback.value).toBe(true); await second.c.writeback();
     expect(second.c.frozen.value!.items[0].value).toBe('检查当天携带既往检查资料。');

@@ -2,7 +2,6 @@
 import { computed } from 'vue';
 import PublicHealthMealOptions from './PublicHealthMealOptions.vue';
 import { characterCount } from '../lib/publicHealthContract';
-import { assertPatientFacingContent } from '../lib/publicHealthPatientText';
 import type { PublicHealthMetrics, PublicHealthSection, PublicHealthSectionId } from '../types';
 const props = defineProps<{
   sections: PublicHealthSection[]; values: Partial<Record<PublicHealthSectionId, string>>;
@@ -20,8 +19,6 @@ function sectionNote(section: PublicHealthSection): string {
   const value = props.values[section.id] ?? section.content;
   if (!value.trim()) return props.editable ? '暂无患者处方内容，可由医生补充正文后选择回写' : '暂无患者处方内容';
   if (characterCount(value) > 16000) return '正文超出 16000 字，请调整后确认';
-  try { assertPatientFacingContent(value); }
-  catch { return '正文含内部说明或医生核实提醒，请移至医生提醒区后再确认'; }
   return props.editable ? '由医生核对并确认' : '仅供阅读，当前不可修改或回写';
 }
 </script>
