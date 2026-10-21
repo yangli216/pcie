@@ -471,6 +471,62 @@ export interface BrowserContext {
 }
 
 /** SDK 构造参数 */
+export type PublicHealthCapability = 'health_prescription' | 'weight_management';
+export type PublicHealthScene = 'hypertension_followup' | 'diabetes_followup' | 'elderly_exam';
+export type PublicHealthSectionId = 'check_plan' | 'medication_guidance' | 'lifestyle_guidance' | 'exercise_plan' | 'meal_plan';
+export interface PublicHealthFactSource { system: string; recordId: string }
+export interface PublicHealthObservation {
+  id: string; code: string; value: string | number; unit?: string;
+  observedAt: string; source: PublicHealthFactSource;
+}
+export interface PublicHealthWeightProfile {
+  heightCm: number; weightKg: number;
+  region: '东北' | '华北' | '华东' | '华中' | '华南' | '西南' | '西北';
+  season: 'spring' | 'summer' | 'autumn' | 'winter';
+  heightObservationId?: string; weightObservationId?: string; contextSource?: PublicHealthFactSource;
+  activityDescription?: string; dietPreferences?: string; limitations?: string;
+}
+export interface PublicHealthFacts {
+  observations: PublicHealthObservation[];
+  conditions: Array<{ code: string; name: string; status: string }>;
+  medicationClasses: Array<{ code: string; name: string }>;
+  lifestyle: Partial<Record<'smoking' | 'alcohol' | 'exercise' | 'diet' | 'exerciseAbility' | 'occupation', string>>;
+  historySummary?: string; nextFollowUpDate?: string; weightProfile?: PublicHealthWeightProfile;
+}
+export interface PublicHealthPatient { name: string; sex: 'male' | 'female' | 'unknown'; ageYears: number; sexSource?: PublicHealthFactSource }
+export interface PublicHealthIdentity {
+  capability: PublicHealthCapability; scene: PublicHealthScene; patientId: string;
+  businessRecordId: string; recordVersion: string; snapshotAt: string;
+  originRequestId: string; requestId: string;
+}
+export interface PublicHealthTarget {
+  targetFieldId: string; label: string; sourceSections: PublicHealthSectionId[];
+  valueType: 'string'; mode: 'replace';
+}
+export interface PublicHealthRequest extends PublicHealthIdentity {
+  schemaVersion: 'public-health.v1'; patient: PublicHealthPatient;
+  facts: PublicHealthFacts; writebackTargets: PublicHealthTarget[];
+}
+export interface PublicHealthConfirmed extends PublicHealthIdentity {
+  schemaVersion: 'public-health.v1'; generationId: string; writebackRequestId: string;
+  items: Array<{ targetFieldId: string; sourceSections: PublicHealthSectionId[]; value: string }>;
+  confirmedAt: string;
+}
+export interface PublicHealthFeedback extends PublicHealthIdentity {
+  schemaVersion: 'public-health.v1'; generationId: string; writebackRequestId: string;
+  status: 'success' | 'failed'; savedRecordVersion?: string; errorCode?: string;
+  message?: string; feedbackAt: string;
+}
+
+export interface PublicHealthBridgeSession {
+  status: 'ready';
+  schemaVersion: 'public-health.v1';
+  bridgeSessionId: string;
+  publicHealthBridgeToken: string;
+  expiresAt: string;
+  renewUntil: string;
+}
+
 export interface MedHermesOptions {
   /** 本地桥接地址，默认 http://127.0.0.1:8081/api */
   baseUrl?: string;
@@ -484,12 +540,17 @@ export interface MedHermesOptions {
   launchRetryMs?: number;
   /** HTTP 请求超时（毫秒），默认 5000 */
   timeout?: number;
-  /** 自定义浏览器上下文扩展字段 */
+  /** 自定义浏览器上下文扩展字段，公卫沿用医疗 emrAccessToken / urt */
   extra?: Record<string, any>;
+  /** 公卫实例身份；省略时由 SDK 安全生成 UUID，无需配对配置 */
+  publicHealth?: { sdkInstanceId?: string };
 }
 
 /** 事件类型映射 */
 export interface MedHermesEvents {
+  'public-health-connected': (info: { bridgeSessionId: string; expiresAt: string }) => void;
+  'public-health-error': (error: Error & { code?: string }) => void;
+  'public-health-result-confirmed': (payload: PublicHealthConfirmed) => void;
   'event': (event: ConsultationEventEnvelope) => void;
   'draft': (result: ConsultationResultPayload) => void;
   'final-report': (result: ConsultationResultPayload) => void;
@@ -514,6 +575,7 @@ export interface HandshakeResponse {
   version: string;
   timestamp: number;
   traceId?: string;
+  publicHealth?: PublicHealthBridgeSession;
 }
 
 /** 浏览器上下文 / 调试握手参数 */
@@ -548,6 +610,15 @@ export declare class MedHermes {
 
   /** 初始化 SDK：采集浏览器上下文 + 与桌面端握手 */
   init(extra?: Record<string, any>): Promise<HandshakeResponse>;
+
+  /** 复用医疗上下文、握手和协议拉起；仅订阅隔离的公卫结果通道 */
+  initPublicHealth(extra?: Record<string, any>): Promise<PublicHealthBridgeSession>;
+
+  /** 自动准备公卫连接后提交本次调入，返回值仅表示已受理 */
+  assistPublicHealth(request: PublicHealthRequest): Promise<ApiResponse>;
+
+  /** 反馈本实例收到的冻结保存意图的真实终态 */
+  sendPublicHealthFeedback(feedback: PublicHealthFeedback): Promise<ApiResponse>;
 
   /** 调试模式：手动覆盖握手入参 */
   debugHandshake(overrides?: HandshakeContext): Promise<HandshakeResponse>;

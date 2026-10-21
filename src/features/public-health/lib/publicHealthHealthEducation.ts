@@ -1,7 +1,6 @@
 import { characterCount } from './publicHealthContract';
 import { buildPublicHealthHealthProfile, compareHealthObservationTime, type PublicHealthHealthProfile, type PublicHealthProfileEvidence } from './publicHealthHealthProfile';
 import type { PublicHealthPatient, PublicHealthRequest } from '../types';
-import { assertPatientFacingContent } from './publicHealthPatientText';
 
 export interface HealthCheckRule {
   code: string; name: string; prep: string; minIntervalDays: number; abnormalRetestIntervalDays: number;
@@ -43,7 +42,6 @@ function enumValue<T extends string>(value: unknown, allowed: readonly T[]): T {
 }
 function boundedText(text: string): string {
   if (!text.trim() || characterCount(text) > 16000) return invalid();
-  assertPatientFacingContent(text);
   return text;
 }
 function doctorDraft(value: unknown, required: readonly string[], onDoctorNote?: (message: string) => void): Record<string, unknown> {
@@ -53,33 +51,9 @@ function doctorDraft(value: unknown, required: readonly string[], onDoctorNote?:
   notes.forEach(note => onDoctorNote?.(note));
   return draft;
 }
-function patientText(text: unknown, max: number): string {
-  const value = string(text, max);
-  assertPatientFacingContent(value);
-  return value;
-}
-function patientPreparation(text: string, name: string, onDoctorNote?: (message: string) => void): string {
-  const blocks = text.match(/[^\r\n\u2028\u2029。！？!?]+(?:[。！？!?]+|(?=[\r\n\u2028\u2029]|$))/g) ?? [];
-  const patient: string[] = [];
-  for (const block of blocks) {
-    const content = block.trim();
-    const internal = /核对|核实|审核|待批准|目录|规则|基线|适用性|(?:^|[\s（(])(?:来源|出处|证据|制定依据|优先级|资料快照|记录版本)\s*[:：]/.test(content);
-    if (!internal) patient.push(patientText(content, 2000));
-    else {
-      if (/禁食|空腹|饮水|饮酒|运动|进食|服药|携带|尿液|样本|采样|采血/.test(content)) return invalid();
-      onDoctorNote?.(`${name}准备事项：${content}`);
-    }
-  }
-  return patient.join('\n');
-}
 function evidenceText(evidence: PublicHealthProfileEvidence, snapshotAt: string): string {
   const value = evidence.ref === 'patient:sex' ? ({ male: '男', female: '女' } as Record<string, string>)[String(evidence.value)] : evidence.value;
   return `${evidence.label}：${value}${evidence.unit ? ` ${evidence.unit}` : ''}；${evidence.observedAt ? `观察时间：${evidence.observedAt}` : `资料快照：${snapshotAt}`}${evidence.source ? `；来源：${evidence.source.system} / 记录：${evidence.source.recordId}` : ''}`;
-}
-function healthEducationText(value: unknown, max: number): string {
-  const text = string(value, max);
-  if (/BMI|BMR|kcal|mm\s*Hg|mmol\s*[/／]\s*L|减重目标|目标体重|三餐参考食谱|备选食谱|千卡|卡路里/i.test(text)) return invalid();
-  return text;
 }
 
 /** Render a strict internal AI draft into the existing lifestyle_guidance text section. */
@@ -90,11 +64,10 @@ export function renderHealthEducationDraft(value: unknown, profile: PublicHealth
   const risks = draft.risks.map((value, index) => {
     const risk = object(value, ['type', 'name', 'concern', 'evidenceRefs', 'intervention']);
     const type = enumValue(risk.type, ['progression', 'complication']);
-    const name = healthEducationText(risk.name, 100), intervention = healthEducationText(risk.intervention, 1000);
+    const name = string(risk.name, 100), intervention = string(risk.intervention, 1000);
     const concern = enumValue(risk.concern, ['attention', 'needs_assessment']);
     const refs = strings(risk.evidenceRefs, 16, 256, 1);
     if ((risk.evidenceRefs as unknown[]).some((ref, i) => ref !== refs[i]) || refs.some(ref => !available.has(ref))) return invalid();
-    assertPatientFacingContent(intervention);
     onDoctorNote?.(`${index + 1}. ${name}（${type === 'progression' ? '慢病进展' : '并发症'}；${concern === 'attention' ? '关注' : '待评估'}；AI 定性分析，不表示概率或诊断）\n证据：${refs.map(ref => evidenceText(available.get(ref)!, profile.snapshotAt)).join('；')}`);
     return intervention;
   });
@@ -102,8 +75,8 @@ export function renderHealthEducationDraft(value: unknown, profile: PublicHealth
     ['prevention', '疾病预防'], ['diet', '饮食建议'], ['exercise', '运动建议'],
     ['followup', '随访安排'],
   ] as const;
-  const adviceTopics = topics.map(([key, title]) => ({ title, advice: strings(draft[key], 8, 1000).map(item => healthEducationText(item, 1000)) }));
-  const missing = strings(draft.missingFacts, 8, 1000).map(item => healthEducationText(item, 1000));
+  const adviceTopics = topics.map(([key, title]) => ({ title, advice: strings(draft[key], 8, 1000) }));
+  const missing = strings(draft.missingFacts, 8, 1000);
   missing.forEach(item => onDoctorNote?.(`待补充资料：${item}`));
   if (!risks.length) onDoctorNote?.('本次未生成可核实的潜在风险条目；不能据此判断无风险，请医生结合资料评估。');
   if (!risks.length && adviceTopics.every(topic => !topic.advice.length)) {
@@ -267,7 +240,7 @@ export function renderHealthCheckPlan(value: unknown, request: PublicHealthReque
       : profile.conflicts.some(conflict => conflict.code === code) ? '\n既往结果：本项目最新结果存在冲突，请医生核对。' : '';
     const citedRefs = [...ids.map(id => `observation:${id}`), ...refs];
     onDoctorNote?.(`${rule.name} · ${item.plannedDate}\n优先级：${({ high: '高', medium: '中', low: '低' })[priority]}\n依据：${reason}\n证据：${citedRefs.map(ref => evidenceText(evidenceRefs.get(ref)!, profile.snapshotAt)).join('；')}${baselineNote}`);
-    const preparation = patientPreparation(rule.prep, rule.name, onDoctorNote);
+    const preparation = rule.prep;
     return `${rule.name} · ${item.plannedDate}${preparation ? `\n准备事项：${preparation}` : ''}`;
   });
   if (!checks.length) { onDoctorNote?.('本次未生成检查计划，请医生核对资料及适用检查目录。'); return ''; }
@@ -283,13 +256,12 @@ export function renderHealthMedicationGuidance(value: unknown, request: PublicHe
   const seen = new Set<string>();
   const blocks = raw.medicationGuidance.map(value => {
     const item = object(value, ['classCode', 'content']);
-    const code = identifier(item.classCode, 128), name = provided.get(code);
-    if (!name || seen.has(code) || !Object.prototype.hasOwnProperty.call(policy.medicationReminders, code)) return invalid();
+    const code = identifier(item.classCode, 128), name = provided.get(code) ?? code;
+    if (seen.has(code) || !Object.prototype.hasOwnProperty.call(policy.medicationReminders, code)) return invalid();
     seen.add(code);
     onDoctorNote?.(`${name}：${policy.medicationReminders[code]}`);
-    return `${name}\n${patientText(item.content, 16000)}`;
+    return `${name}\n${string(item.content, 16000)}`;
   });
-  if (seen.size !== provided.size) return invalid();
-  if (!blocks.length) { onDoctorNote?.('未提供用药类别资料，请先核对用药信息。'); return ''; }
+  if (!blocks.length) { onDoctorNote?.('本次未生成可回写的用药指导，请医生核对用药信息及适用规则。'); return ''; }
   return boundedText(blocks.join('\n\n'));
 }

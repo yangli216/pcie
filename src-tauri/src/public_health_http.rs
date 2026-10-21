@@ -1,6 +1,6 @@
 //! Public-health HTTP and authenticated, per-session WebSocket transport.
 use crate::{
-    public_health::{self, error, BridgeError, BridgeResult, HandshakeRequest, SCHEMA},
+    public_health::{self, error, BridgeError, BridgeResult, SCHEMA},
     SharedAppState,
 };
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -84,40 +84,9 @@ pub fn configure(config: &mut web::ServiceConfig) {
                         .into()
                     }),
             )
-            .route("/handshake", web::post().to(handshake))
             .route("/assist", web::post().to(assist))
             .route("/writeback-feedback", web::post().to(feedback)),
     );
-}
-async fn handshake(
-    req: HttpRequest,
-    body: web::Json<HandshakeRequest>,
-    state: web::Data<SharedAppState>,
-    app: web::Data<tauri::AppHandle>,
-) -> HttpResponse {
-    let start = Instant::now();
-    let result = state
-        .public_health
-        .lock()
-        .map_err(|_| error("BRIDGE_NOT_CONFIGURED", "公卫服务暂不可用"))
-        .and_then(|mut registry| {
-            registry.handshake(
-                &header(&req, "Origin"),
-                &header(&req, "X-PCIE-Pairing-Key"),
-                &header(&req, "X-PCIE-Bridge-Token"),
-                body.into_inner(),
-                public_health::now_ms(),
-            )
-        });
-    log(
-        &app,
-        "public-health.handshake",
-        "/api/public-health/handshake",
-        &result,
-        200,
-        start,
-    );
-    response(result, 200)
 }
 async fn assist(
     req: HttpRequest,
@@ -239,7 +208,7 @@ pub async fn events_ws(
         .public_health
         .lock()
         .map_err(|_| error("BRIDGE_NOT_CONFIGURED", "公卫服务暂不可用"))
-        .and_then(|r| r.config.origin(&origin));
+        .and_then(|r| r.authorize_origin(&origin));
     if let Err(err) = allowed {
         return Ok(response(Err(err), 200));
     }
@@ -362,26 +331,24 @@ mod tests {
     use super::*;
     use crate::{
         public_health::{
-            tests::{payload, request},
-            BridgeConfig, PublicHealthRegistry,
+            tests::{context, payload, request},
+            HandshakeRequest, PublicHealthRegistry,
         },
         AppState,
     };
     use actix_web::{test, App};
-    use base64::{engine::general_purpose::STANDARD, Engine};
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex},
     };
     const ORIGIN: &str = "https://phis.example.invalid";
     fn state() -> (SharedAppState, String, String) {
-        let pairing = STANDARD.encode([42u8; 32]);
-        let mut registry = PublicHealthRegistry::new(BridgeConfig::new(ORIGIN, &pairing));
+        let mut registry = PublicHealthRegistry::new();
         let now = public_health::now_ms();
         let auth = registry
             .handshake(
                 ORIGIN,
-                &pairing,
+                &context(),
                 "",
                 HandshakeRequest {
                     schema_version: SCHEMA.into(),

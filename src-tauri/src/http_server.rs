@@ -2702,18 +2702,30 @@ async fn health_check() -> impl Responder {
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SdkHandshakeRequest {
+    #[serde(flatten)]
+    context: BrowserContext,
+    public_health: Option<crate::public_health::HandshakeRequest>,
+}
+
 async fn handshake(
-    data: web::Json<BrowserContext>,
+    req: HttpRequest,
+    data: web::Json<SdkHandshakeRequest>,
     app_handle: web::Data<tauri::AppHandle>,
     state: web::Data<SharedAppState>,
 ) -> impl Responder {
     let started_at = Instant::now();
     let trace_id = his_integration_log::new_trace_id();
-    let ctx = data.into_inner();
+    let SdkHandshakeRequest {
+        context: ctx,
+        public_health,
+    } = data.into_inner();
     let request_summary = summarize_handshake_for_his_log(&ctx);
 
     if let Err(message) = validate_browser_context(&ctx) {
-        {
+        if public_health.is_none() {
             let mut browser_ctx = state.browser_context.lock().unwrap();
             *browser_ctx = None;
         }
@@ -2722,14 +2734,18 @@ async fn handshake(
             "[Handshake] Rejected unauthorized SDK handshake: {}",
             message
         );
-        let response_body = serde_json::json!({
-            "status": "error",
-            "message": message,
-            "traceId": trace_id
-        });
+        let response_body = if public_health.is_some() {
+            serde_json::json!(crate::public_health::error("BRIDGE_AUTH_FAILED", &message))
+        } else {
+            serde_json::json!({
+                "status": "error",
+                "message": message,
+                "traceId": trace_id
+            })
+        };
         record_bridge_log(
             &app_handle,
-            response_body["traceId"].as_str().unwrap_or_default(),
+            &trace_id,
             "handshake",
             "POST",
             "/api/handshake",
@@ -2743,8 +2759,59 @@ async fn handshake(
             None,
             response_body["message"].as_str().map(str::to_string),
         );
-        return HttpResponse::Unauthorized().json(response_body);
+        return HttpResponse::Unauthorized()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(response_body);
     }
+
+    let public_health_session = if let Some(request) = public_health {
+        let result = state
+            .public_health
+            .lock()
+            .map_err(|_| crate::public_health::error("BRIDGE_NOT_CONFIGURED", "公卫服务暂不可用"))
+            .and_then(|mut registry| {
+                registry.handshake(
+                    req.headers()
+                        .get("Origin")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default(),
+                    &ctx,
+                    req.headers()
+                        .get("X-PCIE-Bridge-Token")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default(),
+                    request,
+                    crate::public_health::now_ms(),
+                )
+            });
+        match result {
+            Ok(session) => Some(session),
+            Err(err) => {
+                let status = err.status();
+                record_bridge_log(
+                    &app_handle,
+                    &trace_id,
+                    "handshake",
+                    "POST",
+                    "/api/handshake",
+                    "error",
+                    status,
+                    started_at,
+                    Some(request_summary),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(err.error_code.clone()),
+                );
+                return HttpResponse::build(actix_web::http::StatusCode::from_u16(status).unwrap())
+                    .insert_header(("Cache-Control", "no-store"))
+                    .json(err);
+            }
+        }
+    } else {
+        None
+    };
 
     println!("{}", handshake_console_message(&ctx));
 
@@ -2759,7 +2826,7 @@ async fn handshake(
         let _ = window.emit("sdk-handshake", &ctx);
     }
 
-    let response_body = serde_json::json!({
+    let mut response_body = serde_json::json!({
         "status": "success",
         "version": env!("CARGO_PKG_VERSION"),
         "timestamp": std::time::SystemTime::now()
@@ -2784,7 +2851,13 @@ async fn handshake(
         None,
         None,
     );
-    HttpResponse::Ok().json(response_body)
+    // Add the session only after logging the non-sensitive medical response.
+    if let Some(session) = public_health_session {
+        response_body["publicHealth"] = session;
+    }
+    HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .json(response_body)
 }
 
 // ==================== SDK Static File Serving ====================
@@ -2892,6 +2965,43 @@ pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_handshake_accepts_legacy_medical_context_and_optional_public_health() {
+        let base = serde_json::json!({
+            "origin":"http://localhost:8080/rbmh_chis",
+            "extra":{"emrAccessToken":"synthetic-medical-token","urt":{"personCd":"synthetic-doctor"}}
+        });
+        let medical: SdkHandshakeRequest = serde_json::from_value(base.clone()).unwrap();
+        assert!(medical.public_health.is_none());
+        assert!(validate_browser_context(&medical.context).is_ok());
+
+        let mut extended = base;
+        extended["publicHealth"] = serde_json::json!({
+            "schemaVersion":"public-health.v1",
+            "sdkInstanceId":"40000000-0000-4000-8000-000000000001"
+        });
+        let public_health: SdkHandshakeRequest = serde_json::from_value(extended.clone()).unwrap();
+        let mut registry = crate::public_health::PublicHealthRegistry::new();
+        let auth = registry
+            .handshake(
+                "http://localhost:8080",
+                &public_health.context,
+                "",
+                public_health.public_health.unwrap(),
+                1000,
+            )
+            .unwrap();
+        let token = auth["publicHealthBridgeToken"].as_str().unwrap();
+        assert!(registry
+            .authenticate("http://localhost:8080", token, 1001)
+            .is_ok());
+        assert!(registry
+            .authenticate("http://other.invalid", token, 1001)
+            .is_err());
+        extended["publicHealth"]["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<SdkHandshakeRequest>(extended).is_err());
+    }
 
     #[test]
     fn normal_websocket_disconnect_detects_payload_eof() {

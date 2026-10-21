@@ -107,14 +107,18 @@ describe('public health facts editing through the production page', () => {
     expect(JSON.stringify(deps.confirm.mock.calls[0][1])).not.toContain('证据：');
     expect(JSON.stringify(deps.confirm.mock.calls[0][1])).not.toContain('请医生核对');
   });
-  it('shows a separate correction notice and disables confirmation when a physician adds internal explanation', async () => {
-    mount(testRequest()); button('生成建议').click(); await settle();
-    const text = host.querySelector<HTMLTextAreaElement>('[aria-label="检查计划正文"]')!;
-    text.value = '制定依据\n参考资料'; text.dispatchEvent(new Event('input', { bubbles: true })); await settle();
-    expect(button('确认回写 PHIS').disabled).toBe(true);
-    expect(host.textContent).toContain('正文含内部说明或医生核实提醒');
-    text.value = '按预约日期携带检查资料。'; text.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+  it.each(['health_prescription', 'weight_management'] as const)('lets the physician edit and confirm %s freeform text without a content warning', async capability => {
+    const deps = mount(capability === 'weight_management' ? testWeightRequest() : testRequest(), request => {
+      const result = testResult(request); result.sections[0].content = '合成建议：准备。活动。休息。结束。'; return result;
+    });
+    button('生成建议').click(); await settle();
+    const label = capability === 'weight_management' ? '运动建议正文' : '检查计划正文';
+    const text = host.querySelector<HTMLTextAreaElement>(`[aria-label="${label}"]`)!;
+    text.value = '制定依据\n来源：参考资料。BMI24，6.2 mmol/L。'; text.dispatchEvent(new Event('input', { bubbles: true })); await settle();
     expect(button('确认回写 PHIS').disabled).toBe(false);
+    expect(host.textContent).not.toContain('正文含内部说明或医生核实提醒');
+    button('确认回写 PHIS').click(); await settle();
+    expect(deps.confirm.mock.calls[0][1].items[0].value).toBe(text.value);
   });
   it('resets meal choices and folding after confirmed regeneration', async () => {
     const deps = mount(testWeightRequest(), testMealResult); button('生成建议').click(); await settle();

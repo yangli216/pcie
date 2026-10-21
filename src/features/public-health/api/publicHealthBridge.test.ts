@@ -19,11 +19,10 @@ describe('public health confirmation service boundary', () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenCalledWith('confirm_public_health_result', { bridgeSessionId: testUuid(50), payload });
   });
-  it.each(['制定依据\n资料如下', '请医生核对资料。', '证据：来源报告'])('rejects a direct service call with internal content before native invoke: %s', content => {
+  it.each(['制定依据\n资料如下', '请医生核对资料。', '证据：来源报告'])('passes freeform confirmation text unchanged to native invoke: %s', async content => {
     const payload = confirmation(); payload.items[0].value = content;
-    return expect(publicHealthBridge.confirm(testUuid(50), payload)).rejects.toThrow('内部说明').then(() => {
-      expect(invoke).not.toHaveBeenCalled();
-    });
+    await publicHealthBridge.confirm(testUuid(50), payload);
+    expect(invoke).toHaveBeenCalledWith('confirm_public_health_result', { bridgeSessionId: testUuid(50), payload });
   });
   it('rejects doctor metadata in either confirmation or target items before native invoke', async () => {
     const payload = confirmation();

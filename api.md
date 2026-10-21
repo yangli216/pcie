@@ -1,12 +1,14 @@
 # 全医慧助（PCIE）HIS 接入指南 / 接口说明
 
-## 公卫处方正文边界（2026-10-13）
+公卫用药类别选择（2026-10-20，内网交接同步）：结构化草稿渲染与服务端一致，以机构 policy.medicationReminders 为输出类别边界，允许未提供居民用药记录或仅生成部分适用类别。显示名优先取居民类别名，否则使用批准编码；重复、非法类型、未批准类别、空正文及额外字段继续拒绝。空数组提示本次未生成建议，不误报已有用药资料缺失。请求类别仍须由批准资产覆盖。远端结果字段及机器契约不变。
 
-公卫生成结果的 `sections[].content`、`options[].content` 为医生提供给患者的处方正文；最终确认 `items[].value` 只组合已选正文。制定依据、事实证据、AI/工程说明、来源、待医生核实和缺资料清单在既有 `warnings` 中按章节显示于“医生提醒（不回写）”，不进入 PHIS 字段。内部 AI 草稿可选 `doctorNotes`（0至8条、每条1至1000 Unicode码点）由生成器严格验证并转换为 warnings，不能下传到可编辑 content。患者需执行的具体安全动作保留。旧草稿或生成正文混入明确的内部说明标签时拒绝确认/生成，须调整后再保存；不自动删改医疗正文。
+## 公卫处方正文边界（2026-10-20）
+
+公卫生成结果的 `sections[].content`、`options[].content` 为医生审阅、编辑的正文；最终确认 `items[].value` 只组合已选正文。独立 `warnings` 按章节显示于“医生提醒（不回写）”，不自动拼入 PHIS 字段。内部草稿的独立 `doctorNotes`（0至8条、每条1至1000 Unicode码点）仍按结构转换为 warnings。客户端不再按正文中的内部说明标题、来源/证据标签、禁用词或内容关键词拒绝生成、确认、恢复和重传，不自动删改正文。
 
 随访固定三章，某章确无患者建议时允许 content 为空并仅在 warnings 说明，默认不选该章；补非空正文后可选，有其他正文时可单独确认，三章全空拒绝生成。减重及所有食谱仍非空，确认 items[].value 始终非空；合并字段须对应章全部选中且非空。
 
-减重运动生成固定3条、250至450 Unicode码点、每条最多2句，程序强校验；手工编辑沿用原长度及身份门禁。随访三章和减重两章的业务身份、签名、SSE、三选一和回执幂等契约保持独立。
+客户端取消减重运动生成3条、250至450码点、每条最多2句等风格校验。两功能仍验证正文类型与协议容量（章节16000码点、合并目标64000码点）、业务身份、签名、SSE、食谱选项结构和回执幂等。服务端同步取消运动格式门禁，患者正文/医生提醒分离及结构校验仍独立生效。
 
 ## 服务端机构知识检索（2026-09-30）
 
@@ -2569,32 +2571,31 @@ HIS 接入完成后，至少验证以下场景：
 
 正式健康处方与减重的医学生成由签名 `pcie-server /v1/public-health/generations` 执行。已完成本机 Tauri 合成生成/保存闭环，以及专用 Mock 入口独立随访三章和减重两章的真实 AI 工程验证；正式部署、真实 PHIS、生产知识资产与医学审核仍单独验收。公卫独立于门诊 `current_consultation / last_result / event_queue`，不伪造 `consultationId`，不提供结果轮询。
 
-### 8.1 部署配置、集成实例认证与续期
+### 8.1 复用医疗 SDK 握手与会话续期（2026-10-19）
 
-Rust 进程启动时读取以下环境变量，只存在进程内存，不从浏览器请求覆盖：
+公卫与医疗统一使用 `POST /api/handshake`、`MedHermes.init()` 的 HIS 上下文采集和桌面协议拉起流程。公卫不再读取 `PCIE_PUBLIC_HEALTH_ALLOWED_ORIGINS / PCIE_PUBLIC_HEALTH_PAIRING_SECRET`，不再接受 `X-PCIE-Pairing-Key` 或独立 `/api/public-health/handshake`。接入方沿用已有 `extra.emrAccessToken / urt`；SDK 可从 `$ajax / $env` 采集，也可由 `init(extra)` 或 `initPublicHealth(extra)` 显式提供。`assistPublicHealth()` 自动准备公卫连接；已调用医疗 `init(extra)` 时沿用该上下文。
 
-| 变量 | 默认 | 含义 |
-| --- | --- | --- |
-| `PCIE_PUBLIC_HEALTH_ALLOWED_ORIGINS` | 空（拒绝接入） | 逗号分隔的完整 HTTP(S) Origin，例如 `https://phis.example.invalid`；不能包含路径、查询、userinfo、通配符或 `null` |
-| `PCIE_PUBLIC_HEALTH_PAIRING_SECRET` | 空（拒绝接入） | 标准 Base64 编码、解码后至少32随机字节的部署配对凭证，由部署方安全交付可信 PHIS 接入配置；不能写入 SDK 源码、URL、日志或示例 |
-
-配对凭证与 Origin 认证的是部署许可的 PHIS 集成实例，不是医生账号真实性；既有 `emrAccessToken` 非空检查不能替代身份验证。公卫握手不读写门诊全局 `browser_context`，也不信任请求体机构名称作为授权。远端机构与设备权限仍由服务端签名设备身份决定。
-
-`POST /api/public-health/handshake`，浏览器自动提供 `Origin`，同时提供 `X-PCIE-Pairing-Key`。请求为：
+公卫握手在普通医疗 `BrowserContext` 顶层增加可选 `publicHealth`，普通医疗请求/响应保持原形。浏览器自动提供 `Origin`；公卫必须是完整 HTTP(S) Origin，且与上下文 `origin` 的来源一致（上下文允许保留 HIS contextPath）。不从旧的全局握手状态猜测当前请求所属页面。
 
 ```json
-{"schemaVersion":"public-health.v1","sdkInstanceId":"40000000-0000-4000-8000-000000000001"}
+{
+  "origin": "http://localhost:8080/rbmh_chis",
+  "extra": {"emrAccessToken": "<沿用当前医疗登录上下文>"},
+  "publicHealth": {"schemaVersion":"public-health.v1","sdkInstanceId":"40000000-0000-4000-8000-000000000001"}
+}
 ```
 
-成功 HTTP 200：
+成功 HTTP 200 保留医疗握手的 `status/version/timestamp/traceId`，并增加 `publicHealth` 对象：
 
 ```json
-{"status":"ready","schemaVersion":"public-health.v1","bridgeSessionId":"30000000-0000-4000-8000-000000000001","publicHealthBridgeToken":"<仅运行时返回的随机令牌>","expiresAt":"2026-09-29T10:30:00.000Z","renewUntil":"2026-09-29T11:00:00.000Z"}
+{"status":"success","version":"<当前桌面版本>","timestamp":0,"traceId":"<技术追踪ID>","publicHealth":{"status":"ready","schemaVersion":"public-health.v1","bridgeSessionId":"30000000-0000-4000-8000-000000000001","publicHealthBridgeToken":"<仅运行时返回的随机令牌>","expiresAt":"2026-10-19T10:30:00.000Z","renewUntil":"2026-10-19T11:00:00.000Z"}}
 ```
 
-令牌有效30分钟；续期宽限30分钟。续期请求在相同 body 中增加 `resumeSessionId`，同时发送旧 `X-PCIE-Bridge-Token`、配对凭证和相同 Origin/sdkInstanceId。续期保留 `bridgeSessionId` 以及该实例的任务、请求、回执去重空间，只轮换令牌。过期或轮换后旧 WS 关闭；旧令牌只能在规定宽限内用于续期，不能调用业务接口。超过宽限或丢失凭据不能根据公开 sessionId/sdkInstanceId 夺回旧任务；重新建实例不会继承旧任务。为避免续期响应丢包孤立任务，内存有界保留当前token与上一token的hash/原renewUntil。同Origin/sdkInstanceId、配对凭据和上一token在原renewUntil内重试续期时，幂等返回当前token及原响应到期时间，不再次轮换。上一token不能调用业务接口或订阅WS；若返回的当前token也已过期，SDK须用该当前token再次续期后才能订阅。全部数据仅内存保存，桌面重启后旧会话不可恢复。超过renewUntil后，在下一次握手、业务访问或桌面恢复读取时清理该会话的私有资料、队列、任务和request/writeback索引，并清空其active指针；宽限内不清理。旧页面再次生成/确认只返回会话失效，不移交给新会话。新会话不能prepare/confirm旧任务；PHIS必须重新创建originRequestId。若PHIS违规重复使用已完全清理的UUID调用assist，只会创建全新空状态，不继承任何旧结果、回执或所有权。
+本地握手复用现有医疗 `validate_browser_context`（校验 `emrAccessToken` 非空），不将此校验描述为真实 HIS 账号验证。公卫会话仍绑定本次请求 Origin 和 SDK 实例，令牌至少256位随机、仅内存保存；后续 REST/WS 必须逐请求验证公卫令牌及来源。PHIS 医生身份真实性由 PHIS 身份体系负责；远端机构与设备权限继续由服务端设备签名确定。
 
-共同错误形态为 `{ "errorCode":"BRIDGE_SESSION_EXPIRED", "message":"公卫会话已过期，请重新认证" }`。400为结构非法；401为配对/令牌/过期失败；403为 Origin、实例或任务所有权不匹配；409为业务ID或冻结内容冲突；429为内存容量已满；503为部署配置未就绪。错误不回显令牌、配对凭据或资料内容。
+令牌有效30分钟；续期宽限30分钟。续期请求在相同 body 中增加 `resumeSessionId`，仍发送完整医疗握手上下文，并携带旧 `X-PCIE-Bridge-Token` 和相同 Origin/sdkInstanceId。续期保留 `bridgeSessionId` 以及该实例的任务、请求、回执去重空间，只轮换令牌。过期或轮换后旧 WS 关闭；旧令牌只能在规定宽限内用于续期，不能调用业务接口。超过宽限或丢失凭据不能根据公开 sessionId/sdkInstanceId 夺回旧任务；重新建实例不会继承旧任务。为避免续期响应丢包孤立任务，内存有界保留当前token与上一token的hash/原renewUntil。同Origin/sdkInstanceId、有效医疗握手上下文和上一token在原renewUntil内重试续期时，幂等返回当前token及原响应到期时间，不再次轮换。上一token不能调用业务接口或订阅WS；若返回的当前token也已过期，SDK须用该当前token再次续期后才能订阅。全部数据仅内存保存，桌面重启后旧会话不可恢复。超过renewUntil后，在下一次握手、业务访问或桌面恢复读取时清理该会话的私有资料、队列、任务和request/writeback索引，并清空其active指针；宽限内不清理。旧页面再次生成/确认只返回会话失效，不移交给新会话。新会话不能prepare/confirm旧任务；PHIS必须重新创建originRequestId。若PHIS违规重复使用已完全清理的UUID调用assist，只会创建全新空状态，不继承任何旧结果、回执或所有权。
+
+共同错误形态为 `{ "errorCode":"BRIDGE_SESSION_EXPIRED", "message":"公卫会话已过期，请重新认证" }`。400为结构非法；401为医疗握手上下文/令牌/过期失败；403为 Origin、实例或任务所有权不匹配；409为业务ID或冻结内容冲突；429为内存容量已满；503为本地服务暂不可用。错误不回显令牌、医疗凭据或资料内容。
 
 ### 8.2 调入、目标字段与保存回执
 
@@ -2639,9 +2640,9 @@ Rust 进程启动时读取以下环境变量，只存在进程内存，不从浏
 
 ### 8.5 SDK 调用
 
-`new MedHermes({publicHealth:{pairingKey, sdkInstanceId?}})`，pairingKey由部署方在可信 PHIS 配置提供；sdkInstanceId未传时使用浏览器安全随机UUID，保存在SDK实例内存。不需要为公卫调用门诊 `init()`：
+`new MedHermes({extra?: {emrAccessToken, urt}, publicHealth?: {sdkInstanceId}})`；沿用医疗上下文，sdkInstanceId 未传时使用浏览器安全随机 UUID，保存在 SDK 实例内存。可在医疗 `init(extra)` 后调用，也可直接初始化公卫：
 
-1. `await sdk.initPublicHealth()`完成独立握手/订阅。
+1. `await sdk.initPublicHealth(extra?)` 复用医疗握手/桌面拉起后订阅独立公卫通道。
 2. `sdk.on('public-health-result-confirmed', handler)`在assist之前注册。handler按originRequestId匹配业务记录，保存前检查recordVersion，按writebackRequestId去重。
 3. `await sdk.assistPublicHealth(request)`返回accepted；传入请求须含originRequestId（首次等于requestId）。
 4. PHIS真实保存后 `await sdk.sendPublicHealthFeedback(feedback)`；失败也必须明确回执。
@@ -2678,18 +2679,17 @@ SDK公卫连接丢失只重建认证订阅并after补发；认证/所有权/Orig
 
 检查最早安排日由程序按批准间隔和全部同编码非未来实施日期派生为内部 `checkScheduleConstraints`，包含例行/异常复查的窗口可用状态和最早日期；近期本次测量、其他来源及冲突日期不能被模型当成未做过。最终输出仍校验原批准规则，内部日期清单不改变 PHIS 调入和回写字段。
 
-随访教育模型草稿不包含 BMI/BMR、减重目标/目标体重、三餐参考食谱/备选食谱或 kcal/千卡/卡路里，严格拒绝混入减重内容。血压/血糖原值和单位由程序证据行展示，模型正文不重复 mmHg/mmol/L 或编造量化阈值，不以单次测量判定正常/异常；医生仍可编辑和确认文本，关键词检查不等于医学验收。
+2026-10-20 客户端取消随访、减重正文的字数风格、编号/条数/句数、禁用词及内容关键词校验，包括 BMI/BMR、减重词及 mmHg/mmol/L 等单位；生成章节、食谱备选、医生编辑与恢复正文原样展示和确认。独立 warnings 不拼入确认正文。空值、类型、章节16000/合并目标64000码点的协议容量、任务身份、目标映射、机构规则及事实引用等结构化校验继续执行；接口字段未变。服务端生成校验仍独立生效，客户端不把服务端失败事件改为成功。
 
 两项功能分别调入、生成、编辑及确认。随访不要求 `weightProfile`、不计算 BMI/BMR、不返回减重食谱；减重不返回检查/用药/随访风险章节，也不显示随访健康画像。共享传输与页面基础组件不改变各自的任务身份、结果范围或目标字段。
 
 #### 8.6.2 PHIS SDK 接线与保存
 
-下面展示 PHIS 侧接线：先加载 `http://127.0.0.1:8081/sdk/med-hermes-sdk.js`，示例放在 module 脚本或等价的异步初始化函数中。`trustedIntegrationConfig`、`phisAdapter`、错误展示函数和按钮对象由接入方提供，不是新增 SDK API；配置只在可信接入运行时读取，不能把配对凭据写入代码、URL或日志。`buildAssistRequest` 必须从当前记录构建并登记冻结快照、实际允许字段映射；`saveOnce` 的服务端要求见下表。
+下面展示 PHIS 侧接线：先加载 `http://127.0.0.1:8081/sdk/med-hermes-sdk.js`，示例放在 module 脚本或等价的异步初始化函数中。`phisAdapter`、错误展示函数和按钮对象由接入方提供，不是新增 SDK API；沿用医疗 HIS 登录上下文，凭据不能写入代码、URL或日志。`buildAssistRequest` 必须从当前记录构建并登记冻结快照、实际允许字段映射；`saveOnce` 的服务端要求见下表。
 
 ```javascript
 const sdk = new MedHermes({
-  baseUrl: 'http://127.0.0.1:8081/api',
-  publicHealth: { pairingKey: trustedIntegrationConfig.publicHealthPairingKey }
+  baseUrl: 'http://127.0.0.1:8081/api'
 });
 
 async function handlePublicHealthConfirmation(payload) {
@@ -2717,6 +2717,8 @@ sdk.on('public-health-result-confirmed', payload => {
   handlePublicHealthConfirmation(payload).catch(showIntegrationError);
 });
 sdk.on('public-health-error', showIntegrationError);
+// 与医疗一致：自动采集 HIS 上下文并在需要时拉起桌面。
+// 非原生 HIS 环境可传入 { emrAccessToken, urt }。
 await sdk.initPublicHealth();
 
 // 每次明确新调入构建一次；网络重试直接复用这个 request，不能重新生成 UUID。

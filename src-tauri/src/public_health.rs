@@ -409,55 +409,18 @@ pub fn validate_request(v: &Value) -> BridgeResult<()> {
     Ok(())
 }
 
-pub struct BridgeConfig {
-    origins: HashSet<String>,
-    pairing_hash: Option<String>,
-}
-impl BridgeConfig {
-    pub fn from_env() -> Self {
-        Self::new(
-            &std::env::var("PCIE_PUBLIC_HEALTH_ALLOWED_ORIGINS").unwrap_or_default(),
-            &std::env::var("PCIE_PUBLIC_HEALTH_PAIRING_SECRET").unwrap_or_default(),
-        )
+fn http_origin(value: &str) -> BridgeResult<String> {
+    let url = url::Url::parse(value)
+        .map_err(|_| error("ORIGIN_NOT_ALLOWED", "公卫握手需要有效的页面来源"))?;
+    if !["http", "https"].contains(&url.scheme())
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(error("ORIGIN_NOT_ALLOWED", "公卫握手需要有效的页面来源"));
     }
-    pub fn new(origins: &str, secret: &str) -> Self {
-        let mut valid = HashSet::new();
-        for value in origins.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let Ok(url) = url::Url::parse(value) else {
-                return Self {
-                    origins: HashSet::new(),
-                    pairing_hash: None,
-                };
-            };
-            if !["http", "https"].contains(&url.scheme())
-                || url.origin().ascii_serialization() != value
-            {
-                return Self {
-                    origins: HashSet::new(),
-                    pairing_hash: None,
-                };
-            }
-            valid.insert(value.to_owned());
-        }
-        let pairing_hash = STANDARD
-            .decode(secret)
-            .ok()
-            .filter(|b| b.len() >= 32)
-            .map(|_| digest(secret.as_bytes()));
-        Self {
-            origins: valid,
-            pairing_hash,
-        }
-    }
-    pub fn origin(&self, origin: &str) -> BridgeResult<()> {
-        if self.origins.is_empty() || self.pairing_hash.is_none() {
-            return Err(error("BRIDGE_NOT_CONFIGURED", "公卫接入尚未完成部署配置"));
-        }
-        if !self.origins.contains(origin) {
-            return Err(error("ORIGIN_NOT_ALLOWED", "当前页面来源不允许公卫接入"));
-        }
-        Ok(())
-    }
+    Ok(url.origin().ascii_serialization())
 }
 
 #[derive(Deserialize)]
@@ -520,7 +483,6 @@ struct Task {
     writes: HashMap<String, WriteIntent>,
 }
 pub struct PublicHealthRegistry {
-    pub config: BridgeConfig,
     sessions: HashMap<String, Session>,
     tasks: HashMap<String, Task>,
     active: Option<String>,
@@ -528,9 +490,8 @@ pub struct PublicHealthRegistry {
     write_owners: HashMap<(String, String), String>,
 }
 impl PublicHealthRegistry {
-    pub fn new(config: BridgeConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
             sessions: HashMap::new(),
             tasks: HashMap::new(),
             active: None,
@@ -558,21 +519,22 @@ impl PublicHealthRegistry {
     pub fn handshake(
         &mut self,
         origin: &str,
-        pairing: &str,
+        context: &crate::BrowserContext,
         old_token: &str,
         request: HandshakeRequest,
         now: u64,
     ) -> BridgeResult<Value> {
         self.purge_expired(now);
-        self.config.origin(origin)?;
+        crate::validate_browser_context(context)
+            .map_err(|_| error("BRIDGE_AUTH_FAILED", "公卫接入需要有效的医疗握手上下文"))?;
+        if http_origin(origin)? != origin || http_origin(&context.origin)? != origin {
+            return Err(error(
+                "ORIGIN_NOT_ALLOWED",
+                "公卫握手来源与医疗上下文不一致",
+            ));
+        }
         if request.schema_version != SCHEMA || Uuid::parse_str(&request.sdk_instance_id).is_err() {
             return Err(error("INVALID_REQUEST", "公卫握手参数无效"));
-        }
-        if !equal_secret(
-            &digest(pairing.as_bytes()),
-            self.config.pairing_hash.as_deref().unwrap_or_default(),
-        ) {
-            return Err(error("BRIDGE_AUTH_FAILED", "公卫实例认证失败"));
         }
         let id = if let Some(id) = request.resume_session_id {
             let session = self
@@ -652,7 +614,7 @@ impl PublicHealthRegistry {
     }
     pub fn authenticate(&mut self, origin: &str, token: &str, now: u64) -> BridgeResult<String> {
         self.purge_expired(now);
-        self.config.origin(origin)?;
+        self.authorize_origin(origin)?;
         let hash = digest(token.as_bytes());
         let (id, session) = self
             .sessions
@@ -669,6 +631,12 @@ impl PublicHealthRegistry {
             ));
         }
         Ok(id.clone())
+    }
+    pub fn authorize_origin(&self, origin: &str) -> BridgeResult<()> {
+        if http_origin(origin)? != origin || !self.sessions.values().any(|s| s.origin == origin) {
+            return Err(error("ORIGIN_NOT_ALLOWED", "当前页面尚未完成公卫医疗握手"));
+        }
+        Ok(())
     }
     fn active_session(&mut self, id: &str, now: u64) -> BridgeResult<()> {
         self.purge_expired(now);
@@ -1133,18 +1101,26 @@ impl PublicHealthRegistry {
 pub(crate) mod tests {
     use super::*;
     const ORIGIN: &str = "https://phis.example.invalid";
-    fn key() -> String {
-        STANDARD.encode([42u8; 32])
+    pub(crate) fn context() -> crate::BrowserContext {
+        serde_json::from_value(
+            json!({"origin":ORIGIN,"extra":{"emrAccessToken":"synthetic-his-context"}}),
+        )
+        .unwrap()
+    }
+    fn unauthorized_context() -> crate::BrowserContext {
+        let mut ctx = context();
+        ctx.extra = json!({});
+        ctx
     }
     fn fixture() -> (PublicHealthRegistry, String, String) {
-        let mut registry = PublicHealthRegistry::new(BridgeConfig::new(ORIGIN, &key()));
+        let mut registry = PublicHealthRegistry::new();
         let request = HandshakeRequest {
             schema_version: SCHEMA.into(),
             sdk_instance_id: Uuid::new_v4().to_string(),
             resume_session_id: None,
         };
         let response = registry
-            .handshake(ORIGIN, &key(), "", request, 1000)
+            .handshake(ORIGIN, &context(), "", request, 1000)
             .unwrap();
         (
             registry,
@@ -1188,28 +1164,88 @@ pub(crate) mod tests {
         Value::Object(value)
     }
     #[test]
-    fn config_denies_missing_wildcard_and_wrong_origin() {
-        assert!(BridgeConfig::new("", "").origin(ORIGIN).is_err());
-        assert!(BridgeConfig::new("https://*.invalid", &key())
-            .origin(ORIGIN)
-            .is_err());
-        assert!(
-            BridgeConfig::new("https://phis.example.invalid/path", &key())
-                .origin(ORIGIN)
-                .is_err()
-        );
-        let (mut registry, _, token) = fixture();
+    fn medical_context_and_actual_origin_are_required_without_deployment_pairing() {
+        let mut registry = PublicHealthRegistry::new();
+        let request = || HandshakeRequest {
+            schema_version: SCHEMA.into(),
+            sdk_instance_id: Uuid::new_v4().to_string(),
+            resume_session_id: None,
+        };
         assert_eq!(
             registry
-                .authenticate("https://other.invalid", &token, 1001)
+                .handshake(ORIGIN, &unauthorized_context(), "", request(), 1000)
                 .unwrap_err()
                 .status(),
-            403
+            401
         );
-        assert!(registry.authenticate(ORIGIN, "wrong", 1001).is_err());
+        for origin in [
+            "",
+            "null",
+            "file://phis",
+            "https://other.invalid",
+            "https://*.invalid",
+            "https://phis.example.invalid/path",
+            "https://phis.example.invalid/",
+        ] {
+            assert_eq!(
+                registry
+                    .handshake(origin, &context(), "", request(), 1000)
+                    .unwrap_err()
+                    .status(),
+                403
+            );
+        }
+        let mut ctx = context();
+        ctx.origin = "http://localhost:8080/rbmh_chis".into();
+        let auth = registry
+            .handshake("http://localhost:8080", &ctx, "", request(), 1000)
+            .unwrap();
+        let token = auth["publicHealthBridgeToken"].as_str().unwrap();
         assert!(registry
-            .authenticate(ORIGIN, &token, 1000 + TTL_MS)
+            .authenticate("http://localhost:8080", token, 1001)
+            .is_ok());
+        assert!(registry
+            .authenticate("http://127.0.0.1:8080", token, 1001)
             .is_err());
+        assert!(registry
+            .authenticate("http://localhost:8080", "wrong", 1001)
+            .is_err());
+        assert!(registry
+            .authenticate("http://localhost:8080", token, 1000 + TTL_MS)
+            .is_err());
+        assert_eq!(registry.sessions.len(), 1);
+    }
+    #[test]
+    fn public_health_context_rejects_credential_urls_and_different_origins() {
+        let mut registry = PublicHealthRegistry::new();
+        for origin in [
+            "https://other.invalid/path",
+            "https://user:secret@phis.example.invalid/path",
+            "https://phis.example.invalid/path?token=secret",
+            "https://phis.example.invalid/path#token",
+            "null",
+        ] {
+            let mut ctx = context();
+            ctx.origin = origin.into();
+            assert_eq!(
+                registry
+                    .handshake(
+                        ORIGIN,
+                        &ctx,
+                        "",
+                        HandshakeRequest {
+                            schema_version: SCHEMA.into(),
+                            sdk_instance_id: Uuid::new_v4().to_string(),
+                            resume_session_id: None
+                        },
+                        1000
+                    )
+                    .unwrap_err()
+                    .status(),
+                403
+            );
+        }
+        assert!(registry.sessions.is_empty());
     }
     #[test]
     fn renewal_preserves_owner_and_rejects_wrong_instance_or_credential() {
@@ -1223,10 +1259,10 @@ pub(crate) mod tests {
             resume_session_id: Some(session.clone()),
         };
         assert!(registry
-            .handshake(ORIGIN, &key(), "wrong", renewal(), 1000 + TTL_MS)
+            .handshake(ORIGIN, &context(), "wrong", renewal(), 1000 + TTL_MS)
             .is_err());
         let result = registry
-            .handshake(ORIGIN, &key(), &token, renewal(), 1000 + TTL_MS + 1)
+            .handshake(ORIGIN, &context(), &token, renewal(), 1000 + TTL_MS + 1)
             .unwrap();
         assert_eq!(result["bridgeSessionId"], session);
         assert_eq!(
@@ -1255,25 +1291,25 @@ pub(crate) mod tests {
             resume_session_id: Some(session.clone()),
         };
         let first = registry
-            .handshake(ORIGIN, &key(), &token, renewal(), 2000)
+            .handshake(ORIGIN, &context(), &token, renewal(), 2000)
             .unwrap();
         let replay = registry
-            .handshake(ORIGIN, &key(), &token, renewal(), 3000)
+            .handshake(ORIGIN, &context(), &token, renewal(), 3000)
             .unwrap();
         assert_eq!(first, replay);
         assert!(registry.authenticate(ORIGIN, &token, 3000).is_err());
         assert!(registry
-            .handshake(ORIGIN, "incorrect-pairing", &token, renewal(), 3000)
+            .handshake(ORIGIN, &unauthorized_context(), &token, renewal(), 3000)
             .is_err());
         assert!(registry
-            .handshake(ORIGIN, &key(), &token, renewal(), 1000 + 2 * TTL_MS)
+            .handshake(ORIGIN, &context(), &token, renewal(), 1000 + 2 * TTL_MS)
             .is_err());
         let current = first["publicHealthBridgeToken"].as_str().unwrap();
         registry
-            .handshake(ORIGIN, &key(), current, renewal(), 4000)
+            .handshake(ORIGIN, &context(), current, renewal(), 4000)
             .unwrap();
         assert!(registry
-            .handshake(ORIGIN, &key(), &token, renewal(), 5000)
+            .handshake(ORIGIN, &context(), &token, renewal(), 5000)
             .is_err());
     }
     #[test]
@@ -1439,7 +1475,7 @@ pub(crate) mod tests {
         let other = registry
             .handshake(
                 ORIGIN,
-                &key(),
+                &context(),
                 "",
                 HandshakeRequest {
                     schema_version: SCHEMA.into(),
@@ -1560,7 +1596,7 @@ pub(crate) mod tests {
         assert!(registry
             .handshake(
                 ORIGIN,
-                &key(),
+                &context(),
                 &token,
                 HandshakeRequest {
                     schema_version: SCHEMA.into(),
@@ -1573,7 +1609,7 @@ pub(crate) mod tests {
         let auth = registry
             .handshake(
                 ORIGIN,
-                &key(),
+                &context(),
                 "",
                 HandshakeRequest {
                     schema_version: SCHEMA.into(),
@@ -1604,7 +1640,7 @@ pub(crate) mod tests {
             registry
                 .handshake(
                     ORIGIN,
-                    &key(),
+                    &context(),
                     "",
                     HandshakeRequest {
                         schema_version: SCHEMA.into(),
@@ -1622,13 +1658,13 @@ pub(crate) mod tests {
         };
         assert_eq!(
             registry
-                .handshake(ORIGIN, &key(), "", new_request(), 1001)
+                .handshake(ORIGIN, &context(), "", new_request(), 1001)
                 .unwrap_err()
                 .error_code,
             "CAPACITY_EXCEEDED"
         );
         registry
-            .handshake(ORIGIN, &key(), "", new_request(), 1000 + TTL_MS * 2)
+            .handshake(ORIGIN, &context(), "", new_request(), 1000 + TTL_MS * 2)
             .unwrap();
         assert_eq!(registry.sessions.len(), 1);
     }

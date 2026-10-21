@@ -1127,3 +1127,10 @@
 - **根因**: 当前 Tauri MSI updater 直接使用 `*.msi + *.msi.sig`，发布工作流又把同一 MSI 复制到 `direct-install` 供首次安装；通用校验器递归按 basename 要求全局唯一，没有利用 `latest.json` URL 中的版本目录区分 updater 文件与直接安装副本。后续来源清单步骤也仍只查找 `*.msi.zip`，即使上传包校验通过仍会误报 updater 缺失。
 - **解决方案**: 发布资产校验在出现同名文件时优先选择相对路径包含目标 `vX.Y.Z-win7[.N]` 目录的文件；仅当版本目录内仍不唯一时才失败。来源清单优先查找 zip archive，缺失时选择同目录内具有 `.sig` 的 MSI。发布文档同步以 Tauri 实际签名产物为准，不再假定 Windows 一定生成 `*.msi.zip`。
 - **后续防护**: 新增带 `win7-testing/v版本/同名 MSI` 与 `direct-install/同名 MSI` 的完整布局回归测试；`latest.json` 指向的版本目录文件和签名仍必须同批且通过独立公钥校验，不能因支持直接安装副本而放宽版本目录唯一性。
+
+### RETRO-150: 深链插件 2.6.2 的 Linux 编译回归阻断桌面候选构建 [待 CI 验证]
+
+- **现象**: 公卫 1.4.11 候选前端门禁通过，Ubuntu `cargo check` 在 `tauri-plugin-deep-link 2.6.2` 的 `ParseOption` 初始化报缺少两个字段，Windows/macOS 产物任务未启动。
+- **根因**: 普通 Cargo 锁未受版本控制，CI 的宽版本约束解析到 2.6.2；该插件 Linux 专用代码不兼容 `rust-ini 0.21.3` 的新增字段。本机 macOS 不编译这一分支。上游记录见 https://github.com/tauri-apps/plugins-workspace/issues/3710 。
+- **解决方案**: 将插件约束限定为 `>=2.0.0, <2.6.2`，使新解析选择兼容版本，同时保留本机锁与 Win7 2.4.6 独立锁的兼容范围；不修改业务代码或跳过质量门禁。
+- **后续防护**: 候选仍须通过 Ubuntu Rust 检查及 Windows 实际安装包构建。上游修复发布后，先验证 Linux 编译与桌面协议拉起再解除约束，不用本机 macOS 检查代替 Linux CI。
