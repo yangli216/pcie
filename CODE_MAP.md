@@ -533,3 +533,15 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 女性病史：`maritalReproductiveHistory` 与 `menstrualHistory` 同路独立传递；`patientContext.ts` 提取两类既有病史，`chronicRefillRecord.ts` 补齐慢病患者病史输入；`clinical-result/lib/maritalReproductiveHistory.ts` 解析明确婚育/当前妊娠字典事实，由 `recordConfirmedEmrFieldValues.ts` 输出 PHIS data-id。语音流、结果页快照、重写、部分回写和动态模板映射均保留两字段。
 
 女性字段编辑控制器：`features/consultation-result/model/useFemaleHistoryFields.ts` 统一月经史/婚育史的缓存恢复、逐字段流式基线保护与非女性清理；共享结果页仅编排，不为两字段新增全局状态。
+
+## 慢病检查检验提醒一期
+
+- `features/reception-risk/api/chronicExaminationRecommendations.ts`：签名推荐网关与非阻断加载；并行获取本次实时目录。
+- `features/reception-risk/lib/chronicExaminationReminders.ts`：中性契约、PHIS 历史证据/唯一目录匹配 Builder，组合不拆单。
+- `features/reception-risk/api/chronicRefillRecord.ts`：慢病流并行准备提醒，最终合并默认未选的检查检验。
+- `features/consultation-result/ui/ChronicExaminationReminderPanel.vue`：来源、范围、近期记录和未匹配提示；共享结果页只挂载。
+- PCIE Server `modules/chronicdisease/examination`：getUserInfo 健康处方鉴权查询及全区历史 Provider 预留。
+
+`features/clinical-result/medicalItemMatchedItem.ts` 为无副作用的目录身份 Adapter；原 recommendationHelpers 继续重导出同一函数。提醒 Builder 直接消费该纯 Adapter，避免因目录身份映射初始化网络服务。
+
+配置、验证记录与真实联调清单：[chronic-examination-reminders-uat.md](docs/chronic-examination-reminders-uat.md)。

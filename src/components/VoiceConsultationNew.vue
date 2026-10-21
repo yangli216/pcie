@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChronicExaminationReminderPanel from '@features/consultation-result/ui/ChronicExaminationReminderPanel.vue';
 import { useFemaleHistoryFields } from '@features/consultation-result/model/useFemaleHistoryFields';
 import { voiceTimingTracker, useVoiceTimingPresentation, restoreVoiceEditorSnapshot } from '@features/voice-consultation';
 import {
@@ -3897,6 +3898,10 @@ useChronicRefillTimingPresentation(() => ({
               已切换主诊断，当前方案仍保留上一版；点击“刷新方案”获取当前诊断方案。
             </div>
 
+            <ChronicExaminationReminderPanel
+              v-if="resultChannel === 'chronic-refill' && intentResult?.chronicExaminationReminders"
+              :reminders="intentResult.chronicExaminationReminders"
+            />
             <CurrentInformationMedication
               v-if="showCurrentInformationMedication"
               :disabled="currentInformationMedicationDisabled"

@@ -417,6 +417,8 @@ export interface HisReportedApplication {
  * HIS 患者就诊历史汇总（中性）
  */
 export interface HisPatientHistory {
+  /** 近诊列表及详情的读取完整性；不代表全区覆盖。 */
+  retrievalStatus?: 'complete' | 'partial' | 'failed';
   patientId: string;
   /** 过敏史文本列表 */
   allergyHistory?: string[];

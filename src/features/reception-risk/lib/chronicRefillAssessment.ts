@@ -28,6 +28,7 @@ export interface ChronicRefillCandidate {
   chronicVisits: HisVisitRecord[];
   /** 医保周期核查使用的完整查询窗口，不受本次慢病选择范围裁剪。 */
   prescriptionHistoryVisits?: HisVisitRecord[];
+  historyRetrievalStatus?: HisPatientHistory['retrievalStatus'];
   diagnosisEvidenceText: string;
   medicationEvidenceText: string;
   evidenceText: string;
@@ -358,6 +359,7 @@ export function scopeChronicRefillCandidate(
     chronicVisitCount: chronicVisits.length,
     chronicVisits,
     prescriptionHistoryVisits: candidate.prescriptionHistoryVisits,
+    historyRetrievalStatus: candidate.historyRetrievalStatus,
     diagnosisEvidenceText,
     medicationEvidenceText,
     evidenceText: `${diagnosisEvidenceText}；${medicationEvidenceText}`,
@@ -507,6 +509,7 @@ export function assessChronicRefillCandidate(
     chronicVisitCount: chronicVisits.length,
     chronicVisits,
     prescriptionHistoryVisits: visits,
+    historyRetrievalStatus: history?.retrievalStatus,
     diagnosisEvidenceText,
     medicationEvidenceText,
     evidenceText: `${diagnosisEvidenceText}；${medicationEvidenceText}`,

@@ -1,3 +1,4 @@
+import { loadChronicExaminationRecommendations } from './chronicExaminationRecommendations';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPatientContext } from '@/utils/patientContext';
 import { chatStream } from '@/services/llm';
@@ -10,12 +11,15 @@ import { buildRecordConfirmedPayload } from '../../clinical-result/recordConfirm
 import type { ClinicalResultInput } from '../../clinical-result/clinicalResultContract';
 import { DEFAULT_PAST_MEDICAL_HISTORY_TEMPLATE } from '../../clinical-result/historyRecordTemplates';
 
+vi.mock('./chronicExaminationRecommendations', () => ({ loadChronicExaminationRecommendations: vi.fn() }));
+
 vi.mock('@/services/llm', () => ({
   chatStream: vi.fn(),
 }));
 
 vi.mock('@/services/medicalData', () => ({
   medicalDataService: {
+    fetchAvailableExamLabItems: vi.fn(async () => []),
     matchDiagnosis: vi.fn(() => null),
     matchMedicine: vi.fn(() => null),
   },
@@ -131,6 +135,9 @@ describe('generateChronicRefillRecord', () => {
   );
 
   beforeEach(() => {
+    vi.mocked(loadChronicExaminationRecommendations).mockResolvedValue({
+      reminders: { sourceStatus: 'missing_identity', catalogStatus: 'ready', historyStatus: 'unknown', regionalHistoryStatus: 'not_connected', items: [] }, treatments: [],
+    });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.mocked(chatStream).mockRejectedValue(new Error('use fallback'));
     vi.mocked(medicalDataService.matchDiagnosis).mockReturnValue(null);
@@ -149,6 +156,28 @@ describe('generateChronicRefillRecord', () => {
       pharmacyCount: 1,
       staleStoreCount: 0,
     });
+  });
+
+  it('keeps the immediate record visible while recommendations load and merges them without a second model call', async () => {
+    let resolveRecommendations!: (value: Awaited<ReturnType<typeof loadChronicExaminationRecommendations>>) => void;
+    vi.mocked(loadChronicExaminationRecommendations).mockReturnValue(new Promise((resolve) => { resolveRecommendations = resolve; }));
+    const patient = buildPatientContext({ payload: { patientId: 'p', visitId: 'v' } })!;
+    const candidate = assessChronicRefillCandidate({ patientId: 'p', visits: [
+      { visitTime: Date.now() - 86400000, diagnoses: ['高血压'], medications: [] },
+    ] })!;
+    const partial = vi.fn();
+    const pending = generateChronicRefillRecord(patient, candidate, { onPartial: partial });
+    expect(partial).toHaveBeenCalled();
+    await vi.waitFor(() => expect(chatStream).toHaveBeenCalledOnce());
+    resolveRecommendations({ reminders: { sourceStatus: 'ready', catalogStatus: 'ready', historyStatus: 'complete', regionalHistoryStatus: 'not_connected',
+      items: [{ name: '心电图', matchStatus: 'matched', recentReports: [] }] },
+      treatments: [{ type: 'examination', name: '心电图', text: '健康处方推荐', selected: false, matchedItem: { id: 'exam', name: '心电图' }, matchStatus: 'exact' }] });
+    const result = await pending;
+    expect(result.treatments).toContainEqual(expect.objectContaining({ type: 'examination', name: '心电图', selected: false }));
+    expect(result.chronicExaminationReminders?.items).toHaveLength(1);
+    expect(result.recommendationPolicy?.autoFetchTreatments).toBe(false);
+    expect(chatStream).toHaveBeenCalledOnce();
+    expect(result.historyOfPresentIllness).not.toContain('心电图');
   });
 
   it('returns related examination candidates and extensions in the same chronic stream', async () => {
@@ -331,7 +360,7 @@ describe('generateChronicRefillRecord', () => {
     expect(result.recommendationPolicy).toEqual({
       autoFetchTreatments: false,
       allowTreatmentRefresh: false,
-      allowedTreatmentTypes: ['medicine'],
+      allowedTreatmentTypes: ['medicine', 'examination', 'labTest'],
     });
     expect(onProgress.mock.calls.map(([stage]) => stage)).toEqual([
       'generating-content',

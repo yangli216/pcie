@@ -916,6 +916,7 @@ export class PhisHisAdapter implements HisAdapter {
       }
     }
 
+    let visitListFailed = false;
     // 1) 并发拉过敏史与就诊列表；任一失败不中断另一路
     const [allergyItems, visitItems] = await Promise.all([
       this.service.queryPatientAllergy(idPi).catch(() => {
@@ -927,6 +928,7 @@ export class PhisHisAdapter implements HisAdapter {
         idVis: query.currentVisitId,
         dtBgn: query.dateRange,
       }).catch(() => {
+        visitListFailed = true;
         console.warn('[PhisHisAdapter] queryPatientVisitHistory failed');
         return [] as HisVisitHistoryItem[];
       }),
@@ -958,6 +960,8 @@ export class PhisHisAdapter implements HisAdapter {
 
     return {
       patientId: idPi,
+      retrievalStatus: visitListFailed ? 'failed'
+        : (detailEntries.some((entry) => !entry) || visitItems.length >= (query.limit ?? 5) ? 'partial' : 'complete'),
       allergyHistory: allergyHistory.length > 0 ? allergyHistory : undefined,
       pastMedicalHistory: undefined,
       visits: visits.length > 0 ? visits : undefined,

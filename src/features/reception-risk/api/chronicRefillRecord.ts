@@ -1,3 +1,4 @@
+import { loadChronicExaminationRecommendations } from './chronicExaminationRecommendations';
 import { chatStream } from '@/services/llm';
 import { medicalDataService } from '@/services/medicalData';
 import type { AppPatient } from '@/types/appState';
@@ -452,6 +453,8 @@ export async function generateChronicRefillRecord(
     message: '已整理历史病历，正在读取院内药品',
   }));
 
+  const examinationRecommendations = loadChronicExaminationRecommendations(patient, baseCandidate);
+
   const endInventory = timing?.span('inventory_context_loading');
   const inventoryContext = await loadAvailableMedicineInventoryContext().catch((error) => {
     console.warn('[ChronicRefill] Failed to load available inventory, no refill medicine will be preselected', error);
@@ -749,5 +752,11 @@ export async function generateChronicRefillRecord(
   endFinalTreatments?.(treatments.length);
   timing?.mark('historical_medications_final', resolvedCandidate.medications.length);
 
-  return buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, treatments);
+  const examinationResult = await examinationRecommendations;
+  const result = buildChronicRefillClinicalResult(patient, resolvedCandidate, draft, [
+    ...treatments, ...examinationResult.treatments,
+  ]);
+  result.chronicExaminationReminders = examinationResult.reminders;
+  result.recommendationPolicy!.allowedTreatmentTypes = ['medicine', 'examination', 'labTest'];
+  return result;
 }

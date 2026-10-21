@@ -115,6 +115,19 @@ export interface ClinicalResultRecommendationPolicy {
   plan?: ClinicalResultRecommendationPlan;
 }
 
+/** 非病历事实；只用于慢病检查检验提醒。 */
+export interface ChronicExaminationReminders {
+  sourceStatus: 'ready' | 'unavailable' | 'missing_identity';
+  catalogStatus: 'ready' | 'unavailable';
+  historyStatus: 'complete' | 'partial' | 'failed' | 'unknown';
+  regionalHistoryStatus: 'not_connected';
+  items: Array<{
+    name: string;
+    matchStatus: 'matched' | 'ambiguous' | 'unmatched';
+    recentReports: Array<{ name: string; requestedAt?: string; visitTime: number }>;
+  }>;
+}
+
 export interface ClinicalResultInput {
   chiefComplaint: string;
   historyOfPresentIllness: string;
@@ -136,6 +149,7 @@ export interface ClinicalResultInput {
   recommendationPolicy?: ClinicalResultRecommendationPolicy;
   /** 慢病复诊结果页的回写前核查；推荐值不等于医生已确认。 */
   chronicRefillReview?: ChronicRefillReviewPlan;
+  chronicExaminationReminders?: ChronicExaminationReminders;
   /** 共享结果页的分区流式生成状态；非流式场景可不提供。 */
   generation?: ClinicalResultGenerationState;
   channel?: ClinicalResultChannel;

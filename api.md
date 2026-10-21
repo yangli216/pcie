@@ -2552,3 +2552,7 @@ HIS 接入完成后，至少验证以下场景：
 患者上下文和 `record-confirmed` 支持独立可选字符串 `maritalReproductiveHistory`（婚育史），与 `menstrualHistory`（月经史）并列。`writebackScope.recordFields` 增加 `maritalReproductiveHistory`；只有患者为女性、明确周岁年龄满足 `14 <= ageYears < 60`、字段有内容且被选中时，才携带对应顶层字段、outpatientRecord 字段与 emrFieldValues。月龄、日龄、年龄不明、未满 14 岁、已满 60 岁、非女性、空白或未选择时均省略，不能清空 HIS 原字段。
 
 `emrFieldValues["月经史文本"]` 只承载月经史，`emrFieldValues["婚育史文本"]` 承载婚育史。选中婚育史时，可按明确无冲突事实同时传“婚育状况”：未婚未育=1、已婚未育=2、已婚已育=3、未婚已育=4、离异=5；“怀孕标志”：本次明确未孕=0、本次明确已孕=1。缺失、存疑、冲突或仅有历史孕产事实时省略对应字典，不以年龄、婚育或月经状态推断。PHIS 应用原有 dictionary VALUE/TEXT 转换，不把月经史回填到婚育史，仍沿用单条 record-confirmed + batch / 单次回执。动态模板模式以实际 targetFieldIds 为准，独立保留婚育史章节映射。
+
+### 慢病检查检验提醒一期
+
+推荐来自 PCIE Server 鉴权查询的 getUserInfo（与两慢病 getJYJCPro 同源）；仅匹配本次实时目录且被医生选择的检查/检验进入现有 record-confirmed.orderList，随本次所选病历合并为同一条 batch，不新增本地 Bridge 出口或私有医嘱字段。保留 idSrv、执行科室、部位、jsonField.idLisCategory 和 mutualRecognitionCode，互认 pending 继续使用同一 requestId。提醒和来源/覆盖范围只用于阅读，不作为 PHIS 病历事实自动回写；随访参考由医生选择增量写入现病史，注意事项依原选择范围回写。

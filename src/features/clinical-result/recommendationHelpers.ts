@@ -1,3 +1,5 @@
+import { buildMedicalItemMatchedItem } from './medicalItemMatchedItem';
+export { buildMedicalItemMatchedItem } from './medicalItemMatchedItem';
 import type { Diagnosis, TreatmentRecommendation } from '../../types/consultation';
 import {
   medicalDataService,
@@ -141,22 +143,6 @@ export function buildMedicineMatchedItem(item: MedicineItem): TreatmentRecommend
   };
 }
 
-export function buildMedicalItemMatchedItem(item: MedicalItem): TreatmentRecommendation['matchedItem'] {
-  return {
-    id: item.id,
-    name: item.name,
-    code: item.code,
-    idSrv: item.idSrv,
-    naSrv: item.naSrv,
-    sdSrv: item.sdSrv,
-    idDeptExec: item.idDeptExec,
-    idPart: item.idPart,
-    jsonField: item.jsonField,
-    fgCheckOrd: item.fgCheckOrd,
-    mutualRecognitionCode: item.mutualRecognitionCode || '',
-    raw: item.raw,
-  };
-}
 
 export function assessTreatmentCatalogMatch(
   type: TreatmentRecommendation['type'],

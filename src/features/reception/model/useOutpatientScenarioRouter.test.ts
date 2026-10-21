@@ -432,3 +432,40 @@ describe('useOutpatientScenarioRouter', () => {
     expect(session.executingOpportunity.value).toBeNull();
   });
 });
+
+
+describe('chronic examination late result isolation', () => {
+  it.each(['patient', 'visit', 'opportunity'] as const)('does not commit recommendations after %s changes', async (change) => {
+    const currentPatient = ref(buildPatientContext({ payload: { patientId: 'p', visitId: 'v' } }));
+    const session = useReceptionSessionController(currentPatient);
+    session.replaceOpportunity('chronic-refill', { type: 'chronic-refill', candidate: {
+      diagnosis: '高血压', diagnoses: ['高血压'], diagnosisGroups: ['高血压'], medications: [], chronicVisitCount: 1,
+      chronicVisits: [], diagnosisEvidenceText: '', medicationEvidenceText: '', evidenceText: '',
+    } });
+    let finish!: (value: any) => void;
+    const complete = vi.fn(() => true);
+    const partial = vi.fn(() => true);
+    let emitPartial: ((result: any) => void) | undefined;
+    const generate = vi.fn(async (_patient, _candidate, options) => {
+      emitPartial = options?.onPartial;
+      return new Promise<any>((resolve) => { finish = resolve; });
+    });
+    const router = useOutpatientScenarioRouter({ currentPatient, session, hasCachedVoiceResult: () => false,
+      applyFollowUpContext: vi.fn(), generateChronicRefillRecord: generate,
+      beginGeneratedClinicalResult: vi.fn(async () => 'session'), updateGeneratedClinicalResultProgress: vi.fn(() => true),
+      updateGeneratedClinicalResultPartial: partial, completeGeneratedClinicalResult: complete,
+      failGeneratedClinicalResult: vi.fn(() => true), resetVoiceSessionState: vi.fn(), openOutpatientFollowUp: vi.fn(),
+      openReportInterpretation: vi.fn(), startVoiceInteraction: vi.fn(), showToast: vi.fn(), trackError: vi.fn(),
+    });
+    const pending = router.confirmChronicRefill();
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+    if (change === 'opportunity') session.replaceOpportunity('chronic-refill', null);
+    else currentPatient.value = buildPatientContext({ payload: { patientId: change === 'patient' ? 'other' : 'p', visitId: 'new-visit' } });
+    const result = { channel: 'chronic-refill', chronicExaminationReminders: { sourceStatus: 'ready', items: [{ name: '旧患者推荐' }] } };
+    emitPartial?.(result);
+    finish(result);
+    await pending;
+    expect(complete).not.toHaveBeenCalled();
+    expect(partial).not.toHaveBeenCalled();
+  });
+});

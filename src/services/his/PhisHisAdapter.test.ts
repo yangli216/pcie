@@ -104,6 +104,18 @@ describe('PhisHisAdapter.fetchMedicineProDetail', () => {
 });
 
 describe('PhisHisAdapter.fetchPatientHistory', () => {
+  it('distinguishes list failure, detail omission, response limit and a complete empty history', async () => {
+    const service = { queryPatientAllergy: vi.fn(async () => []), queryPatientVisitHistory: vi.fn(), loadClinicMedicalRecord: vi.fn() } as unknown as HisService;
+    const adapter = new PhisHisAdapter(service);
+    vi.mocked(service.queryPatientVisitHistory).mockRejectedValueOnce(new Error('synthetic failure'));
+    expect((await adapter.fetchPatientHistory('p', { limit: 1000 }))?.retrievalStatus).toBe('failed');
+    vi.mocked(service.queryPatientVisitHistory).mockResolvedValueOnce([{ idVis: 'v', idPi: 'p' }] as any);
+    vi.mocked(service.loadClinicMedicalRecord).mockRejectedValueOnce(new Error('synthetic failure'));
+    expect((await adapter.fetchPatientHistory('p', { limit: 1000 }))?.retrievalStatus).toBe('partial');
+    vi.mocked(service.queryPatientVisitHistory).mockResolvedValueOnce([]);
+    expect((await adapter.fetchPatientHistory('p', { limit: 1000 }))?.retrievalStatus).toBe('complete');
+  });
+
   it('forwards the bounded history date range and current visit to PHIS', async () => {
     const service = {
       queryPatientAllergy: vi.fn().mockResolvedValue([]),
@@ -366,6 +378,7 @@ describe('PhisHisAdapter console privacy boundary', () => {
 
     expect(failedListResult).toEqual({
       patientId,
+      retrievalStatus: 'failed',
       allergyHistory: undefined,
       pastMedicalHistory: undefined,
       visits: undefined,
