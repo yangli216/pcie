@@ -545,3 +545,5 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 `features/clinical-result/medicalItemMatchedItem.ts` 为无副作用的目录身份 Adapter；原 recommendationHelpers 继续重导出同一函数。提醒 Builder 直接消费该纯 Adapter，避免因目录身份映射初始化网络服务。
 
 配置、验证记录与真实联调清单：[chronic-examination-reminders-uat.md](docs/chronic-examination-reminders-uat.md)。
+
+住院病历业务日志：`features/inpatient-emr/api/inpatientEmrLog.ts`（强类型完整快照与轮次）、`inpatientEmrLogOutbox.ts`（隔离持久队列与签名补传）；`model/useInpatientEmrGeneration.ts` 接入生命周期，日志与本地HIS技术trace独立。

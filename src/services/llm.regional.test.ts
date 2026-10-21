@@ -22,9 +22,11 @@ vi.mock('./aiTrace', () => ({
 }));
 
 import { chat, chatStream, transcribeAudio } from './llm';
+import { setFeedbackActor, clearFeedbackActor } from './feedbackContext';
 
 describe('server-managed LLM routing', () => {
   beforeEach(() => {
+    clearFeedbackActor();
     mocks.regionalPost.mockReset();
     mocks.createRegionalSSE.mockReset();
   });
@@ -129,6 +131,23 @@ describe('server-managed LLM routing', () => {
       expect.objectContaining({ enableSearch: false, stream: true }),
       expect.any(Function),
     );
+  });
+
+  it('captures actor identity for assistant calls through existing signed exits only', async () => {
+    mocks.createRegionalSSE.mockResolvedValue(undefined);
+    mocks.regionalPost.mockResolvedValue({ content: 'ok' });
+    setFeedbackActor({ doctorId: 'd1', doctorName: '张医生', hisOrgId: 'his1', orgName: '社区医院' });
+    await chatStream([{ role: 'user', content: '提问' }], vi.fn(), undefined, undefined, undefined, {
+      traceContext: { scene: 'chat-stream', sourceModule: 'chat_panel' },
+    });
+    expect(mocks.createRegionalSSE.mock.calls[0][1]).toMatchObject({ doctorId: 'd1', doctorName: '张医生', hisOrgId: 'his1', hisOrgName: '社区医院' });
+    clearFeedbackActor();
+    await chatStream([{ role: 'user', content: '提问' }], vi.fn(), undefined, undefined, undefined, {
+      traceContext: { scene: 'chat-stream', sourceModule: 'chat_panel' },
+    });
+    expect(mocks.createRegionalSSE.mock.calls[1][1].doctorName).toBeUndefined();
+    await chat([{ role: 'user', content: '其他场景' }]);
+    expect(mocks.regionalPost.mock.calls[0][1]).not.toHaveProperty('doctorName');
   });
 
   it('routes transcription through the signed server endpoint', async () => {

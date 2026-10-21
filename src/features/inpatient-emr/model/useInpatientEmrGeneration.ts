@@ -1,6 +1,8 @@
 import { computed, ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { generateInpatientEmrPreviewStream } from '../api/inpatientEmrService';
+import { createInpatientLogSession, type InpatientLogSession } from '../api/inpatientEmrLog';
+import { retryInpatientLogs, reportInpatientLogFailure } from '../api/inpatientEmrLogOutbox';
 import {
   cloneInpatientEmrTrace,
   createInpatientEmrTrace,
@@ -82,6 +84,11 @@ export function useInpatientEmrGeneration() {
   const writebackMessage = ref('');
   const writebackStatus = ref<'idle' | 'pending' | 'success' | 'error'>('idle');
   const pendingWritebackRequestId = ref('');
+  const dispatchedRequestIds = new Set<string>();
+  let requestSequence = 0;
+  let logSession: InpatientLogSession | null = null;
+  let pendingSnapshot: InpatientEmrGenerationResult | null = null;
+  void retryInpatientLogs();
 
   const activeStepKey = computed<InpatientEmrStepKey | null>(() => {
     return steps.value.find((step) => step.status === 'running')?.key || null;
@@ -94,6 +101,11 @@ export function useInpatientEmrGeneration() {
   }
 
   function reset(): void {
+    if (logSession && !logSession.terminal && !pendingWritebackRequestId.value)
+      void logSession.record('superseded', result.value, undefined, result.value?.fieldValues);
+    requestSequence++;
+    logSession = null;
+    pendingSnapshot = null;
     currentRequest.value = null;
     result.value = null;
     errorMessage.value = '';
@@ -114,37 +126,66 @@ export function useInpatientEmrGeneration() {
   }
 
   async function start(request: InpatientEmrGenerationRequest): Promise<void> {
+    if (pendingWritebackRequestId.value && currentRequest.value?.admissionId === request.admissionId) {
+      errorMessage.value = '正在等待HIS回执，请先处理当前回填请求';
+      return;
+    }
+    if (logSession && !logSession.terminal && !pendingWritebackRequestId.value)
+      void logSession.record('superseded', result.value, undefined, result.value?.fieldValues);
+    const token = ++requestSequence;
     currentRequest.value = request;
     result.value = null;
+    pendingSnapshot = null;
+    logSession = null;
     errorMessage.value = '';
     writebackMessage.value = '';
     writebackStatus.value = 'idle';
     pendingWritebackRequestId.value = '';
     isGenerating.value = true;
+    isWritingBack.value = false;
     resetSteps();
     const generationTrace = createInpatientEmrTrace(request.requestId);
-
+    let session: InpatientLogSession | null = null;
     try {
-      result.value = await generateInpatientEmrPreviewStream(request, updateStep, (partial) => {
-        result.value = partial;
+      session = await createInpatientLogSession(request);
+      if (token !== requestSequence) {
+        await session.record('started');
+        await session.record('superseded');
+        return;
+      }
+      logSession = session;
+      await session.record('started');
+    } catch { reportInpatientLogFailure(); }
+    if (token !== requestSequence) return;
+    try {
+      const generated = await generateInpatientEmrPreviewStream(request, progress => {
+        if (token === requestSequence) updateStep(progress);
+      }, partial => {
+        if (token === requestSequence) result.value = partial;
       }, generationTrace);
-      void recordInpatientEmrTraceLog(result.value, 'generation');
+      if (token !== requestSequence) return;
+      result.value = generated;
+      const status = generated.evidenceSummary.aiGeneration.status;
+      void session?.record(status === 'waiting' ? 'waiting' : status === 'failed' ? 'fallback' : 'generated', generated);
+      void recordInpatientEmrTraceLog(generated, 'generation');
     } catch (error) {
+      if (token !== requestSequence) return;
       errorMessage.value = error instanceof Error ? error.message : String(error);
       finishInpatientEmrTrace(generationTrace);
-      const runningStep = steps.value.find((step) => step.status === 'running');
-      updateStep({
-        key: runningStep?.key || 'generate',
-        status: 'error',
-        detail: errorMessage.value,
-      });
+      const runningStep = steps.value.find(step => step.status === 'running');
+      updateStep({ key: runningStep?.key || 'generate', status: 'error', detail: errorMessage.value });
+      void session?.record('generation_failed', result.value, '住院病历生成失败');
       void recordInpatientEmrFailureTraceLog(request, generationTrace, 'generation', errorMessage.value);
-      if (result.value) {
-        void recordInpatientEmrTraceLog(result.value, 'generation', 'error', errorMessage.value);
-      }
     } finally {
-      isGenerating.value = false;
+      if (token === requestSequence) isGenerating.value = false;
     }
+  }
+
+  async function abandon(): Promise<boolean> {
+    if (isGenerating.value || isWritingBack.value || pendingWritebackRequestId.value) return false;
+    await logSession?.record('abandoned', result.value, undefined, result.value?.fieldValues);
+    reset();
+    return true;
   }
 
   function updateFieldValue(fieldId: string, content: string): void {
@@ -163,14 +204,17 @@ export function useInpatientEmrGeneration() {
   }
 
   async function writeBack(): Promise<boolean> {
-    if (!result.value) return false;
+    if (!result.value || isGenerating.value || isWritingBack.value || pendingWritebackRequestId.value || logSession?.terminal) return false;
+    const token = requestSequence;
+    const session = logSession;
     const currentResult = result.value;
     isWritingBack.value = true;
     writebackStatus.value = 'pending';
     writebackMessage.value = '正在发送回写事件，等待 HIS 侧保存并回执';
 
     const baseRequest = currentResult.request;
-    const requestId = getRequestId(baseRequest);
+    const previousRequestId = getRequestId(baseRequest);
+    const requestId = dispatchedRequestIds.has(previousRequestId) ? crypto.randomUUID() : previousRequestId;
     currentResult.request = {
       ...baseRequest,
       requestId,
@@ -183,6 +227,9 @@ export function useInpatientEmrGeneration() {
     });
     syncResultTrace();
     const fieldValues = pickAiGeneratedFieldValues(currentResult);
+    pendingSnapshot = { ...currentResult, request: { ...request }, fieldValues: { ...currentResult.fieldValues }, initialFieldValues: { ...currentResult.initialFieldValues } };
+    const frozenSnapshot = pendingSnapshot;
+    await session?.record('writeback_requested', frozenSnapshot, undefined, frozenSnapshot.fieldValues);
     const payload = {
       status: 'success',
       consultationId: request.admissionId,
@@ -200,8 +247,11 @@ export function useInpatientEmrGeneration() {
       sourceModule: 'inpatient-emr',
     };
 
+    if (token !== requestSequence) return false;
     try {
       await invoke('complete_consultation', { result: payload });
+      dispatchedRequestIds.add(requestId);
+      if (token !== requestSequence || pendingWritebackRequestId.value !== requestId) return true;
       finishInpatientEmrTraceStage(currentResult.trace, 'writebackDispatch', 'success', '回写事件已发送', {
         requestId,
         fieldCount: Object.keys(fieldValues).length,
@@ -211,10 +261,13 @@ export function useInpatientEmrGeneration() {
       });
       syncResultTrace();
       void recordInpatientEmrTraceLog(currentResult, 'writeback-dispatch', 'pending', '已发送给 HIS，等待 reference-feedback 回执');
-      writebackStatus.value = 'success';
-      writebackMessage.value = '已发送给 HIS，后续可通过 reference-feedback 回执更新保存结果';
+      void session?.record('writeback_dispatched', frozenSnapshot);
+      writebackStatus.value = 'pending';
+      writebackMessage.value = '已发送给HIS，等待回填结果回执';
       return true;
     } catch (error) {
+      if (token !== requestSequence || pendingWritebackRequestId.value !== requestId) return false;
+      void session?.record('writeback_failed', frozenSnapshot, '回写事件发送失败');
       finishInpatientEmrTraceStage(
         currentResult.trace,
         'writebackDispatch',
@@ -234,22 +287,18 @@ export function useInpatientEmrGeneration() {
       pendingWritebackRequestId.value = '';
       return false;
     } finally {
-      isWritingBack.value = false;
+      if (token === requestSequence) isWritingBack.value = false;
     }
   }
 
   function applyReferenceFeedback(payload: InpatientEmrReferenceFeedbackPayload): 'success' | 'failed' | null {
-    if (!result.value || !payload.status) return null;
-    if (payload.consultationId && payload.consultationId !== result.value.request.admissionId) return null;
-    if (
-      pendingWritebackRequestId.value
-      && payload.requestId
-      && payload.requestId !== pendingWritebackRequestId.value
-    ) {
-      return null;
-    }
+    if (!result.value || !pendingSnapshot || !pendingWritebackRequestId.value
+      || payload.consultationId !== pendingSnapshot.request.admissionId
+      || payload.requestId !== pendingWritebackRequestId.value) return null;
 
     if (payload.status === 'success') {
+      dispatchedRequestIds.add(pendingWritebackRequestId.value);
+      void logSession?.record('writeback_success', pendingSnapshot, 'HIS已回执回填成功');
       finishInpatientEmrTraceStage(result.value.trace, 'writebackFeedback', 'success', payload.message || 'HIS 已完成病历回填', {
         requestId: payload.requestId || pendingWritebackRequestId.value,
       });
@@ -262,6 +311,8 @@ export function useInpatientEmrGeneration() {
     }
 
     if (payload.status === 'failed') {
+      dispatchedRequestIds.add(pendingWritebackRequestId.value);
+      void logSession?.record('writeback_failed', pendingSnapshot, 'HIS已回执回填失败');
       finishInpatientEmrTraceStage(result.value.trace, 'writebackFeedback', 'error', payload.message || 'HIS 病历回填失败', {
         requestId: payload.requestId || pendingWritebackRequestId.value,
       });
@@ -288,6 +339,8 @@ export function useInpatientEmrGeneration() {
     activeStepKey,
     completedStepCount,
     start,
+    abandon,
+    pendingWritebackRequestId,
     updateFieldValue,
     writeBack,
     applyReferenceFeedback,

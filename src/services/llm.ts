@@ -1,4 +1,5 @@
 import { PROMPTS } from '../prompts';
+import { getFeedbackActor } from './feedbackContext';
 import {
   getCachedBootstrap,
   createRegionalSSE,
@@ -55,7 +56,14 @@ function buildRegionalChatRequestPayload(
     && traceSourceModule === 'chat_panel'
     && stream;
 
+  const actor = traceSourceModule === 'chat_panel' ? getFeedbackActor() : undefined;
   return {
+    ...(actor ? {
+      doctorId: actor.doctorId || undefined,
+      doctorName: actor.doctorName || undefined,
+      hisOrgId: actor.hisOrgId || undefined,
+      hisOrgName: actor.orgName || undefined,
+    } : {}),
     configProfile: customConfig?.configProfile || 'default',
     ...(customConfig?.temperature === undefined ? {} : { temperature: customConfig.temperature }),
     consultationId: customConfig?.traceContext?.consultationId,

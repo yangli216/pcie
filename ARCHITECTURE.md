@@ -1661,3 +1661,13 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 健康大脑使用服务端 `RegionalExaminationHistoryProvider` 端口，一期实现明确返回 not_connected，不能冒充全区查询。当前历史范围固定标为 PHIS 近90天内成功返回的已出报告，查询不完整单独提示；推荐源没有提供周期，界面不宣称年度任务已完成或本次必须检查。
 
 `features/clinical-result/medicalItemMatchedItem.ts` 为无副作用的目录身份 Adapter；原 recommendationHelpers 继续重导出同一函数。提醒 Builder 直接消费该纯 Adapter，避免因目录身份映射初始化网络服务。
+
+## 医学助手服务端日志身份快照
+
+`services/llm.ts` 在 `sourceModule=chat_panel` 的请求构建阶段从 `feedbackContext.getFeedbackActor()` 读取医生 ID/姓名、HIS 机构 ID/名称，随现有签名 `/v1/ai/chat` 上送 `doctorId/doctorName/hisOrgId/hisOrgName` 可选字段；字段只用于服务端审计展示，不传给上游模型，不改变功能统计事件。非医学助手调用不增加这些字段；缺失 SDK 身份保持缺失，不从其他设备/患者信息推断。契约见服务端 `API.md` 的医学助手日志章节。
+
+## 住院病历日志闭环
+
+`features/inpatient-emr/api/inpatientEmrLog.ts` 为每次生成创建独立UUID，捕获开始时医生/机构身份、模板SHA-256及患者锚点；按生命周期记录生成、等待、失败/备用稿、回填待回执、回执、明确放弃与重新生成替代。`api/inpatientEmrLogOutbox.ts` 通过IndexedDB按服务器/机构/设备隔离保存待传事件，经现有签名regionalPost上传 `/v1/client/user-logs/inpatient-emr/events`；确认后删除，失败可见可重试，不静默丢弃。存储上限100条/8MiB，内存中未能落盘事件仅保证当前运行期重试，不能承诺重启恢复。进入住院工作区恢复补传，运行期每30秒重试。
+
+`useInpatientEmrGeneration` 管理轮次和请求序号隔离，旧流式结果/旧回执不污染新轮次；AI原稿在生成完成时固定，最终稿在回填时固定。回写发送成功仍为pending，只有住院ID+requestId严格匹配当前待处理请求的success回执才标记回填成功；重复、跨住院、无requestId或迟到回执忽略。等待回执期间禁止重新生成或放弃，最小化保持。页面明确放弃先记录快照，再清空现场；后台菜单名“住院病历日志”。不改本地Bridge入参和回写事件协议，不新增Pinia全局状态。

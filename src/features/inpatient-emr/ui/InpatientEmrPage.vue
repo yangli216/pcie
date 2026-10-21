@@ -9,7 +9,7 @@
         <button
           class="danger-ghost-btn"
           type="button"
-          :disabled="!request || isGenerating || isWritingBack"
+          :disabled="!request || isGenerating || isWritingBack || writebackStatus === 'pending'"
           title="放弃本次生成"
           @click="handleCancelClick"
         >
@@ -19,7 +19,7 @@
         <button
           class="ghost-btn"
           type="button"
-          :disabled="!request || isGenerating"
+          :disabled="!request || isGenerating || isWritingBack || writebackStatus === 'pending'"
           title="补充要点并重新生成"
           @click="openRegenerateDialog"
         >
@@ -29,7 +29,7 @@
         <button
           class="primary-btn"
           type="button"
-          :disabled="!result || isGenerating || isWritingBack"
+          :disabled="!result || isGenerating || isWritingBack || writebackStatus === 'pending' || writebackStatus === 'success'"
           title="一键回写"
           @click="handleWritebackClick"
         >
@@ -39,6 +39,10 @@
       </div>
     </header>
 
+    <div v-if="inpatientLogUpload.error || inpatientLogUpload.pending" class="inpatient-log-notice" role="status">
+      <span>{{ inpatientLogUpload.error || `住院日志待补传 ${inpatientLogUpload.pending} 条` }}</span>
+      <button v-if="!inpatientLogUpload.unrecorded || inpatientLogUpload.pending" type="button" :disabled="inpatientLogUpload.uploading" @click="retryInpatientLogs">{{ inpatientLogUpload.uploading ? '补传中…' : '重试补传' }}</button>
+    </div>
     <main class="emr-main">
       <aside class="left-pane">
         <InpatientEmrProcessPanel
@@ -422,6 +426,7 @@ import type {
   InpatientEmrTemplateField,
 } from '../types';
 import { getHisAdapter } from '@/services/his';
+import { inpatientLogUpload, retryInpatientLogs } from '../api/inpatientEmrLogOutbox';
 import type { HisOutpatientVisit, HisOutpatientMedicalRecord } from '@/services/his';
 
 const props = defineProps<{
@@ -449,6 +454,8 @@ const {
   updateFieldValue,
   writeBack,
   applyReferenceFeedback,
+  abandon,
+  pendingWritebackRequestId,
   reset,
 } = useInpatientEmrGeneration();
 
@@ -695,7 +702,7 @@ watch(
 
 useConsultationReferenceFeedbackListener<InpatientEmrReferenceFeedbackPayload>({
   resolveConsultationId: () => result.value?.request.admissionId || props.request?.admissionId || '',
-  isActive: () => props.active !== false,
+  isActive: () => Boolean(pendingWritebackRequestId.value),
   logContext: 'InpatientEmrPage',
   onFeedback: (payload) => {
     const status = applyReferenceFeedback(payload);
@@ -706,7 +713,7 @@ useConsultationReferenceFeedbackListener<InpatientEmrReferenceFeedbackPayload>({
 });
 
 watch(
-  [() => result.value?.generatedAt, isGenerating],
+  [() => result.value?.generatedAt, isGenerating, writebackStatus],
   () => {
     if (!result.value) {
       previewHtml.value = '';
@@ -716,7 +723,7 @@ watch(
       result.value.request.htmlContent,
       result.value.fieldValues,
       result.value.template.fields,
-      !isGenerating.value,
+      !isGenerating.value && writebackStatus.value !== 'pending' && writebackStatus.value !== 'success',
     );
   },
 );
@@ -727,7 +734,7 @@ function getCurrentGenerationRequest(): InpatientEmrGenerationRequest | null {
 
 function openRegenerateDialog(): void {
   const current = getCurrentGenerationRequest();
-  if (!current || isGenerating.value) return;
+  if (!current || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending') return;
   supplementText.value = current.doctorSupplement || '';
   supplementError.value = '';
   showRegenerateDialog.value = true;
@@ -740,7 +747,7 @@ function closeRegenerateDialog(): void {
 }
 
 function handleCancelClick(): void {
-  if (isGenerating.value || isWritingBack.value) return;
+  if (isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending') return;
   showCancelConfirm.value = true;
 }
 
@@ -748,13 +755,13 @@ function closeCancelConfirm(): void {
   showCancelConfirm.value = false;
 }
 
-function confirmCancel(): void {
-  if (isGenerating.value || isWritingBack.value) return;
+async function confirmCancel(): Promise<void> {
+  if (isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending') return;
   showCancelConfirm.value = false;
   showRegenerateDialog.value = false;
   showOutpatientPreview.value = false;
   showWritebackQualityDialog.value = false;
-  emit('cancel');
+  if (await abandon()) emit('cancel');
 }
 
 function appendSupplementPreset(preset: string): void {
@@ -892,7 +899,7 @@ function getFieldPrompt(field: InpatientEmrTemplateField): string {
 }
 
 function handleWritebackClick(): void {
-  if (!result.value || isGenerating.value || isWritingBack.value) return;
+  if (!result.value || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending') return;
   // 暂时取消病历回写前的质控，直接回写
   void submitWriteback();
 }
@@ -2020,4 +2027,9 @@ button {
   from { transform: translateY(16px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+</style>
+
+<style scoped>
+.inpatient-log-notice { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: #fff4dc; color: #725513; font-size: 12px; }
+.inpatient-log-notice button { flex-shrink: 0; padding: 4px 10px; border: 1px solid currentColor; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
 </style>
