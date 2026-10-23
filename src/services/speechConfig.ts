@@ -7,6 +7,8 @@ export interface SpeechConfig {
   model: string;
   sampleRate: number;
   format: string;
+  transcriptionMode: 'batch' | 'segmented';
+  segmentDurationMs: number;
 }
 
 export const DEFAULT_SPEECH_CONFIG: SpeechConfig = {
@@ -14,6 +16,8 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfig = {
   model: 'paraformer-realtime-v2',
   sampleRate: 16000,
   format: 'pcm',
+  transcriptionMode: 'batch',
+  segmentDurationMs: 4000,
 };
 
 function normalizeSpeechProvider(raw?: string | null): SpeechProvider {
@@ -29,6 +33,7 @@ export function supportsRealtimeSpeech(provider: SpeechProvider): boolean {
 export function getSpeechConfig(): SpeechConfig {
   const bootstrap = getCachedBootstrap();
   const provider = normalizeSpeechProvider(bootstrap?.speech?.provider);
+  const duration = bootstrap?.speech?.segmentDurationMs;
   return {
     provider,
     model: bootstrap?.speech?.model
@@ -39,5 +44,9 @@ export function getSpeechConfig(): SpeechConfig {
           : DEFAULT_SPEECH_CONFIG.model),
     sampleRate: DEFAULT_SPEECH_CONFIG.sampleRate,
     format: DEFAULT_SPEECH_CONFIG.format,
+    transcriptionMode: provider === 'openai-compatible' && bootstrap?.speech?.transcriptionMode === 'segmented'
+      ? 'segmented' : 'batch',
+    segmentDurationMs: typeof duration === 'number' && Number.isInteger(duration) && duration >= 2000 && duration <= 15000
+      ? duration : DEFAULT_SPEECH_CONFIG.segmentDurationMs,
   };
 }

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>全医慧助 · GBase 联调工作台</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><div><p class="eyebrow">PCIE / GBASE INTEGRATION</p><h1>全医慧助 · 模拟 HIS 工作台</h1><p>合成患者 → 生产 SDK → 原生桌面 → PCIE Server → 真实 Qwen3-32B</p></div><span class="badge">工程联调 · 合成资料</span></header>
+<main>
+  <aside>
+    <section><h2>连接</h2><p id="connection" role="status">等待桌面握手</p><div class="actions"><button id="connect">连接桌面</button><button id="ping" class="secondary">检测 Bridge</button></div><p class="muted">桌面 Bridge 8081 · GBase 后台 18090<br>只在本机模拟回写，不连接真实 PHIS。</p></section>
+    <section><h2>当前合成患者</h2><h3 id="patient-title">林测试 <small>女 · 42岁</small></h3><p id="patient-summary"></p><p id="patient-identity" class="mono"></p><label class="switch"><input id="auto-feedback" type="checkbox" checked> 医生确认后自动模拟保存并回执</label></section>
+    <section><h2>验证范围</h2><p>真实：客户端、签名、模型与 GBase。</p><p>模拟：HIS 目录、患者与回写保存。</p><p class="muted">标准包已验证真实麦克风、SenseVoiceSmall 4 秒分段识别及停止后的整段校正；用户观察暂停讲话时出现文字片段。病历闭环仍为 DEV 合成转写证据，连续讲话、长录音、知识库、公卫及真实 PHIS 单独验收。本页不保存模型凭据。</p></section>
+  </aside>
+  <div class="workspace">
+    <section><div class="title-row"><h2>功能调用</h2><button id="stop" class="secondary">结束本次接诊</button></div><p class="muted">点击后在桌面查看生成结果；病历与引用需要在桌面确认，之后才记录模拟回写。</p>
+      <div class="feature-grid">
+        <button data-feature="consultation">智能问诊</button>
+        <button data-feature="record">病历生成</button>
+        <button data-feature="suggestedDx">诊断建议</button>
+        <button data-feature="diffDx">鉴别诊断</button>
+        <button data-feature="medication">用药推荐</button>
+        <button data-feature="examination">检查推荐</button>
+        <button data-feature="lab_test">检验推荐</button>
+        <button data-feature="procedure">处置推荐</button>
+        <button data-feature="treatment_plan">诊疗方案</button>
+        <button data-feature="reminder">诊疗提醒</button>
+        <button data-feature="inspectReport">检验报告解读</button>
+        <button data-feature="checkReport">检查报告解读</button>
+        <button data-feature="outpatient">门诊模板病历</button>
+        <button data-feature="inpatient">住院病历</button>
+        <button data-feature="voice">语音问诊（动态模板）</button>
+        <button data-feature="risks">风险提示</button>
+        <button data-feature="chronic">慢病续方场景</button>
+      </div>
+    </section>
+    <section><div class="title-row"><h2>调用与回写记录</h2><button id="refresh-status" class="secondary">刷新 HIS 调用</button></div><p id="validation-summary" class="error" role="status"></p><div class="table-scroll"><table><thead><tr><th>功能</th><th>受理 / 事件</th><th>生成 / 回写</th></tr></thead><tbody id="results"></tbody></table></div><p id="his-status" class="muted">HIS 目录尚未调用</p></section>
+    <section><h2>最近事件 / 模拟保存内容</h2><pre id="event-preview">等待 SDK 事件…</pre><p id="write-count" class="muted">本页内存已保存 0 次，刷新页面即清空。</p></section>
+  </div>
+</main>
+<script src="/sdk.js"></script><script type="module" src="/app.js"></script>
+</body></html>

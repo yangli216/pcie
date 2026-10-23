@@ -1,5 +1,7 @@
 # 架构文档 (ARCHITECTURE.md)
 
+原生 HIS 联调日志的文件追加、轮转、读取和清理由同一进程内文件锁协调，JSON 与换行作为完整记录写入，避免 Bridge 和目录请求并发时两条 JSON 粘在同一行而被列表忽略。仍仅保留现有脱敏摘要；并发文件回归与真实联调结果分别记录。
+
 ## 机构知识检索工作台（2026-09-30）
 
 现有知识库按钮通过useNavigation.openKnowledgeBase进入features/knowledge/ui/KnowledgeBasePanel；App仅编排入口。InstitutionKnowledgePanel使用useInstitutionKnowledgeController管理集合、检索、错误与迟到结果，KnowledgeSearchForm与KnowledgeEvidenceList只展示和发出事件；api/knowledgeRetrieval.ts统一经regionalClient签名消费服务端集合/检索。另提供PMPHAI原有外部页面入口，不持有第三方Key、不直接调用WeKnora。原文按文本显示，来源和版本由服务端批准清单提供；本轮不自动注入ChatPanel/公卫。
@@ -1628,3 +1630,6 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 
 `recordConfirmedEmrFieldValues.ts` 是症状问诊与普通语音共用的 PHIS 病历字段投影入口。医生选择回写体格检查时，它保留完整 `体格检查` 正文，并复用 `physicalExamVitalTemplate.ts` 将固定 T/P/R/BP 片段及身高、体重、腰围测量槽位剥离：明确生命体征继续投影到 `体温/脉搏/呼吸/收缩压/舒张压`，人体测量值继续保留在完整正文或 PHIS 独立字段中，仅剩余描述性查体正文同时投影到 `其他体格检查/其他体格检查文本`。只有剩余正文非空时才发送这两个字段，避免用空值清除 PHIS 原内容；未选择体格检查时不发送任何相关字段。动态门诊模板仍由 `outpatientEmrStructuredProjection.ts` 按本次 `targetFieldIds` 投影，不扩大模板范围。
+## 分段 ASR
+
+`services/segmentedSpeechTranscriber.ts` 管理有界 PCM 窗口、串行转写、重叠文本合并与关闭隔离，`RealtimeSpeechService` 按当前会话冻结的 bootstrap 配置选择该模式或原 WebSocket/整段模式。分段回调仅作草稿；停止后整段结果为最终文本，过期会话回调不得覆盖新录音。

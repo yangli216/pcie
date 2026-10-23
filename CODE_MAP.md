@@ -1,5 +1,7 @@
 # CODE_MAP.md
 
+分段语音：`services/segmentedSpeechTranscriber.ts` 管理准实时 PCM 窗口和草稿合并，`speechConfig.ts` 读取 bootstrap 模式/时长，`aliyunSpeech.ts` 统一生命周期和停止后的完整转写；配置契约见 api.md。
+
 ## 机构知识检索
 
 - features/knowledge/api/knowledgeRetrieval.ts：签名集合/检索请求与双端DTO。

@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## GBase 原生客户端联调
+
+分段 ASR 的录音中文字仅为草稿，停止后整段转写校正；音频窗口和并发必须有界，关闭或会话切换禁止迟到结果串线。模式及分段时长由后台 bootstrap 下发，不新增客户端供应商凭据；默认回归使用 Fake，真实模型结果另记。
+
+独立模拟 HIS 使用 `scripts/gbase-mock-his/`，复用生产 SDK、医疗握手、Bridge 与签名出口；只接收 `pcie-gbase-client` 合成标识，模拟保存仅留页面内存。不得把模型密钥放入页面/客户端，或将 HTTP 受理、Fake 上游、模拟回写当作真实模型生成和 PHIS 验收。运行命令、独立测试构建及证据规则见 HARNESS.md；服务协议测试与原生 UI 结果分开报告，保留原有桌面配置及历史未跟踪输出。
+
+HIS 日志文件写入/轮转须与读取/清理串行协调，保持一行一个完整 JSON；新增并发回归须验证可解析数量与唯一 ID，不把旧文件改写作为修复验收。
+
 ## 机构知识检索入口
 
 独立知识库按钮进入KnowledgeBasePanel工作台，机构资料使用features/knowledge/api中的签名服务端接口，人卫页面保留独立入口；问诊分类检索仍走pmphai.ts。新UI/状态进入features/knowledge，不在App增加业务逻辑，不新增Pinia store。单测覆盖签名、错误/零命中、迟到结果隔离和原文文本安全；执行type-check/test:unit/build，真实Tauri/WeKnora联调单列。

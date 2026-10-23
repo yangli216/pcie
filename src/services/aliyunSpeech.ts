@@ -6,6 +6,8 @@
  */
 
 import { transcribeAudio } from './llm';
+import { DEFAULT_RETRY_CONFIG } from './llm/types';
+import { SegmentedSpeechTranscriber } from './segmentedSpeechTranscriber';
 import { getSpeechConfig, supportsRealtimeSpeech } from './speechConfig';
 import {
     regionalPost,
@@ -152,6 +154,7 @@ export class RealtimeSpeechService {
     private finalizedText: string = '';
     private currentSentence: string = '';
     private sessionTextPrefix: string = '';
+    private segmentedTranscriber: SegmentedSpeechTranscriber | null = null;
 
     constructor(private readonly reconnectRandom: () => number = Math.random) {
     }
@@ -182,7 +185,22 @@ export class RealtimeSpeechService {
             return;
         }
 
-        if (!supportsRealtimeSpeech(getSpeechConfig().provider)) {
+        const speechConfig = getSpeechConfig();
+        if (speechConfig.provider === 'openai-compatible' && speechConfig.transcriptionMode === 'segmented' && onText) {
+            this.segmentedTranscriber = new SegmentedSpeechTranscriber({
+                sampleRate: speechConfig.sampleRate,
+                segmentDurationMs: speechConfig.segmentDurationMs,
+                transcribe: blob => transcribeAudio(blob, undefined, { ...DEFAULT_RETRY_CONFIG, maxRetries: 0 }),
+                onText: text => {
+                    if (this.sessionEpoch === sessionEpoch && this.isStarted && !this.isFinishing) {
+                        this.onTextCallback?.(text, false);
+                    }
+                },
+                onError: error => console.warn('[Speech] Segment failed; final recording remains available:', error),
+            });
+            return;
+        }
+        if (!supportsRealtimeSpeech(speechConfig.provider)) {
             console.log('[Speech] Batch-only provider configured, using batch mode');
             return;
         }
@@ -209,6 +227,7 @@ export class RealtimeSpeechService {
         const chunk = new Int16Array(pcmData);
         // 始终保留完整录音副本：首次建链失败和中途断线都能在停止后批量补录。
         this.audioChunks.push(chunk);
+        this.segmentedTranscriber?.push(chunk);
 
         if (this.isStreaming && this.regionalSocket?.readyState === WebSocket.OPEN) {
             this.sendPcmChunk(this.regionalSocket, chunk);
@@ -229,6 +248,9 @@ export class RealtimeSpeechService {
             return '';
         }
 
+        const sessionEpoch = this.sessionEpoch;
+        this.segmentedTranscriber?.close();
+        this.segmentedTranscriber = null;
         this.isStarted = false;
         this.isFinishing = true;
         this.cancelReconnectDelay();
@@ -239,11 +261,13 @@ export class RealtimeSpeechService {
             }
             return await this.finishRegionalStreaming();
         } finally {
-            this.audioChunks = [];
-            this.pendingAudioChunks = [];
-            this.cleanupRegionalSocket();
-            this.isStreaming = false;
-            this.isFinishing = false;
+            if (this.sessionEpoch === sessionEpoch) {
+                this.audioChunks = [];
+                this.pendingAudioChunks = [];
+                this.cleanupRegionalSocket();
+                this.isStreaming = false;
+                this.isFinishing = false;
+            }
         }
     }
 
@@ -448,10 +472,11 @@ export class RealtimeSpeechService {
     }
 
     private async transcribeBufferedAudio(): Promise<string> {
+        const sessionEpoch = this.sessionEpoch;
         const audioBlob = this.buildBufferedAudioBlob();
         console.log('[Speech] Batch mode, total audio:', audioBlob.size, 'bytes');
         const text = await transcribeSpeech(audioBlob);
-        this.onTextCallback?.(text, true);
+        if (this.sessionEpoch === sessionEpoch) this.onTextCallback?.(text, true);
         return text;
     }
 
@@ -483,6 +508,8 @@ export class RealtimeSpeechService {
     }
 
     private cleanupRegionalSocket(): void {
+        this.segmentedTranscriber?.close();
+        this.segmentedTranscriber = null;
         this.sessionEpoch += 1;
         this.cancelReconnectDelay();
         this.socketGeneration += 1;

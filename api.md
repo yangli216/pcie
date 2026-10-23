@@ -1,5 +1,7 @@
 # 全医慧助（PCIE）HIS 接入指南 / 接口说明
 
+HIS 联调流水采用逐行 JSON；原生端对追加、轮转、读取及清理串行协调，保证并发请求的摘要可逐条解析。该实现修复不增加接口或日志明文字段，不修写既有历史日志。
+
 ## 服务端机构知识检索（2026-09-30）
 
 桌面知识工作台通过已有regionalClient签名调用GET `/v1/knowledge/collections`与POST `/v1/knowledge/search`，字段以[服务端随附机器契约](../pcie-server/deploy/weknora/knowledge-retrieval.openapi.json)、[工作区协同契约](../development-harness/contracts/knowledge-retrieval.openapi.json)及[服务端API](../pcie-server/API.md)为准。机构及批准文档范围由服务端确定，客户端只提交逻辑集合、查询、批准版本与limit。无新增本地Bridge接口，不向HIS暴露WeKnora地址/Key。PMPHAI原有契约继续使用。
@@ -2552,3 +2554,6 @@ HIS 接入完成后，至少验证以下场景：
 患者上下文和 `record-confirmed` 支持独立可选字符串 `maritalReproductiveHistory`（婚育史），与 `menstrualHistory`（月经史）并列。`writebackScope.recordFields` 增加 `maritalReproductiveHistory`；只有患者为女性、明确周岁年龄满足 `14 <= ageYears < 60`、字段有内容且被选中时，才携带对应顶层字段、outpatientRecord 字段与 emrFieldValues。月龄、日龄、年龄不明、未满 14 岁、已满 60 岁、非女性、空白或未选择时均省略，不能清空 HIS 原字段。
 
 `emrFieldValues["月经史文本"]` 只承载月经史，`emrFieldValues["婚育史文本"]` 承载婚育史。选中婚育史时，可按明确无冲突事实同时传“婚育状况”：未婚未育=1、已婚未育=2、已婚已育=3、未婚已育=4、离异=5；“怀孕标志”：本次明确未孕=0、本次明确已孕=1。缺失、存疑、冲突或仅有历史孕产事实时省略对应字典，不以年龄、婚育或月经状态推断。PHIS 应用原有 dictionary VALUE/TEXT 转换，不把月经史回填到婚育史，仍沿用单条 record-confirmed + batch / 单次回执。动态模板模式以实际 targetFieldIds 为准，独立保留婚育史章节映射。
+## 分段 ASR 配置
+
+bootstrap `speech.transcriptionMode` 为 `batch` / `segmented`（省略按 `batch`），`speech.segmentDurationMs` 默认 4000，允许 2000–15000 的整数；仅 `openai-compatible` 提供方启用分段识别。分段 PCM 仍经生产 P-256 `/v1/ai/speech/transcribe`，模型与凭据由服务端管理。录音期间文字为草稿，停止后完整转写替换；HIS 回写仍须经过既有文字确认及病历确认，不改变 Bridge/SDK 契约。

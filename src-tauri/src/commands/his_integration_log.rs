@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{command, AppHandle, Manager};
 use uuid::Uuid;
@@ -12,6 +13,7 @@ const MAX_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_STRING_LEN: usize = 1_200;
 const DEFAULT_LIST_LIMIT: usize = 200;
 const MAX_LIST_LIMIT: usize = 1_000;
+static LOG_FILE_MUTEX: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +147,7 @@ pub async fn list_his_integration_logs(
 
 #[command]
 pub async fn clear_his_integration_logs(app: AppHandle) -> Result<(), String> {
+    let _guard = LOG_FILE_MUTEX.lock().map_err(|error| error.to_string())?;
     let log_path = log_file_path(&app)?;
     if log_path.exists() {
         fs::remove_file(&log_path).map_err(|error| error.to_string())?;
@@ -211,14 +214,74 @@ fn log_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn append_entry(app: &AppHandle, entry: &HisIntegrationLogEntry) -> Result<(), String> {
     let path = log_file_path(app)?;
-    rotate_if_needed(&path)?;
+    append_entry_at_path(&path, entry)
+}
+
+fn append_entry_at_path(path: &Path, entry: &HisIntegrationLogEntry) -> Result<(), String> {
+    let _guard = LOG_FILE_MUTEX.lock().map_err(|error| error.to_string())?;
+    rotate_if_needed(path)?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|error| error.to_string())?;
-    let line = serde_json::to_string(entry).map_err(|error| error.to_string())?;
-    writeln!(file, "{}", line).map_err(|error| error.to_string())
+    let mut line = serde_json::to_string(entry).map_err(|error| error.to_string())?;
+    line.push('\n');
+    file.write_all(line.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod concurrent_file_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    #[test]
+    fn concurrent_log_records_remain_individually_parseable() {
+        let directory = std::env::temp_dir().join(format!("pcie-his-log-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = Arc::new(directory.join(LOG_FILE_NAME));
+        let barrier = Arc::new(Barrier::new(16));
+        let threads: Vec<_> = (0..16).map(|writer| {
+            let path = Arc::clone(&path);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                for sequence in 0..64 {
+                    let entry: HisIntegrationLogEntry = serde_json::from_value(json!({
+                        "id": format!("synthetic-{writer}-{sequence}"),
+                        "traceId": "synthetic", "direction": "outbound", "operation": "synthetic-query",
+                        "method": "POST", "path": "/synthetic", "status": "success", "createdAt": 1,
+                        "requestSummary": { "shape": "合成摘要".repeat(100) }
+                    })).unwrap();
+                    append_entry_at_path(&path, &entry).unwrap();
+                }
+            })
+        }).collect();
+        for handle in threads {
+            handle.join().unwrap();
+        }
+        let content = fs::read_to_string(path.as_ref()).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+        let entries: Vec<HisIntegrationLogEntry> = content
+            .lines()
+            .map(|line| {
+                serde_json::from_str(line)
+                    .expect("each concurrent log entry must occupy one complete JSON line")
+            })
+            .collect();
+        assert_eq!(entries.len(), 16 * 64);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            16 * 64
+        );
+    }
 }
 
 fn rotate_if_needed(path: &Path) -> Result<(), String> {
@@ -234,6 +297,7 @@ fn rotate_if_needed(path: &Path) -> Result<(), String> {
 }
 
 fn read_current_entries(app: &AppHandle) -> Result<Vec<HisIntegrationLogEntry>, String> {
+    let _guard = LOG_FILE_MUTEX.lock().map_err(|error| error.to_string())?;
     let path = log_file_path(app)?;
     if !path.exists() {
         return Ok(Vec::new());
