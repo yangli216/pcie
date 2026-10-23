@@ -8,7 +8,7 @@ import type { MedicalItem } from '@/services/medicalData';
 const now = new Date(2026, 9, 20, 12).getTime();
 const day = 86400000;
 const lab: MedicalItem = { id: 'lab', idSrv: 'srv-lab', code: 'LAB', name: '血脂', category: '检验',
-  sdSrv: '41', idDeptExec: 'dept', jsonField: '{"idLisCategory":"lis","fgCombination":"1"}', mutualRecognitionCode: 'recognition', raw: { idLisCategory: 'lis' } };
+  sdSrv: '41', idDeptExec: 'dept', jsonField: '{"idLisCategory":"lis","fgCombination":"0"}', mutualRecognitionCode: 'recognition', raw: { idLisCategory: 'lis' } };
 const exam: MedicalItem = { id: 'exam', idSrv: 'srv-exam', code: 'EXAM', name: '心电图', category: '检查', sdSrv: '31', idPart: 'part', idDeptExec: 'dept' };
 const recommendation = (name: string, subItems: string[] = []) => ({ name, subItems, description: '' });
 function build(overrides: Partial<Parameters<typeof buildChronicExaminationReminders>[0]> = {}) {
@@ -42,6 +42,57 @@ describe('chronic examination reminders', () => {
     expect(build({ catalog: [lab, { ...lab, id: 'second' }] }).reminders.items[0].matchStatus).toBe('ambiguous');
     expect(build({ catalog: [{ ...lab, restricted: true }] }).treatments).toEqual([]);
     expect(build({ catalog: [{ ...lab, name: '血脂四项' }] }).treatments).toEqual([]);
+  });
+  it('blocks a unique unverified combination rather than creating an order', () => {
+    const result = build({ catalog: [{ ...lab, jsonField: '{"fgCombination":"2"}' }] });
+    expect(result.treatments).toEqual([]);
+    expect(result.reminders.items[0]).toMatchObject({ matchStatus: 'ambiguous', matchIssue: 'unverified_group' });
+  });
+  it('uses only the approved name family for historical reports and retains type/visit boundaries', () => {
+    const result = build({ recommendations: [recommendation('同型半胱氨酸')],
+      catalog: [{ ...lab, name: '血同型半胱氨酸测定' }], visits: [
+        { visitId: 'prior', visitTime: now - day, reportedApplications: [
+          { applicationId: 'good', name: '血同型半胱氨酸测定', type: 'lab', status: 'reported' },
+          { applicationId: 'wrong-type', name: '同型半胱氨酸', type: 'exam', status: 'reported' },
+          { applicationId: 'expanded', name: '血同型半胱氨酸测定（免费）', type: 'lab', status: 'reported' },
+        ] },
+      ] });
+    expect(result.treatments[0]).toMatchObject({ name: '血同型半胱氨酸测定', selected: false });
+    expect(result.reminders.items[0].recentReports.map(item => item.name)).toEqual(['血同型半胱氨酸测定']);
+  });
+  it('deduplicates approved concepts while retaining live catalog identity and default selection', () => {
+    const result = build({ recommendations: [recommendation('同型半胱氨酸'), recommendation('血同型半胱氨酸测定')],
+      catalog: [{ ...lab, name: '血同型半胱氨酸测定' }] });
+    expect(result.reminders.items).toHaveLength(1);
+    expect(result.treatments).toHaveLength(1);
+    expect(result.treatments[0]).toMatchObject({ selected: false, matchedItem: { idSrv: lab.idSrv,
+      jsonField: lab.jsonField, mutualRecognitionCode: lab.mutualRecognitionCode } });
+  });
+  it('never loses an unverified group child while deduplicating approved names', () => {
+    const result = build({ recommendations: [recommendation('同型半胱氨酸', ['血糖']), recommendation('血同型半胱氨酸测定')],
+      catalog: [{ ...lab, name: '血同型半胱氨酸测定' }] });
+    expect(result.treatments).toEqual([]);
+    expect(result.reminders.items[0].matchIssue).toBe('unverified_group');
+  });
+  it('writes only the explicitly selected approved aliases with their actual live IDs', () => {
+    const result = build({ recommendations: [recommendation('糖化血红蛋白'), recommendation('同型半胱氨酸'), recommendation('心电图')],
+      catalog: [
+        { ...lab, id: 'hba', idSrv: 'srv-hba', name: '糖化血红蛋白测定' },
+        { ...lab, id: 'hcy', idSrv: 'srv-hcy', name: '血同型半胱氨酸测定' },
+        { ...exam, name: '常规心电图检查' },
+      ] });
+    const initialized = initClinicalTreatments(result.treatments, { assessCatalogMatch: vi.fn(), inferFrequency: () => '',
+      inferRoute: () => '', normalize: value => value as TreatmentRecommendation, buildReason: () => '', shouldAutoSelect: () => true });
+    expect(initialized).toHaveLength(3); expect(initialized.every(item => !item.selected)).toBe(true);
+    initialized[0].selected = true; initialized[2].selected = true;
+    const orders = initialized.filter(item => item.selected).map(item => buildOrderListItem(item, {
+      getServiceId: rec => rec.matchedItem.idSrv, getServiceCode: rec => rec.matchedItem.sdSrv,
+      getServiceName: rec => rec.matchedItem.name, getExecDeptId: rec => rec.matchedItem.idDeptExec,
+      getPartId: rec => rec.matchedItem.idPart || '', getJsonField: getOrderJsonField,
+    }));
+    expect(orders.map(order => order.idSrv)).toEqual(['srv-hba', 'srv-exam']);
+    expect(orders[0]).toMatchObject({ jsonField: lab.jsonField, mutualRecognitionCode: 'recognition' });
+    expect(orders[1]).toMatchObject({ idPart: 'part', idDeptExec: 'dept' });
   });
   it('deduplicates recommendations without duplicating orders', () => {
     expect(build({ recommendations: [recommendation('血脂'), recommendation(' 血脂 ')] }).treatments).toHaveLength(1);

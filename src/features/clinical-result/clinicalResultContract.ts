@@ -124,6 +124,7 @@ export interface ChronicExaminationReminders {
   items: Array<{
     name: string;
     matchStatus: 'matched' | 'ambiguous' | 'unmatched';
+    matchIssue?: 'multiple_items' | 'unverified_group' | 'unverified_part';
     recentReports: Array<{ name: string; requestedAt?: string; visitTime: number }>;
   }>;
 }

@@ -1,5 +1,5 @@
 import type { MedicalItem } from '@/services/medicalData';
-import { isRestrictedMedicalCatalogItem } from '@/services/medicalCatalogPolicy';
+import { chronicExaminationCategory, chronicExaminationConceptKey, matchChronicExaminationCatalog, sameChronicExaminationConcept } from './chronicExaminationCatalogMatch';
 import type { HisVisitRecord } from '@/services/his/types';
 import type { ChronicExaminationReminders, ClinicalResultTreatment } from '@features/clinical-result/clinicalResultContract';
 import { buildMedicalItemMatchedItem } from '@features/clinical-result/medicalItemMatchedItem';
@@ -8,10 +8,6 @@ export interface ChronicExaminationRecommendation {
   name: string;
   description: string;
   subItems: string[];
-}
-
-function normalizedName(value: string): string {
-  return value.trim().replace(/\s+/gu, '').replace(/（/gu, '(').replace(/）/gu, ')').toLowerCase();
 }
 
 /** 名称精确证据只作参考；不据此判断周期、禁止复查或自动勾选。 */
@@ -35,23 +31,27 @@ export function buildChronicExaminationReminders(input: {
     && visit.visitTime <= end.getTime() && (!input.currentVisitId || visit.visitId !== input.currentVisitId));
   const treatments: ClinicalResultTreatment[] = [];
   const matchedIds = new Set<string>();
-  const recommendations = Array.from(new Map(input.recommendations.map((item) => [normalizedName(item.name), item])).values());
+  const byConcept = new Map<string, ChronicExaminationRecommendation>();
+  for (const recommendation of input.recommendations) {
+    const key = chronicExaminationConceptKey(recommendation.name);
+    const prior = byConcept.get(key);
+    byConcept.set(key, prior ? { ...prior, subItems: [...new Set([...prior.subItems, ...recommendation.subItems])] }
+      : { ...recommendation, subItems: [...recommendation.subItems] });
+  }
+  const recommendations = [...byConcept.values()];
   const items: ChronicExaminationReminders['items'] = recommendations.map((recommendation) => {
-    // A group is matched as a whole. Never turn its sub-items into several orders.
-    const matches = input.catalogStatus === 'ready' ? input.catalog.filter((item) => (
-      (item.category === '检查' || item.category === '检验') && !isRestrictedMedicalCatalogItem(item)
-      && normalizedName(item.name) === normalizedName(recommendation.name)
-    )) : [];
-    const matched = matches.length === 1 ? matches[0] : undefined;
-    const type = matched?.category === '检查' ? 'exam' : 'lab_test';
+    const match = matchChronicExaminationCatalog(recommendation, input.catalogStatus === 'ready' ? input.catalog : []);
+    const matched = match.item;
+    const expectedCategory = matched?.category || chronicExaminationCategory(recommendation.name);
+    const type = expectedCategory === '检查' ? 'exam' : 'lab_test';
     const recentReports = history.flatMap((visit) => (visit.reportedApplications || [])
-      .filter((application) => normalizedName(application.name) === normalizedName(recommendation.name)
-        && (!matched || application.type === 'unknown' || application.type === (type === 'exam' ? 'exam' : 'lab')))
+      .filter((application) => sameChronicExaminationConcept(application.name, recommendation.name)
+        && (!expectedCategory || application.type === 'unknown' || application.type === (type === 'exam' ? 'exam' : 'lab')))
       .map((application) => ({ name: application.name, requestedAt: application.requestedAt, visitTime: visit.visitTime })))
       .sort((a, b) => b.visitTime - a.visitTime);
     if (matched && !matchedIds.has(matched.id)) {
       matchedIds.add(matched.id);
-      const historyText = recentReports.length ? '近90天有同名已出报告记录，请核对是否需要复查。'
+      const historyText = recentReports.length ? '近90天有对应项目已出报告记录，请核对是否需要复查。'
         : '近90天返回记录未找到同名已出报告，不代表患者未检查。';
       treatments.push({
         type: type === 'exam' ? 'examination' : 'labTest', name: matched.name,
@@ -63,8 +63,7 @@ export function buildChronicExaminationReminders(input: {
         selected: false, sourceType: 'uncertain',
       });
     }
-    return { name: recommendation.name, matchStatus: matched ? 'matched' as const
-      : matches.length > 1 ? 'ambiguous' as const : 'unmatched' as const, recentReports };
+    return { name: recommendation.name, matchStatus: match.status, matchIssue: match.issue, recentReports };
   });
   return {
     reminders: { sourceStatus: input.sourceStatus, catalogStatus: input.catalogStatus,

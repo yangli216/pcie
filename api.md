@@ -2555,6 +2555,8 @@ HIS 接入完成后，至少验证以下场景：
 
 ### 慢病检查检验提醒一期
 
-推荐来自 PCIE Server 鉴权查询的 getUserInfo（与两慢病 getJYJCPro 同源）；仅匹配本次实时目录且被医生选择的检查/检验进入现有 record-confirmed.orderList，随本次所选病历合并为同一条 batch，不新增本地 Bridge 出口或私有医嘱字段。保留 idSrv、执行科室、部位、jsonField.idLisCategory 和 mutualRecognitionCode，互认 pending 继续使用同一 requestId。提醒和来源/覆盖范围只用于阅读，不作为 PHIS 病历事实自动回写；随访参考由医生选择增量写入现病史，注意事项依原选择范围回写。
+推荐来自 PCIE Server 鉴权查询的 getUserInfo（与两慢病 getJYJCPro 同源）；仅唯一匹配本次实时目录（含糖化血红蛋白、同型半胱氨酸、常规心电图的固定完整名称同义词）且被医生选择的检查/检验进入现有 record-confirmed.orderList，随本次所选病历合并为同一条 batch，不新增本地 Bridge 出口或私有医嘱字段。保留 idSrv、执行科室、部位、jsonField.idLisCategory 和 mutualRecognitionCode，互认 pending 继续使用同一 requestId。提醒和来源/覆盖范围只用于阅读，不作为 PHIS 病历事实自动回写；随访参考由医生选择增量写入现病史，注意事项依原选择范围回写。
+
+慢病检查检验匹配说明：同义词匹配不改变请求/回写结构；组套、部位或多个同义候选存在歧义时不进入 orderList，完整提醒收进结果页提示图标。匹配成功仍默认未选，必须由医生选择。
 
 住院病历回填重试关联：首次发送保留入口requestId；如果前一次已成功发送给HIS，医生在失败回执后重试或重新生成后再发送时使用新的requestId。HIS必须按本次record-confirmed的requestId回执，不得复用上一条回执标识。SDK生成Promise仍在首次匹配的record-confirmed时resolve，后续回填尝试沿用事件订阅。字段结构保持原契约。

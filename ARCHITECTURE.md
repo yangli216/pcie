@@ -1654,13 +1654,15 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 
 ## 慢病检查检验提醒一期
 
-`reception-risk/api/chronicExaminationRecommendations.ts` 经已有签名 regionalPost 请求 PCIE Server，服务端直接完成 AK/SK 鉴权及 SM4 加解密，读取 getJYJCPro 同源 `/api/wjjbgs/cy/getUserInfo`，只规范化推荐名称、说明与子项，不把上游结果直接作为 PHIS 医嘱。纯 Builder 在 `reception-risk/lib/chronicExaminationReminders.ts`，以完整 PHIS 近90天历史中的已报告申请提供名称精确匹配证据，并以本次实时目录唯一名称命中生成默认未选的检查检验候选。组合不自动拆成多个医嘱，歧义或无匹配只读提示；不推断周期或把缺失当未做，不依赖额外模型。
+`reception-risk/api/chronicExaminationRecommendations.ts` 经已有签名 regionalPost 请求 PCIE Server，服务端直接完成 AK/SK 鉴权及 SM4 加解密，读取 getJYJCPro 同源 `/api/wjjbgs/cy/getUserInfo`，只规范化推荐名称、说明与子项，不把上游结果直接作为 PHIS 医嘱。纯 Builder 在 `reception-risk/lib/chronicExaminationReminders.ts`，以完整 PHIS 近90天历史中的已报告申请提供名称精确匹配证据，并以本次实时目录唯一名称/三项受控同义词命中生成默认未选的检查检验候选。糖化血红蛋白（含“糖化血红蛋白测定”）、同型半胱氨酸（含“血同型半胱氨酸测定”）与常规心电图（“心电图/常规心电图/常规心电图检查/常规心电图检查费”）使用固定全名称白名单，类别分别限检验/检验/检查；全体同义名称候选一起检查唯一性，不优先用原名掩盖同义项目、组套或部位歧义。组合标志1/2/true、冲突/未知组合元数据或部位未解析只保留提醒；两项检验对照必须有明确非组套标志0/false，推荐子项不得越出已批准概念。组合不拆单，歧义或无匹配只读提示；不推断周期或把缺失当未做，不依赖额外模型。
 
-查询与现有慢病单次模型流并行，首屏和病历核心不等待；最终结果前收口，沿用原 session token、患者/就诊/机会门禁。结果通过 `ClinicalResultInput.chronicExaminationReminders` 携带非病历提示，`ChronicExaminationReminderPanel` 展示范围、查询状态和历史依据；匹配项进入既有 treatment 卡，沿用详情、执行科室/部位、互认、选择回写和单条 batch 回执。提醒不自动改写正文，随访核查与注意事项仍走既有医生确认及编辑流程。
+查询与现有慢病单次模型流并行，首屏和病历核心不等待；最终结果前收口，沿用原 session token、患者/就诊/机会门禁。结果通过 `ClinicalResultInput.chronicExaminationReminders` 携带非病历提示，`ChronicExaminationReminderPanel` 常驻展示紧凑数量摘要及实际失败/不完整状态；完整推荐清单、未匹配/歧义原因和历史依据由提示图标打开局部浮层，支持悬浮、键盘聚焦、点击固定、Escape/外部点击关闭、滚动/窗口边界定位。浮层关闭后不保留隐藏明细DOM，患者/结果更新时关闭，不新增全局状态；匹配项进入既有 treatment 卡，沿用详情、执行科室/部位、互认、选择回写和单条 batch 回执。提醒不自动改写正文，随访核查与注意事项仍走既有医生确认及编辑流程。
 
-健康大脑使用服务端 `RegionalExaminationHistoryProvider` 端口，一期实现明确返回 not_connected，不能冒充全区查询。当前历史范围固定标为 PHIS 近90天内成功返回的已出报告，查询不完整单独提示；推荐源没有提供周期，界面不宣称年度任务已完成或本次必须检查。
+健康大脑使用服务端 `RegionalExaminationHistoryProvider` 端口，一期实现明确返回 not_connected，不能冒充全区查询。历史证据仍使用 PHIS 近90天内成功返回的已出报告；提醒区及明细浮层不显示固定来源横幅，实际查询失败或不完整单独提示；推荐源没有提供周期，界面不宣称年度任务已完成或本次必须检查。
 
 `features/clinical-result/medicalItemMatchedItem.ts` 为无副作用的目录身份 Adapter；原 recommendationHelpers 继续重导出同一函数。提醒 Builder 直接消费该纯 Adapter，避免因目录身份映射初始化网络服务。
+
+`reception-risk/lib/chronicExaminationCatalogMatch.ts` 是纯白名单匹配 Strategy，统一推荐去重与名称族历史核对；历史仍保持同类别和90天/排除当前就诊门禁，不把别名核对等同于报告互认。实时目录及患者机构上下文继续由原签名 Gateway 保证，无离线目录、固定院内ID或医保码兜底。
 
 ## 医学助手服务端日志身份快照
 

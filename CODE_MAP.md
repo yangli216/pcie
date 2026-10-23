@@ -537,9 +537,10 @@ HIS POST /api/consultation/assist {action: "suggestedDx", chiefComplaint: "..."}
 ## 慢病检查检验提醒一期
 
 - `features/reception-risk/api/chronicExaminationRecommendations.ts`：签名推荐网关与非阻断加载；并行获取本次实时目录。
+- `features/reception-risk/lib/chronicExaminationCatalogMatch.ts`：三项受控同义词、统一概念键、组套/部位与唯一性门禁的纯 Strategy。
 - `features/reception-risk/lib/chronicExaminationReminders.ts`：中性契约、PHIS 历史证据/唯一目录匹配 Builder，组合不拆单。
 - `features/reception-risk/api/chronicRefillRecord.ts`：慢病流并行准备提醒，最终合并默认未选的检查检验。
-- `features/consultation-result/ui/ChronicExaminationReminderPanel.vue`：来源、范围、近期记录和未匹配提示；共享结果页只挂载。
+- `features/consultation-result/ui/ChronicExaminationReminderPanel.vue`：紧凑数量/状态摘要与可悬浮/聚焦/点击的明细浮层，展示近期记录、未匹配和歧义原因；共享结果页只挂载。
 - PCIE Server `modules/chronicdisease/examination`：getUserInfo 健康处方鉴权查询及全区历史 Provider 预留。
 
 `features/clinical-result/medicalItemMatchedItem.ts` 为无副作用的目录身份 Adapter；原 recommendationHelpers 继续重导出同一函数。提醒 Builder 直接消费该纯 Adapter，避免因目录身份映射初始化网络服务。
