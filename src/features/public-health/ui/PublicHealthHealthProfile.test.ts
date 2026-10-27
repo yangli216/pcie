@@ -18,7 +18,7 @@ describe('read-only health profile', () => {
   it('shows missing information separately from normal findings and separates known risk from AI analysis', () => {
     mount(buildPublicHealthHealthProfile(testRequest()));
     expect(host.textContent).toContain('健康画像'); expect(host.textContent).toContain('只读');
-    expect(host.textContent).toContain('未提供健康状况资料'); expect(host.textContent).toContain('用药类别待补充');
+    expect(host.textContent).toContain('本次调入未包含疾病与健康状况'); expect(host.textContent).toContain('本次调入未包含用药类别');
     expect(host.textContent).toContain('未提供可采用的风险分层资料');
     expect(host.querySelector('input,textarea')).toBeNull();
     expect(host.querySelector('button')!.getAttribute('aria-expanded')).toBe('false');

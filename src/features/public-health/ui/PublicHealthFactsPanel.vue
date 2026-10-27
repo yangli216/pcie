@@ -37,6 +37,7 @@ function edit(): void {
       <span class="eyebrow">本次资料</span>
       <h2 class="panel-title">{{ SCENE_TITLES[request.scene] }}</h2>
       <p class="version">记录版本 <span>{{ request.recordVersion }}</span></p>
+      <p class="snapshot-note">仅展示本次调入的资料。在 PHIS 修改资料后，请重新调入。</p>
     </header>
 
     <div class="facts-scroll" tabindex="0" aria-label="公卫事实详情">
@@ -74,7 +75,7 @@ function edit(): void {
             <span>{{ item.name }}</span><span class="detail-note">{{ item.status }}</span>
           </li>
         </ul>
-        <p v-else class="empty-text">未提供</p>
+        <p v-else class="empty-text">本次调入未包含疾病与健康状况</p>
       </section>
 
       <section class="fact-group">
@@ -82,7 +83,7 @@ function edit(): void {
         <ul v-if="request.facts.medicationClasses.length" class="tag-list">
           <li v-for="(item, index) in request.facts.medicationClasses" :key="`${item.code}-${index}`" class="fact-tag">{{ item.name }}</li>
         </ul>
-        <p v-else class="empty-text">未提供用药类别</p>
+        <p v-else class="empty-text">本次调入未包含用药类别</p>
       </section>
 
       <section class="fact-group">
@@ -118,6 +119,7 @@ function edit(): void {
 .panel-heading{padding:17px 16px 14px;border-bottom:1px solid #e2eaf4;background:#fff}
 .eyebrow{font-size:11px;letter-spacing:.06em;color:#8091a7}.panel-title{font-size:15px;margin:7px 0 9px;font-weight:650}
 .version{margin:0;font-size:11px;color:#7b8da4;overflow-wrap:anywhere}.version span{color:#425a77}
+.snapshot-note{margin:9px 0 0;font-size:11px;line-height:1.7;color:#7b8da4}
 .facts-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 15px 14px;scrollbar-width:thin}
 .fact-group{padding:15px 0;border-bottom:1px solid #e3ebf5}.group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;margin:0 0 10px;font-weight:600}
 .count{font-size:10px;font-weight:400;color:#8192a8;white-space:nowrap}.observation-list,.detail-list,.tag-list{list-style:none;padding:0;margin:0}

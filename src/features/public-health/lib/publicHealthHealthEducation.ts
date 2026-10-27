@@ -10,6 +10,7 @@ export interface HealthCheckRule {
 export interface HealthPrescriptionPolicy {
   checkWhitelist: HealthCheckRule[];
   medicationReminders: Record<string, string>;
+  medicationClassNames?: Record<string, string>;
   lifestyleRules: string[];
 }
 
@@ -21,6 +22,13 @@ function object(value: unknown, required: readonly string[], optional: readonly 
     || required.some(key => !Object.prototype.hasOwnProperty.call(result, key) || result[key] === undefined || result[key] === null)) return invalid();
   return result;
 }
+/** Model drafts may contain extra fields; render only the known fields below. */
+function draftObject(value: unknown, required: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();
+  const result = value as Record<string, unknown>;
+  if (required.some(key => !Object.prototype.hasOwnProperty.call(result, key) || result[key] === undefined || result[key] === null)) return invalid();
+  return result;
+}
 function string(value: unknown, max: number): string {
   if (typeof value !== 'string' || !value.trim() || characterCount(value) > max) return invalid();
   return value;
@@ -30,6 +38,10 @@ function strings(value: unknown, maxItems: number, maxLength: number, minItems =
   const result = value.map(item => string(item, maxLength));
   if (new Set(result).size !== result.length) return invalid();
   return result;
+}
+function freeTextArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return invalid();
+  return value.map(item => string(item, 16000));
 }
 function identifier(value: unknown, max: number): string {
   const result = string(value, max);
@@ -45,9 +57,8 @@ function boundedText(text: string): string {
   return text;
 }
 function doctorDraft(value: unknown, required: readonly string[], onDoctorNote?: (message: string) => void): Record<string, unknown> {
-  const draft = object(value, required, ['doctorNotes']);
-  if (draft.doctorNotes !== undefined && (!Array.isArray(draft.doctorNotes) || draft.doctorNotes.length > 8)) return invalid();
-  const notes = draft.doctorNotes === undefined ? [] : (draft.doctorNotes as unknown[]).map(note => string(note, 1000));
+  const draft = draftObject(value, required);
+  const notes = draft.doctorNotes === undefined ? [] : freeTextArray(draft.doctorNotes);
   notes.forEach(note => onDoctorNote?.(note));
   return draft;
 }
@@ -56,15 +67,15 @@ function evidenceText(evidence: PublicHealthProfileEvidence, snapshotAt: string)
   return `${evidence.label}：${value}${evidence.unit ? ` ${evidence.unit}` : ''}；${evidence.observedAt ? `观察时间：${evidence.observedAt}` : `资料快照：${snapshotAt}`}${evidence.source ? `；来源：${evidence.source.system} / 记录：${evidence.source.recordId}` : ''}`;
 }
 
-/** Render a strict internal AI draft into the existing lifestyle_guidance text section. */
+/** Render known AI draft fields into the existing lifestyle_guidance text section. */
 export function renderHealthEducationDraft(value: unknown, profile: PublicHealthHealthProfile, onDoctorNote?: (message: string) => void): string {
   const draft = doctorDraft(value, ['risks', 'prevention', 'diet', 'exercise', 'followup', 'missingFacts'], onDoctorNote);
-  if (!Array.isArray(draft.risks) || draft.risks.length > 6) return invalid();
+  if (!Array.isArray(draft.risks)) return invalid();
   const available = new Map(profile.evidence.map(item => [item.ref, item]));
   const risks = draft.risks.map((value, index) => {
-    const risk = object(value, ['type', 'name', 'concern', 'evidenceRefs', 'intervention']);
+    const risk = draftObject(value, ['type', 'name', 'concern', 'evidenceRefs', 'intervention']);
     const type = enumValue(risk.type, ['progression', 'complication']);
-    const name = string(risk.name, 100), intervention = string(risk.intervention, 1000);
+    const name = string(risk.name, 100), intervention = string(risk.intervention, 16000);
     const concern = enumValue(risk.concern, ['attention', 'needs_assessment']);
     const refs = strings(risk.evidenceRefs, 16, 256, 1);
     if ((risk.evidenceRefs as unknown[]).some((ref, i) => ref !== refs[i]) || refs.some(ref => !available.has(ref))) return invalid();
@@ -75,8 +86,8 @@ export function renderHealthEducationDraft(value: unknown, profile: PublicHealth
     ['prevention', '疾病预防'], ['diet', '饮食建议'], ['exercise', '运动建议'],
     ['followup', '随访安排'],
   ] as const;
-  const adviceTopics = topics.map(([key, title]) => ({ title, advice: strings(draft[key], 8, 1000) }));
-  const missing = strings(draft.missingFacts, 8, 1000);
+  const adviceTopics = topics.map(([key, title]) => ({ title, advice: freeTextArray(draft[key]) }));
+  const missing = freeTextArray(draft.missingFacts);
   missing.forEach(item => onDoctorNote?.(`待补充资料：${item}`));
   if (!risks.length) onDoctorNote?.('本次未生成可核实的潜在风险条目；不能据此判断无风险，请医生结合资料评估。');
   if (!risks.length && adviceTopics.every(topic => !topic.advice.length)) {
@@ -94,8 +105,22 @@ function integer(value: unknown, max: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) return invalid();
   return value;
 }
+function isPlaceholderClass(code: string): boolean {
+  const normalized = code.trim().toUpperCase();
+  return normalized.startsWith('SITE-TECH-') || normalized === 'MOCK_CLASS';
+}
+// Display-name metadata only. Never apply this filter to advice, edits, confirmations or restored text.
+const internalMedicationLabel = /制定依据|待医生(?:核实|审核|核对|评估)|请医生(?:核实|审核|核对)|AI\s*定性分析|适用性待核实|不构成医疗建议|合成展示|(?:^|[\s。！？!?;；（(])(?:来源|出处|证据|资料来源|数据来源|证据来源|优先级|资料快照|记录版本)\s*[:：]|(?:^|[\r\n\u2028\u2029])\s*(?:#{1,6}\s*)?(?:待补充资料|医生提醒|模型说明|机构批准提示|生成依据|待核实事项|待审核事项|需医生核实事项|待医生核实事项)\s*(?:[:：]|[\r\n\u2028\u2029]|$)/i;
+function readableMedicationName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const name = value.trim(), normalized = name.toUpperCase();
+  if (!name || characterCount(value) > 200 || !/\p{Script=Han}/u.test(name)
+    || normalized.includes('SITE-TECH-') || normalized.includes('MOCK_CLASS')
+    || name === '示例随访检查项' || name.startsWith('待补充') || internalMedicationLabel.test(name)) return undefined;
+  return name;
+}
 function validatePolicy(policy: HealthPrescriptionPolicy): void {
-  const raw = object(policy, ['checkWhitelist', 'medicationReminders', 'lifestyleRules']);
+  const raw = object(policy, ['checkWhitelist', 'medicationReminders', 'lifestyleRules'], ['medicationClassNames']);
   if (!Array.isArray(raw.checkWhitelist) || !raw.checkWhitelist.length || raw.checkWhitelist.length > 1000) return invalid();
   const codes = new Set<string>();
   for (const item of raw.checkWhitelist) {
@@ -103,7 +128,9 @@ function validatePolicy(policy: HealthPrescriptionPolicy): void {
     const code = identifier(rule.code, 128);
     if (codes.has(code)) return invalid();
     codes.add(code);
-    string(rule.name, 200); string(rule.prep, 2000);
+    const name = string(rule.name, 200).trim();
+    if (name === '示例随访检查项' || name.startsWith('待补充')) return invalid();
+    string(rule.prep, 2000);
     integer(rule.minIntervalDays, 36500); integer(rule.abnormalRetestIntervalDays, 36500);
     if (Object.prototype.hasOwnProperty.call(rule, 'abnormalCriteria')) {
       if (!Array.isArray(rule.abnormalCriteria) || !rule.abnormalCriteria.length || rule.abnormalCriteria.length > 32) return invalid();
@@ -129,7 +156,17 @@ function validatePolicy(policy: HealthPrescriptionPolicy): void {
     }
   }
   if (!raw.medicationReminders || typeof raw.medicationReminders !== 'object' || Array.isArray(raw.medicationReminders)) return invalid();
-  for (const [key, value] of Object.entries(raw.medicationReminders)) { identifier(key, 128); string(value, 16000); }
+  for (const [key, value] of Object.entries(raw.medicationReminders)) {
+    identifier(key, 128); string(value, 16000);
+    if (isPlaceholderClass(key)) return invalid();
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'medicationClassNames')) {
+    if (!raw.medicationClassNames || typeof raw.medicationClassNames !== 'object' || Array.isArray(raw.medicationClassNames)) return invalid();
+    for (const [code, name] of Object.entries(raw.medicationClassNames)) {
+      identifier(code, 128);
+      if (!Object.prototype.hasOwnProperty.call(raw.medicationReminders, code) || !readableMedicationName(name)) return invalid();
+    }
+  }
   strings(raw.lifestyleRules, 128, 2000, 1);
 }
 function eligible(rule: HealthCheckRule, request: PublicHealthRequest, profile: PublicHealthHealthProfile): boolean {
@@ -210,14 +247,19 @@ export function renderHealthCheckPlan(value: unknown, request: PublicHealthReque
   const available = new Map(request.facts.observations.filter(item => evidenceRefs.has(`observation:${item.id}`)).map(item => [item.id, item]));
   const day = dateDay(request.snapshotAt.slice(0, 10)), seen = new Set<string>();
   const checks = raw.checks.map(value => {
-    const item = object(value, ['code', 'plannedDate', 'priority', 'reason', 'evidenceObservationIds', 'intervalKind'], ['evidenceRefs']);
+    const item = draftObject(value, ['code', 'plannedDate', 'priority', 'reason', 'evidenceObservationIds', 'intervalKind']);
     const code = identifier(item.code, 128), rule = rules.get(code);
     if (!rule || seen.has(code)) return invalid();
     seen.add(code);
     const plan = dateDay(item.plannedDate);
     if (plan < day || plan > day + 90 * DAY_MS) return invalid();
     const priority = enumValue(item.priority, ['low', 'medium', 'high']);
-    const reason = string(item.reason, 2000);
+    const reason = string(item.reason, 16000);
+    let patientReason = '';
+    if (item.patientReason !== undefined && item.patientReason !== null) {
+      if (typeof item.patientReason !== 'string' || characterCount(item.patientReason) > 16000) return invalid();
+      if (item.patientReason.trim()) patientReason = item.patientReason;
+    }
     const ids = strings(item.evidenceObservationIds, 64, 128);
     if ((item.evidenceObservationIds as unknown[]).some((id, i) => id !== ids[i]) || ids.some(id => !available.has(id))) return invalid();
     const refs = Object.prototype.hasOwnProperty.call(item, 'evidenceRefs') ? strings(item.evidenceRefs, 16, 256, 1) : [];
@@ -240,8 +282,9 @@ export function renderHealthCheckPlan(value: unknown, request: PublicHealthReque
       : profile.conflicts.some(conflict => conflict.code === code) ? '\n既往结果：本项目最新结果存在冲突，请医生核对。' : '';
     const citedRefs = [...ids.map(id => `observation:${id}`), ...refs];
     onDoctorNote?.(`${rule.name} · ${item.plannedDate}\n优先级：${({ high: '高', medium: '中', low: '低' })[priority]}\n依据：${reason}\n证据：${citedRefs.map(ref => evidenceText(evidenceRefs.get(ref)!, profile.snapshotAt)).join('；')}${baselineNote}`);
+    if (!patientReason) onDoctorNote?.(`${rule.name}：未提供检查目的，请医生核对并补充。`);
     const preparation = rule.prep;
-    return `${rule.name} · ${item.plannedDate}${preparation ? `\n准备事项：${preparation}` : ''}`;
+    return `${rule.name} · ${item.plannedDate}${patientReason ? `\n检查目的：${patientReason}` : ''}${preparation ? `\n准备事项：${preparation}` : ''}`;
   });
   if (!checks.length) { onDoctorNote?.('本次未生成检查计划，请医生核对资料及适用检查目录。'); return ''; }
   return boundedText(checks.join('\n\n'));
@@ -255,11 +298,13 @@ export function renderHealthMedicationGuidance(value: unknown, request: PublicHe
   const provided = new Map(request.facts.medicationClasses.map(item => [item.code, item.name]));
   const seen = new Set<string>();
   const blocks = raw.medicationGuidance.map(value => {
-    const item = object(value, ['classCode', 'content']);
-    const code = identifier(item.classCode, 128), name = provided.get(code) ?? code;
+    const item = draftObject(value, ['classCode', 'content']);
+    const code = identifier(item.classCode, 128);
+    const name = readableMedicationName(provided.get(code))
+      ?? readableMedicationName(policy.medicationClassNames?.[code]) ?? '用药注意事项';
     if (seen.has(code) || !Object.prototype.hasOwnProperty.call(policy.medicationReminders, code)) return invalid();
     seen.add(code);
-    onDoctorNote?.(`${name}：${policy.medicationReminders[code]}`);
+    onDoctorNote?.(`${name}（类别编码：${code}）：${policy.medicationReminders[code]}`);
     return `${name}\n${string(item.content, 16000)}`;
   });
   if (!blocks.length) { onDoctorNote?.('本次未生成可回写的用药指导，请医生核对用药信息及适用规则。'); return ''; }
