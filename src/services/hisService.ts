@@ -1196,7 +1196,7 @@ export class HisService {
   }
 
   /**
-   * 根据 idPi 查询包含慢病签约判定的患者信息。
+   * 杭州特化：根据 idPi 查询包含慢病签约判定的患者信息；白云患者补全使用 searchPatientByIdPi。
    * PHIS 的 searchByIdPiMB 会按慢病开关、外部签约接口或 v_mbyth_qyxx 计算 qyzt。
    */
   async searchPatientByIdPiMB(idPi: string): Promise<HisPatientDetailBody | null> {
