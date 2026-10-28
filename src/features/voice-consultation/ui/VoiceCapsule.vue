@@ -41,12 +41,13 @@
 
         <button
           class="ctl-btn"
+          :disabled="isStopping"
           @click="togglePause"
           :title="isPaused ? '继续' : '暂停'"
         >
           <Icon :icon="isPaused ? 'lucide:play' : 'lucide:pause'" size="16" aria-hidden="true" />
         </button>
-        <button class="ctl-btn stop" @click="handleStop" title="结束接诊">
+        <button class="ctl-btn stop" :disabled="isStopping" @click="handleStop" title="结束接诊">
           <Icon icon="lucide:square" size="16" aria-hidden="true" />
         </button>
         <button class="ctl-btn" @click="handleClose" title="收起">
@@ -69,13 +70,21 @@
         <div class="avatar-wrapper">
           <img src="/robot-avatar.png" alt="AI Agent" />
         </div>
-        <span class="stopped-label">音频采集完成</span>
+        <span class="stopped-label" aria-live="polite">{{ stoppedLabel }}</span>
         <span class="timer">{{ formatTime(duration) }}</span>
         <span class="spacer"></span>
         <button class="ctl-btn" @click="isExpanded = !isExpanded" :title="isExpanded ? '收起' : '展开'">
           <Icon :icon="isExpanded ? 'lucide:chevron-up' : 'lucide:chevron-down'" size="16" aria-hidden="true" />
         </button>
       </div>
+
+      <VoiceTranscriptionStatus
+        v-if="transcriptionStatus === 'failed' || transcriptionStatus === 'empty'"
+        :kind="transcriptionStatus === 'failed' ? 'error' : 'info'"
+        :message="transcriptionStatus === 'empty' ? '本段未识别到文字，可重试、继续采集或手动补充。' : transcriptionError"
+        :can-retry="canRetryTranscription && !confirmingAbandon && !isFinalizing"
+        @retry="transcriptionReview.retry"
+      />
 
       <!-- Collapsed: single-line preview -->
       <div class="lyrics-row preview" v-if="!isExpanded" @click="isExpanded = true">
@@ -87,8 +96,10 @@
         <textarea
           class="text-editor"
           v-model="editableText"
-          placeholder="未识别到文字，可手动输入..."
-          rows="6"
+          :readonly="!canContinueRecording || isFinalizing"
+          aria-label="语音转写文字"
+          :placeholder="canContinueRecording ? '可审核并编辑转写文字' : '整段转写尚未完成'"
+          :rows="transcriptionStatus === 'failed' || transcriptionStatus === 'empty' ? 2 : 6"
         ></textarea>
       </div>
 
@@ -102,11 +113,11 @@
       </div>
       <div v-else class="stopped-actions">
         <button class="action-btn abandon" :disabled="isFinalizing" @click="requestAbandon">放弃</button>
-        <button class="action-btn resume" :disabled="isFinalizing" @click="handleContinue">
+        <button class="action-btn resume" :disabled="isFinalizing || !canContinueRecording" @click="handleContinue">
           <Icon icon="lucide:mic" size="15" aria-hidden="true" />
           继续采集
         </button>
-        <button class="action-btn confirm" @click="handleConfirm" :disabled="isFinalizing || !editableText.trim()">
+        <button class="action-btn confirm" @click="handleConfirm" :disabled="isFinalizing || !canConfirmTranscript">
           {{ isFinalizing ? '处理中...' : '确认' }}
         </button>
       </div>
@@ -127,6 +138,10 @@ const getPrimaryColor = () => {
   return getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() || '#0891B2';
 };
 import { RealtimeSpeechService } from '@/services/aliyunSpeech';
+import { transcribeAudio } from '@/services/llm';
+import { DEFAULT_RETRY_CONFIG } from '@/services/llm/types';
+import { useVoiceTranscriptionReview } from '../model/useVoiceTranscriptionReview';
+import VoiceTranscriptionStatus from './VoiceTranscriptionStatus.vue';
 import Icon from '@shared/ui/Icon.vue';
 import {
   appendVoiceTranscript,
@@ -156,7 +171,23 @@ const realtimeText = ref('');
 const prefersReducedMotion = ref(false);
 const isStopped = ref(false);
 const isExpanded = ref(false);
-const editableText = ref('');
+const isStopping = ref(false);
+const transcriptionReview = useVoiceTranscriptionReview({
+  retryTranscription: (audio) => transcribeAudio(audio, undefined, { ...DEFAULT_RETRY_CONFIG, maxRetries: 0 }),
+});
+const {
+  text: editableText,
+  status: transcriptionStatus,
+  errorMessage: transcriptionError,
+  isPending: isTranscribing,
+  canContinue: canContinueRecording,
+  canConfirm: canConfirmTranscript,
+  canRetry: canRetryTranscription,
+} = transcriptionReview;
+const stoppedLabel = computed(() => isTranscribing.value
+  ? '正在完成整段转写…'
+  : transcriptionStatus.value === 'failed' ? '整段转写未完成'
+  : transcriptionStatus.value === 'empty' ? '未识别到新增文字' : '音频采集完成');
 const isFinalizing = ref(false);
 const confirmingAbandon = ref(false);
 let stoppedBlob: Blob | null = null;
@@ -164,11 +195,13 @@ let completedAudioSegments: Blob[] = [];
 let completedDurationSeconds = 0;
 let reviewedTranscriptPrefix = '';
 let currentSegmentTranscript = '';
+let recordingEpoch = 0;
+let disposed = false;
 
-// Resize window when entering stopped state
-watch(isStopped, (stopped) => {
+// Failed or empty transcription needs room for its explanation and retry action.
+watch([isStopped, isExpanded, transcriptionStatus], ([stopped, expanded, status]) => {
   if (stopped) {
-    emit('window-stage-change', 'stopped');
+    emit('window-stage-change', expanded || status === 'failed' || status === 'empty' ? 'expanded' : 'stopped');
   }
 });
 
@@ -177,11 +210,6 @@ watch(() => props.processing, (isProcessing) => {
   if (isProcessing) {
     emit('window-stage-change', 'processing');
   }
-});
-
-// Resize window when expanding/collapsing text editor
-watch(isExpanded, (expanded) => {
-  emit('window-stage-change', expanded ? 'expanded' : 'stopped');
 });
 
 // Auto-scroll transcription text horizontally to always show the latest
@@ -236,17 +264,20 @@ const closeSpeechService = () => {
 };
 
 const cleanupRecordingResources = async () => {
+  recordingEpoch += 1;
+  transcriptionReview.reset();
   clearTimer();
   clearVisualizer();
   audioRecorder.setOnAudioChunk(undefined);
-  await audioRecorder.stop().catch(() => {});
   closeSpeechService();
+  await audioRecorder.stop().catch(() => {});
 };
 
 const resetRecordingState = () => {
   isPaused.value = false;
   isStopped.value = false;
   isExpanded.value = false;
+  isStopping.value = false;
   editableText.value = '';
   isFinalizing.value = false;
   confirmingAbandon.value = false;
@@ -364,12 +395,15 @@ const startRecording = async (continueExisting = false) => {
   console.time('[VoiceCapsule] startRecording');
   try {
     await cleanupRecordingResources();
+    if (disposed) return;
+    const epoch = recordingEpoch;
     if (!continueExisting) {
       resetRecordingState();
     } else {
       isPaused.value = false;
       isStopped.value = false;
       isExpanded.value = false;
+      isStopping.value = false;
       stoppedBlob = null;
       currentSegmentTranscript = '';
       realtimeText.value = reviewedTranscriptPrefix;
@@ -383,6 +417,7 @@ const startRecording = async (continueExisting = false) => {
     } catch (e) {
       console.warn('[VoiceCapsule] audioRecorder.start() failed, continuing for mock mode', e);
     }
+    if (disposed || epoch !== recordingEpoch) return;
     startTime.value = Date.now();
     timerInterval = setInterval(() => {
         if (!isPaused.value) {
@@ -394,23 +429,27 @@ const startRecording = async (continueExisting = false) => {
     trackClick('voice_recording_start');
 
     // 后台初始化流式语音识别服务（不阻塞录音）
-    speechService = new RealtimeSpeechService();
-    speechService.start((text, _isFinal) => {
+    const service = new RealtimeSpeechService();
+    speechService = service;
+    service.start((text, _isFinal) => {
+      if (disposed || epoch !== recordingEpoch) return;
       currentSegmentTranscript = text;
       realtimeText.value = appendVoiceTranscript(reviewedTranscriptPrefix, text);
     }).then(() => {
+      if (disposed || epoch !== recordingEpoch || isStopping.value || isStopped.value) return;
       // 语音服务就绪，开始发送音频
       audioRecorder.setOnAudioChunk((pcmData) => {
-        if (speechService?.isConnected()) {
-          speechService.sendAudio(pcmData);
+        if (service.isConnected()) {
+          service.sendAudio(pcmData);
         }
       });
       console.log('[VoiceCapsule] Speech service connected, sending audio');
     }).catch((err) => {
+      if (disposed || epoch !== recordingEpoch || isStopping.value || isStopped.value) return;
       console.warn('[VoiceCapsule] Speech service init failed, batch mode:', err);
       // 批量模式下仍需收集音频
       audioRecorder.setOnAudioChunk((pcmData) => {
-        speechService?.sendAudio(pcmData);
+        service.sendAudio(pcmData);
       });
     });
   } catch (err) {
@@ -423,6 +462,7 @@ const startRecording = async (continueExisting = false) => {
 };
 
 const togglePause = () => {
+  if (isStopping.value) return;
   if (isPaused.value) {
     audioRecorder.resume();
   } else {
@@ -433,6 +473,10 @@ const togglePause = () => {
 };
 
 const handleStop = async () => {
+  if (isStopping.value || isStopped.value || isFinalizing.value) return;
+  isStopping.value = true;
+  const epoch = recordingEpoch;
+  const service = speechService;
   console.log('[VoiceCapsule] handleStop called');
   trackClick('voice_recording_stop', { durationSeconds: duration.value });
   clearTimer();
@@ -446,47 +490,41 @@ const handleStop = async () => {
       blob = await audioRecorder.stop();
     } catch (e) {
       console.warn('[VoiceCapsule] audioRecorder.stop() failed', e);
-      blob = new Blob([], { type: 'audio/webm' });
+      blob = new Blob([], { type: 'audio/wav' });
     }
-    console.log('[VoiceCapsule] Got blob:', blob.size, 'bytes');
-
-    // 获取实时语音服务的最终结果
-    let transcription = '';
-    if (speechService) {
-      console.log('[VoiceCapsule] Finishing speech service...');
-      try {
-        transcription = await speechService.finish();
-      } catch (e) {
-        console.warn('[VoiceCapsule] speechService.finish() failed', e);
-      }
-      console.log('[VoiceCapsule] Final transcription:', transcription);
-      speechService = null;
-    }
-
-    const finalSegmentTranscription = (transcription || currentSegmentTranscript || '').trim();
-    const finalTranscription = appendVoiceTranscript(
-      reviewedTranscriptPrefix,
-      finalSegmentTranscription,
-    );
-
-    // 进入已停止状态，允许医生审核/编辑文字
+    if (disposed || epoch !== recordingEpoch) return;
+    // Keep the full WAV before finish() releases its PCM buffers, including the last partial window.
     stoppedBlob = blob;
-    editableText.value = finalTranscription;
-    realtimeText.value = finalTranscription;
     isStopped.value = true;
-    console.log('[VoiceCapsule] Entered stopped state for review');
+    await transcriptionReview.complete({
+      audio: blob,
+      prefix: reviewedTranscriptPrefix,
+      draft: currentSegmentTranscript,
+      finish: () => service ? service.finish() : Promise.reject(new Error('语音转写服务不可用')),
+    });
   } catch (err) {
     console.error("[VoiceCapsule] Failed to stop recording:", err);
     trackError('voice_recording_stop_failed', err);
     
-    stoppedBlob = new Blob([], { type: 'audio/webm' });
-    editableText.value = '';
-    isStopped.value = true;
+    if (!disposed && epoch === recordingEpoch) {
+      stoppedBlob = new Blob([], { type: 'audio/wav' });
+      isStopped.value = true;
+      await transcriptionReview.complete({
+        audio: stoppedBlob, prefix: reviewedTranscriptPrefix, draft: currentSegmentTranscript,
+        finish: () => Promise.reject(err),
+      });
+    }
+  } finally {
+    service?.close();
+    if (epoch === recordingEpoch) {
+      if (speechService === service) speechService = null;
+      isStopping.value = false;
+    }
   }
 };
 
 const handleConfirm = async () => {
-  if (isFinalizing.value || !editableText.value.trim()) return;
+  if (isFinalizing.value || !canConfirmTranscript.value) return;
   trackClick('voice_transcription_confirm');
   if (!stoppedBlob) return;
   voiceTimingTracker.confirm();
@@ -508,7 +546,7 @@ const handleConfirm = async () => {
 };
 
 const handleContinue = async () => {
-  if (isFinalizing.value) return;
+  if (isFinalizing.value || !canContinueRecording.value) return;
   confirmingAbandon.value = false;
   trackClick('voice_transcription_continue', {
     durationSeconds: duration.value,
@@ -576,6 +614,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   cleanupRecordingResources();
 
   // 清理媒体查询监听器

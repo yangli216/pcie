@@ -395,13 +395,13 @@ export class RealtimeSpeechService {
                 } else {
                     this.currentSentence = text;
                 }
-                this.onTextCallback?.(`${this.finalizedText}${this.currentSentence}`, Boolean(payload.isSentenceEnd));
+                this.onTextCallback?.(`${this.finalizedText}${this.currentSentence}`, Boolean(payload.isSentenceEnd) && !this.hadStreamingInterruption);
                 return;
             }
 
             if (payload.type === 'final') {
                 const accumulated = this.acceptRemoteFinal(payload.text || '');
-                this.onTextCallback?.(accumulated, true);
+                this.onTextCallback?.(accumulated, this.isFinishing && !this.hadStreamingInterruption);
                 if (this.isFinishing) {
                     this.resolveRegionalFinal(accumulated);
                 } else {
@@ -454,17 +454,10 @@ export class RealtimeSpeechService {
         }
 
         if (this.hadStreamingInterruption || finishError) {
+            this.hadStreamingInterruption = true;
             console.warn('[Speech] Streaming session was interrupted, reconciling with batch transcription:', finishError);
-            try {
-                return await this.transcribeBufferedAudio();
-            } catch (batchError) {
-                if (streamedText) {
-                    console.warn('[Speech] Batch reconciliation failed, keeping streamed text:', batchError);
-                    this.onTextCallback?.(streamedText, true);
-                    return streamedText;
-                }
-                throw batchError;
-            }
+            // Partial streaming text remains a draft until the complete recording is reconciled.
+            return await this.transcribeBufferedAudio();
         }
 
         this.onTextCallback?.(streamedText, true);
@@ -561,7 +554,7 @@ export class RealtimeSpeechService {
         if (this.currentSentence) {
             this.finalizedText += this.currentSentence;
             this.currentSentence = '';
-            this.onTextCallback?.(this.finalizedText, true);
+            this.onTextCallback?.(this.finalizedText, false);
         }
         this.detachSocket(socket, true);
         if (this.isStarted && !this.isFinishing) {

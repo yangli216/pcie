@@ -232,6 +232,72 @@ describe('RealtimeSpeechService recovery', () => {
     expect(onText).toHaveBeenLastCalledWith('完整批量文本', true);
   });
 
+  it('rejects a failed reconciliation after reconnecting instead of promoting partial text to final', async () => {
+    const { service, onText } = await startStreamingService();
+    const firstSocket = FakeWebSocket.instances[0];
+    service.sendAudio(new Int16Array([1, 2]));
+    firstSocket.receive({ type: 'text', text: '前段草稿', isSentenceEnd: false });
+    onText.mockClear();
+    firstSocket.remoteClose();
+    expect(onText).toHaveBeenLastCalledWith('前段草稿', false);
+    await vi.advanceTimersByTimeAsync(500);
+    const secondSocket = FakeWebSocket.instances[1];
+    service.sendAudio(new Int16Array([3, 4]));
+    secondSocket.open();
+    secondSocket.receive({ type: 'text', text: '后段草稿', isSentenceEnd: true });
+    const failure = new Error('batch reconciliation unavailable');
+    mocks.regionalPost.mockRejectedValueOnce(failure);
+
+    const finishing = service.finish();
+    const rejected = expect(finishing).rejects.toBe(failure);
+    secondSocket.receive({ type: 'final', text: '后段草稿' });
+    await rejected;
+
+    expect(mocks.regionalPost).toHaveBeenCalledTimes(1);
+    expect(mocks.buildRegionalSpeechUploadPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ size: 8, type: 'audio/pcm' }), expect.any(Object));
+    expect(onText.mock.calls.length).toBeGreaterThan(0);
+    expect(onText.mock.calls.every(([, isFinal]) => isFinal === false)).toBe(true);
+    expect(service.isConnected()).toBe(false);
+  });
+
+  it('rejects a failed batch fallback when the socket errors during finish', async () => {
+    const { service, onText } = await startStreamingService();
+    const socket = FakeWebSocket.instances[0];
+    service.sendAudio(new Int16Array([1, 2, 3]));
+    socket.receive({ type: 'text', text: '未完成草稿', isSentenceEnd: false });
+    const failure = new Error('batch fallback unavailable');
+    let rejectBatch!: (error: Error) => void;
+    mocks.regionalPost.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectBatch = reject; }));
+    onText.mockClear();
+
+    const finishing = service.finish();
+    const rejected = expect(finishing).rejects.toBe(failure);
+    socket.receive({ type: 'error', message: 'upstream unavailable' });
+    await vi.waitFor(() => expect(mocks.regionalPost).toHaveBeenCalledTimes(1));
+    socket.receive({ type: 'final', text: '错误后的迟到流式草稿' });
+    rejectBatch(failure);
+    await rejected;
+
+    expect(mocks.regionalPost).toHaveBeenCalledTimes(1);
+    expect(onText).toHaveBeenCalledExactlyOnceWith('错误后的迟到流式草稿', false);
+    expect(service.isConnected()).toBe(false);
+  });
+
+  it('keeps successful uninterrupted streaming completion without a batch request', async () => {
+    const { service, onText } = await startStreamingService();
+    const socket = FakeWebSocket.instances[0];
+    service.sendAudio(new Int16Array([1, 2, 3]));
+    socket.receive({ type: 'text', text: '流式草稿', isSentenceEnd: false });
+
+    const finishing = service.finish();
+    socket.receive({ type: 'final', text: '完整流式文本' });
+    await expect(finishing).resolves.toBe('完整流式文本');
+
+    expect(onText).toHaveBeenLastCalledWith('完整流式文本', true);
+    expect(mocks.regionalPost).not.toHaveBeenCalled();
+  });
+
   it('uses the same HTTP model for drafts and replaces them with a full-recording final response', async () => {
     mocks.speechProvider = 'openai-compatible';
     mocks.transcriptionMode = 'segmented';

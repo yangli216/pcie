@@ -224,22 +224,21 @@ export async function transcribeAudio(
 ): Promise<string> {
   {
     const scene = 'chat-input';
-    const fileName = `${scene}-${Date.now()}.webm`;
-    const requestSummary = buildSpeechRequestSummary(fileName, scene, blob.type || 'audio/webm');
+    const mimeType = blob.type || 'audio/webm';
     const trace = beginAiTrace({
       channel: 'speech_transcribe',
       scene,
       sourceModule: 'llm',
       model: getCachedBootstrap()?.llm?.audioModel,
-      requestSummary,
+      requestSummary: `场景 ${scene}，格式 ${mimeType}`,
     });
     try {
       const text = await retryWithBackoff(async () => {
         const payload = await buildRegionalSpeechUploadPayload(blob, {
-          mimeType: blob.type || 'audio/webm',
+          mimeType,
           scene,
-          fileName,
         });
+        const requestSummary = buildSpeechRequestSummary(payload.fileName || 'audio', scene, payload.mimeType);
         const requestPayload = {
           mimeType: payload.mimeType,
           format: payload.format,

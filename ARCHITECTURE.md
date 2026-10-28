@@ -207,7 +207,7 @@ PHIS `HiBdMed.sdMed` 是药品分类事实源：`1` 映射西药 `sdSrv=11`，`2
 4. Windows 内网更新源采用本地配置驱动：测试环境地址、正式环境地址和当前生效环境保存在 `localStorage`，前端只负责展示与选择，真正的 updater endpoint 在 Rust 侧通过 `updater_builder()` 运行时注入。客户端会按当前更新通道访问 `PCIE Server` 的 `/v1/client/releases/{channel}/policy.json`；若服务端发布策略要求强制更新且当前版本低于 `minSupportedVersion`，应用进入强制更新门禁，只保留更新源配置、检查更新、下载安装并重启能力。强制门禁的策略事实必须由 `ForceUpdateGate -> UpdateChecker` 显式透传，门禁仍生效时不得因为 updater 暂未返回安装包而显示“当前已是最新版本”；此时必须保留阻断状态并明确提示“未获取到可用安装包/请联系管理员”，避免策略判断与下载安装状态形成两套相互矛盾的真源。
 5. 主窗口的聊天、设置、问诊等可调整工作视图会将用户最后一次手动调整后的窗口尺寸写入 `.settings.dat`，再次打开对应视图时优先恢复该尺寸；聊天视图会丢弃低于标准工作面板高度的历史扁窗尺寸并回到默认窄高比例，智能问诊视图会丢弃低于当前默认尺寸的历史记录并回到适度放大的双栏比例，避免欢迎区、病历编辑区、推荐清单或底部操作区被不合适的历史尺寸继续影响；悬浮球启动阶段在 Rust 层读取 `.settings.dat` 的历史位置，并按当前显示器 `workArea`、实际窗口物理尺寸和最近边缘吸附策略夹回可见安全区域，若历史位置已不属于当前工作区则回落到主屏右侧居中位置。
 6. 通用设置页新增音频输入设备配置，首选麦克风 `deviceId` 保存在 `localStorage`；聊天录音和语音接诊共用同一配置，若指定设备不存在则自动回退到系统默认输入设备。设置页首次进入时会按权限状态自动补做一次设备列表预热，尽量避免初次枚举不完整、必须手动刷新后才看到全部麦克风。
-7. `VoiceCapsule.vue` 实时语音和 `ChatPanel.vue` 录音转写共用 bootstrap 下发的 speech config；`aliyun-dashscope` 与 `funasr-websocket` 优先使用区域 WebSocket，`openai-compatible` 按 bootstrap 选择整段识别或分段草稿，分段草稿与停止后的整段校正经签名 HTTP 转写接口；实时失败场景继续使用完整录音批量补录。桌面端只连接签名 `/v1/ai/speech/realtime/ws`，不接收或直连第三方实时地址。实时连接在非医生主动结束时收到 `error` / `final` / `close` 必须进入有上限退避的自动重连，重连窗口内 PCM 暂存并在新连接建立后续传；发生过中断的录音在结束时必须优先用完整本地音频执行批量兜底，不能因已有部分实时文字而跳过补录。医生主动结束采集后进入“音频采集完成”审核态；选择继续采集时，`VoiceCapsule.vue` 保留前段审核文字、累计时长与 WAV 分段，仅重建录音器和实时识别会话，最终确认前由 `features/voice-consultation/lib/voiceRecordingContinuation.ts` 合并同规格 PCM WAV，保证审计音频与整段转写仍成对提交。选择放弃时，胶囊先二次确认并上报 `abandon`，`useVoiceConsultation.ts` 清理本轮状态、缓存并写入取消结果，App 再通过统一 `openReceptionCapsule` 窗口出口返回当前患者胶囊；缺少患者上下文时才执行 `exitWork('cancelled')`。
+7. `VoiceCapsule.vue` 实时语音和 `ChatPanel.vue` 录音转写共用 bootstrap 下发的 speech config；`aliyun-dashscope` 与 `funasr-websocket` 优先使用区域 WebSocket，`openai-compatible` 按 bootstrap 选择整段识别或分段草稿，分段草稿与停止后的整段校正经签名 HTTP 转写接口；实时失败场景继续使用完整录音批量补录。桌面端只连接签名 `/v1/ai/speech/realtime/ws`，不接收或直连第三方实时地址。实时连接在非医生主动结束时收到 `error` / `final` / `close` 必须进入有上限退避的自动重连，重连窗口内 PCM 暂存并在新连接建立后续传；发生过中断的录音在结束时必须优先用完整本地音频执行批量兜底，不能因已有部分实时文字而跳过补录。医生主动结束采集后等待最终转写，成功进入审核态，失败保留录音并展示重试门禁；选择继续采集时，`VoiceCapsule.vue` 保留前段审核文字、累计时长与 WAV 分段，仅重建录音器和实时识别会话，最终确认前由 `features/voice-consultation/lib/voiceRecordingContinuation.ts` 合并同规格 PCM WAV，保证审计音频与整段转写仍成对提交。选择放弃时，胶囊先二次确认并上报 `abandon`，`useVoiceConsultation.ts` 清理本轮状态、缓存并写入取消结果，App 再通过统一 `openReceptionCapsule` 窗口出口返回当前患者胶囊；缺少患者上下文时才执行 `exitWork('cancelled')`。
 
 ### 与主流程关系
 
@@ -1140,7 +1140,7 @@ Windows MSI 的主 `UpgradeCode` 固定为 `3b611483-0215-50cb-b961-cf1a889c5546
 ### 语音转写网络策略
 
 - `llm.ts` 中 `transcribeAudio` 只调用签名 `/v1/ai/speech/transcribe`，客户端不持有语音供应商 key 或直连地址。
-- `aliyunSpeech.ts` 中 `RealtimeSpeechService` 统一采集 PCM：`aliyun-dashscope` 与 `funasr-websocket` 走签名 `/v1/ai/speech/realtime/ws`；首次建链失败时转入批量模式，录音中途收到非主动 `error` / `final` / `close` 时按 `1/2/4/8/15 秒`上限的 full-jitter capped exponential backoff 自动重连，不允许 0ms 立即重试。每次重连都重新申请签名 WebSocket URL 和 nonce，避免复用过期或已消费凭据；等待期间暂存待发 PCM。每轮录音使用独立会话 epoch，关闭或重新开始后，上一轮尚未完成的退避协程不得在新会话中复活。重连只会建立新的实时识别任务，不保证把原节点上的上游识别会话迁移到新节点。只要实时链路发生过中断，停止录音后就使用完整本地音频调用 `/v1/ai/speech/realtime` 批量补录，失败时才保留已收到的实时文字；`openai-compatible` 默认整段转写，bootstrap 显式下发 `segmented` 时使用有界 PCM 预览窗口生成草稿，并在停止后整段校正。FunASR 原生地址和协议仅由服务端托管。
+- `aliyunSpeech.ts` 中 `RealtimeSpeechService` 统一采集 PCM：`aliyun-dashscope` 与 `funasr-websocket` 走签名 `/v1/ai/speech/realtime/ws`；首次建链失败时转入批量模式，录音中途收到非主动 `error` / `final` / `close` 时按 `1/2/4/8/15 秒`上限的 full-jitter capped exponential backoff 自动重连，不允许 0ms 立即重试。每次重连都重新申请签名 WebSocket URL 和 nonce，避免复用过期或已消费凭据；等待期间暂存待发 PCM。每轮录音使用独立会话 epoch，关闭或重新开始后，上一轮尚未完成的退避协程不得在新会话中复活。重连只会建立新的实时识别任务，不保证把原节点上的上游识别会话迁移到新节点。只要实时链路发生过中断，停止录音后就使用完整本地音频调用 `/v1/ai/speech/realtime` 批量补录；补录失败必须向审核层传播异常，已收到的实时文字仅保留为只读草稿，不得当作完整结果确认；`openai-compatible` 默认整段转写，bootstrap 显式下发 `segmented` 时使用有界 PCM 预览窗口生成草稿，并在停止后整段校正。FunASR 原生地址和协议仅由服务端托管。
 - `ChatPanel.vue` 通过 `features/chat/model/useChatVoiceInput.ts` 把 `audioRecorder` 的 PCM 数据持续交给 `RealtimeSpeechService`，与 `VoiceCapsule.vue` 共用 bootstrap 下发的 speech provider/model/sampleRate/format；配置为 `funasr-websocket` 时，聊天麦克风不得在录音结束后直接跳到 `/v1/ai/speech/realtime` 批量接口。`SPEECH_TEST_MODE` 仅用于开发测试夹具，不提供生产本地执行路径。
 - 审查 AI（`factChecker.ts` -> `llm.ts/chat`）复用签名 `/v1/ai/chat`，启用状态、模型和 `checkExaminationEnabled` 来自 bootstrap。
 
@@ -1677,3 +1677,7 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 ## 分段 ASR
 
 `services/segmentedSpeechTranscriber.ts` 管理有界 PCM 窗口、串行转写、重叠文本合并与关闭隔离，`RealtimeSpeechService` 按当前会话冻结的 bootstrap 配置选择该模式或原 WebSocket/整段模式。分段回调仅作草稿；停止后整段结果为最终文本，过期会话回调不得覆盖新录音。
+
+## 语音整段转写失败恢复
+
+`features/voice-consultation/model/useVoiceTranscriptionReview.ts` 持有停录音频引用、转写状态、审核文字及请求序号；通过注入的重试函数调用签名转写，统一拒绝迟到结果。`VoiceCapsule.vue` 负责采集/停止与继续、确认、放弃的编排，`VoiceTranscriptionStatus.vue` 只展示失败或空文本状态及发出重试事件。停止后的整段转写异常或非法结果必须显示未完成状态，保留当前完整 WAV 和分段草稿；完成重试前禁止确认和继续采集，草稿只读。成功返回空文本则单独提示未识别到新增文字，清除当前未核验草稿、保留先前审核文字，允许重试、续采或手动补充；确认仍要求非空文字。重试只发送当前停录段，成功后与先前已审核文字拼接；重试中禁止重复请求与编辑，放弃仍可用。关闭、放弃、续采或卸载须使旧请求失效。录音保存失败时不得用空 Blob 假装可重试。
