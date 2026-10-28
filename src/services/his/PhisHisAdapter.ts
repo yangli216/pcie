@@ -874,7 +874,7 @@ export class PhisHisAdapter implements HisAdapter {
     if (!idPi) return null;
     this.lastPatientId = idPi;
 
-    const detail = await this.service.searchPatientByIdPiMB(idPi);
+    const detail = await this.service.searchPatientByIdPi(idPi);
     if (!detail) return null;
 
     const sdSex = trim(detail.sdSex);

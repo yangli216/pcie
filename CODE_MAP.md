@@ -46,6 +46,8 @@
 
 ## 快速导航
 
+悬浮球原生悬停：`src-tauri/src/mouse_hover.rs` 统一 macOS 主屏鼠标坐标与窗口缩放比例，并计算窗口内物理坐标；`lib.rs` 的全局轮询和 `check_mouse_hover` 共用该入口，`useEventListeners.ts` 消费 `hover-change / mouse-pos` 驱动菜单显示与高亮。
+
 开机自启动：`features/settings/api/autostart.ts` 封装系统插件；`model/useSettingsAutostart.ts` 为局部状态 controller，处理读取、切换、回读与错误；`ui/AutostartSettings.vue` 由 `SettingsGeneralTab.vue` 挂载，切换立即生效。Rust `lib.rs` 经 `src-tauri/src/autostart.rs` 注册平台 Adapter（Windows 注册表命令加引号、状态校验及旧命令修复；其余平台复用原插件），`src-tauri/capabilities/autostart.json` 只授权主窗口的读取、开启、关闭动作。验证记录与平台手测见 `docs/autostart-uat.md`。
 
 Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-tauri/Cargo.win7.lock`、slim errors 与 `scripts/win7/windows-link` 补丁；`scripts/validate-win7-installer.ps1` 解包实际 MSI，`scripts/validate-win7-imports.mjs` 校验安装 EXE/DLL 的普通/延迟导入及主程序来源 SHA-256。普通构建不使用此锁与补丁。
@@ -72,7 +74,7 @@ Win7 原生兼容构建：`scripts/win7-cargo-runner.mjs` 管理独立 `src-taur
 
 注意事项默认复诊时限：`features/clinical-result/precautionsFollowUp.ts`（纯规则）由 `outpatientRecord.ts`、`useClinicalResultIntentReset.ts` 和结果页生成基线共用；普通诊疗 3 天，慢病定期复查 1 个月，保留明确周期与紧急建议，回写阶段不改医生正文。
 
-慢病回写签约判定：PHIS `searchByIdPiMB` -> HIS Adapter 中性 `signed` -> `recordConfirmedPayload.ts`；仅明确签约的慢病复诊含药回写携带 `prescriptionAttributes.chronicLongTerm`，未签约或未知状态按普通处方处理。
+白云患者查询：`HisAdapter.fetchPatientInfo` -> `HisService.searchPatientByIdPi` -> PHIS `searchByIdPi`；`searchPatientByIdPiMB` / `searchByIdPiMB` 仅用于杭州特化。标准响应显式提供签约事实时映射为中性 `signed`，缺失时保持未知；`recordConfirmedPayload.ts` 仅在明确签约的慢病复诊含药回写中携带 `prescriptionAttributes.chronicLongTerm`，未签约或未知状态按普通处方处理。
 
 | 我要做什么 | 该读哪里 |
 |-----------|---------|
