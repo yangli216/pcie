@@ -2560,3 +2560,7 @@ HIS 接入完成后，至少验证以下场景：
 慢病检查检验匹配说明：同义词匹配不改变请求/回写结构；组套、部位或多个同义候选存在歧义时不进入 orderList，完整提醒收进结果页提示图标。匹配成功仍默认未选，必须由医生选择。
 
 住院病历回填重试关联：首次发送保留入口requestId；如果前一次已成功发送给HIS，医生在失败回执后重试或重新生成后再发送时使用新的requestId。HIS必须按本次record-confirmed的requestId回执，不得复用上一条回执标识。SDK生成Promise仍在首次匹配的record-confirmed时resolve，后续回填尝试沿用事件订阅。字段结构保持原契约。
+
+## 分段 ASR 配置
+
+bootstrap `speech.transcriptionMode` 为 `batch` / `segmented`（省略按 `batch`），`speech.segmentDurationMs` 默认 4000，允许 2000–15000 的整数；仅 `openai-compatible` 提供方启用分段识别。分段 PCM 仍经生产 P-256 `/v1/ai/speech/transcribe`，模型与凭据由服务端管理。录音期间文字为草稿，停止后完整转写替换；HIS 回写仍须经过既有文字确认及病历确认，不改变 Bridge/SDK 契约。

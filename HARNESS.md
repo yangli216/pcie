@@ -6,6 +6,10 @@
 2. 文档/契约先更新，再实现生产代码和Vitest测试；跨仓任务使用development-harness/HARNESS.md。
 3. 默认执行yarn type-check、yarn test:unit、yarn build；Rust变化补cargo check。真实Tauri运行、HIS/PHIS和第三方服务验收与合成测试分别报告。
 
+## 分段语音转写
+
+分段语音回归执行 `yarn test:unit src/services/segmentedSpeechTranscriber.test.ts src/services/speechConfig.test.ts src/services/aliyunSpeech.test.ts`，覆盖顺序/背压、边界重叠、空结果/失败、关闭后的迟到回调及停止后完整转写。真实验证区分停止前字幕、停止后完整文本和医学病历；默认使用 Fake 转写，真实模型仍需独立机构与显式运行。
+
 ## 机构知识检索
 
 按[知识服务设计](../development-harness/KNOWLEDGE_BASE_DESIGN.md)和机器契约实现；API经regionalClient签名，UI/控制器进入features/knowledge。执行knowledgeRetrieval、useInstitutionKnowledgeController与InstitutionKnowledgePanel测试及默认构建。机构、文档批准和版本由后端确定，不把DRAFT/示例数据当可用医学知识，不新增供应商密钥或自动聊天/公卫注入。

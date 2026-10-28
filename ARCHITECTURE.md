@@ -207,7 +207,7 @@ PHIS `HiBdMed.sdMed` 是药品分类事实源：`1` 映射西药 `sdSrv=11`，`2
 4. Windows 内网更新源采用本地配置驱动：测试环境地址、正式环境地址和当前生效环境保存在 `localStorage`，前端只负责展示与选择，真正的 updater endpoint 在 Rust 侧通过 `updater_builder()` 运行时注入。客户端会按当前更新通道访问 `PCIE Server` 的 `/v1/client/releases/{channel}/policy.json`；若服务端发布策略要求强制更新且当前版本低于 `minSupportedVersion`，应用进入强制更新门禁，只保留更新源配置、检查更新、下载安装并重启能力。强制门禁的策略事实必须由 `ForceUpdateGate -> UpdateChecker` 显式透传，门禁仍生效时不得因为 updater 暂未返回安装包而显示“当前已是最新版本”；此时必须保留阻断状态并明确提示“未获取到可用安装包/请联系管理员”，避免策略判断与下载安装状态形成两套相互矛盾的真源。
 5. 主窗口的聊天、设置、问诊等可调整工作视图会将用户最后一次手动调整后的窗口尺寸写入 `.settings.dat`，再次打开对应视图时优先恢复该尺寸；聊天视图会丢弃低于标准工作面板高度的历史扁窗尺寸并回到默认窄高比例，智能问诊视图会丢弃低于当前默认尺寸的历史记录并回到适度放大的双栏比例，避免欢迎区、病历编辑区、推荐清单或底部操作区被不合适的历史尺寸继续影响；悬浮球启动阶段在 Rust 层读取 `.settings.dat` 的历史位置，并按当前显示器 `workArea`、实际窗口物理尺寸和最近边缘吸附策略夹回可见安全区域，若历史位置已不属于当前工作区则回落到主屏右侧居中位置。
 6. 通用设置页新增音频输入设备配置，首选麦克风 `deviceId` 保存在 `localStorage`；聊天录音和语音接诊共用同一配置，若指定设备不存在则自动回退到系统默认输入设备。设置页首次进入时会按权限状态自动补做一次设备列表预热，尽量避免初次枚举不完整、必须手动刷新后才看到全部麦克风。
-7. `VoiceCapsule.vue` 实时语音和 `ChatPanel.vue` 录音转写共用 bootstrap 下发的 speech config；`aliyun-dashscope` 与 `funasr-websocket` 优先使用区域 WebSocket，`openai-compatible` 与实时失败场景统一使用区域批量转写接口。桌面端只连接签名 `/v1/ai/speech/realtime/ws`，不接收或直连第三方实时地址。实时连接在非医生主动结束时收到 `error` / `final` / `close` 必须进入有上限退避的自动重连，重连窗口内 PCM 暂存并在新连接建立后续传；发生过中断的录音在结束时必须优先用完整本地音频执行批量兜底，不能因已有部分实时文字而跳过补录。医生主动结束采集后进入“音频采集完成”审核态；选择继续采集时，`VoiceCapsule.vue` 保留前段审核文字、累计时长与 WAV 分段，仅重建录音器和实时识别会话，最终确认前由 `features/voice-consultation/lib/voiceRecordingContinuation.ts` 合并同规格 PCM WAV，保证审计音频与整段转写仍成对提交。选择放弃时，胶囊先二次确认并上报 `abandon`，`useVoiceConsultation.ts` 清理本轮状态、缓存并写入取消结果，App 再通过统一 `openReceptionCapsule` 窗口出口返回当前患者胶囊；缺少患者上下文时才执行 `exitWork('cancelled')`。
+7. `VoiceCapsule.vue` 实时语音和 `ChatPanel.vue` 录音转写共用 bootstrap 下发的 speech config；`aliyun-dashscope` 与 `funasr-websocket` 优先使用区域 WebSocket，`openai-compatible` 按 bootstrap 选择整段识别或分段草稿，分段草稿与停止后的整段校正经签名 HTTP 转写接口；实时失败场景继续使用完整录音批量补录。桌面端只连接签名 `/v1/ai/speech/realtime/ws`，不接收或直连第三方实时地址。实时连接在非医生主动结束时收到 `error` / `final` / `close` 必须进入有上限退避的自动重连，重连窗口内 PCM 暂存并在新连接建立后续传；发生过中断的录音在结束时必须优先用完整本地音频执行批量兜底，不能因已有部分实时文字而跳过补录。医生主动结束采集后进入“音频采集完成”审核态；选择继续采集时，`VoiceCapsule.vue` 保留前段审核文字、累计时长与 WAV 分段，仅重建录音器和实时识别会话，最终确认前由 `features/voice-consultation/lib/voiceRecordingContinuation.ts` 合并同规格 PCM WAV，保证审计音频与整段转写仍成对提交。选择放弃时，胶囊先二次确认并上报 `abandon`，`useVoiceConsultation.ts` 清理本轮状态、缓存并写入取消结果，App 再通过统一 `openReceptionCapsule` 窗口出口返回当前患者胶囊；缺少患者上下文时才执行 `exitWork('cancelled')`。
 
 ### 与主流程关系
 
@@ -1007,7 +1007,7 @@ src/styles/
 | 服务 | 职责 | 文件 |
 |------|------|------|
 | `llm.ts` / `services/llm/*` | LLM facade 与服务端代理编排。`chat/chatStream/chatFast/transcribeAudio` 全部通过 `regionalClient.ts` 的签名 HTTP/SSE 出口调用 `/v1/ai/*`；`config.ts` 只读取 bootstrap 非敏感视图，`retry.ts` 提供指数退避，`payload.ts` 负责消息 payload 与摘要。客户端不存在第三方 API Key、Base URL 或本地 OpenAI 兼容客户端 | [src/services/llm.ts](src/services/llm.ts) / [src/services/llm](src/services/llm/types.ts) |
-| `aliyunSpeech.ts` | 语音转写编排：DashScope / FunASR 优先走服务端托管实时 WebSocket，OpenAI 兼容和实时失败场景走服务端批量降级 | [src/services/aliyunSpeech.ts](src/services/aliyunSpeech.ts) |
+| `aliyunSpeech.ts` | 语音转写编排：DashScope / FunASR 优先走服务端托管实时 WebSocket，OpenAI 兼容提供方支持整段识别及分段草稿/整段校正，实时失败场景使用完整录音批量降级 | [src/services/aliyunSpeech.ts](src/services/aliyunSpeech.ts) |
 | `audioRecorder.ts` | Web Audio API 录音、音频输入设备枚举与首选设备回退 | [src/services/audioRecorder.ts](src/services/audioRecorder.ts) |
 | `medicalData.ts` | 医疗数据目录加载、缓存恢复与匹配。诊断、药品及非检查检验诊疗项目仍可按各自 scope 恢复 SQLite 缓存；检查 / 检验目录改为接诊级实时目录，由 `useReceptionController.ts` 在每次接诊开始时调用 `beginAvailableExamLabReception()` 预取，`medicalData.ts` 按 `orgCode + tenantId + deptId` 对同次接诊的请求和结果做内存复用，结束接诊或上下文变化时清空。该实时目录不写入、也不从 SQLite 恢复，查询失败时清空旧检查检验项且禁止回退历史目录，确保 `jsonField.idLisCategory`、执行科室、部位和互认编码保持本次 HIS 完整值。当前药房药品目录继续按 `orgCode + tenantId + storeId` 落库，确保真实库存 scope；缓存管理页的显式强制同步只持久化仍允许缓存的目录 | [src/services/medicalData.ts](src/services/medicalData.ts) |
 | `hisService.ts` | HIS HTTP 调用封装（PHIS 形态默认实现）：统一处理鉴权头、POST/GET 请求，以及诊断/药品/诊疗项目目录与药品频次、用法等字典读取，供主问诊和语音问诊复用；PHIS 分散 RPC 不再由客户端直接打 `base/phis/otms` 旧服务名，而是统一经院端 `api/phis.aiAdapterService/*` 薄适配入口，由各项目处理不同 PHIS 版本差异；住院病历 AI 上下文仍保留 PHIS `api/phis.aiInpatientEmrContextService/buildContext` 聚合接口，登记 / 诊断 / 医嘱 / 体温单等明细由后端裁剪后一次性返回，不再维护桌面端分散 RPC 回退。**业务方不应直接 import 本文件**：所有出站调用应通过 `services/his` 适配器层 | [src/services/hisService.ts](src/services/hisService.ts) |
@@ -1140,7 +1140,7 @@ Windows MSI 的主 `UpgradeCode` 固定为 `3b611483-0215-50cb-b961-cf1a889c5546
 ### 语音转写网络策略
 
 - `llm.ts` 中 `transcribeAudio` 只调用签名 `/v1/ai/speech/transcribe`，客户端不持有语音供应商 key 或直连地址。
-- `aliyunSpeech.ts` 中 `RealtimeSpeechService` 统一采集 PCM：`aliyun-dashscope` 与 `funasr-websocket` 走签名 `/v1/ai/speech/realtime/ws`；首次建链失败时转入批量模式，录音中途收到非主动 `error` / `final` / `close` 时按 `1/2/4/8/15 秒`上限的 full-jitter capped exponential backoff 自动重连，不允许 0ms 立即重试。每次重连都重新申请签名 WebSocket URL 和 nonce，避免复用过期或已消费凭据；等待期间暂存待发 PCM。每轮录音使用独立会话 epoch，关闭或重新开始后，上一轮尚未完成的退避协程不得在新会话中复活。重连只会建立新的实时识别任务，不保证把原节点上的上游识别会话迁移到新节点。只要实时链路发生过中断，停止录音后就使用完整本地音频调用 `/v1/ai/speech/realtime` 批量补录，失败时才保留已收到的实时文字；`openai-compatible` 统一走批量转写。FunASR 原生地址和协议仅由服务端托管。
+- `aliyunSpeech.ts` 中 `RealtimeSpeechService` 统一采集 PCM：`aliyun-dashscope` 与 `funasr-websocket` 走签名 `/v1/ai/speech/realtime/ws`；首次建链失败时转入批量模式，录音中途收到非主动 `error` / `final` / `close` 时按 `1/2/4/8/15 秒`上限的 full-jitter capped exponential backoff 自动重连，不允许 0ms 立即重试。每次重连都重新申请签名 WebSocket URL 和 nonce，避免复用过期或已消费凭据；等待期间暂存待发 PCM。每轮录音使用独立会话 epoch，关闭或重新开始后，上一轮尚未完成的退避协程不得在新会话中复活。重连只会建立新的实时识别任务，不保证把原节点上的上游识别会话迁移到新节点。只要实时链路发生过中断，停止录音后就使用完整本地音频调用 `/v1/ai/speech/realtime` 批量补录，失败时才保留已收到的实时文字；`openai-compatible` 默认整段转写，bootstrap 显式下发 `segmented` 时使用有界 PCM 预览窗口生成草稿，并在停止后整段校正。FunASR 原生地址和协议仅由服务端托管。
 - `ChatPanel.vue` 通过 `features/chat/model/useChatVoiceInput.ts` 把 `audioRecorder` 的 PCM 数据持续交给 `RealtimeSpeechService`，与 `VoiceCapsule.vue` 共用 bootstrap 下发的 speech provider/model/sampleRate/format；配置为 `funasr-websocket` 时，聊天麦克风不得在录音结束后直接跳到 `/v1/ai/speech/realtime` 批量接口。`SPEECH_TEST_MODE` 仅用于开发测试夹具，不提供生产本地执行路径。
 - 审查 AI（`factChecker.ts` -> `llm.ts/chat`）复用签名 `/v1/ai/chat`，启用状态、模型和 `checkExaminationEnabled` 来自 bootstrap。
 
@@ -1673,3 +1673,7 @@ MSI 来源哈希按 Tauri bundler 的实际行为计算：先在编译 EXE 中�
 `features/inpatient-emr/api/inpatientEmrLog.ts` 为每次生成创建独立UUID，捕获开始时医生/机构身份、模板SHA-256及患者锚点；按生命周期记录生成、等待、失败/备用稿、回填待回执、回执、明确放弃与重新生成替代。`api/inpatientEmrLogOutbox.ts` 通过IndexedDB按服务器/机构/设备隔离保存待传事件，经现有签名regionalPost上传 `/v1/client/user-logs/inpatient-emr/events`；确认后删除，失败可见可重试，不静默丢弃。存储上限100条/8MiB，内存中未能落盘事件仅保证当前运行期重试，不能承诺重启恢复。进入住院工作区恢复补传，运行期每30秒重试。
 
 `useInpatientEmrGeneration` 管理轮次和请求序号隔离，旧流式结果/旧回执不污染新轮次；AI原稿在生成完成时固定，最终稿在回填时固定。回写发送成功仍为pending，只有住院ID+requestId严格匹配当前待处理请求的success回执才标记回填成功；重复、跨住院、无requestId或迟到回执忽略。等待回执期间禁止重新生成或放弃，最小化保持。页面明确放弃先记录快照，再清空现场；后台菜单名“住院病历日志”。不改本地Bridge入参和回写事件协议，不新增Pinia全局状态。
+
+## 分段 ASR
+
+`services/segmentedSpeechTranscriber.ts` 管理有界 PCM 窗口、串行转写、重叠文本合并与关闭隔离，`RealtimeSpeechService` 按当前会话冻结的 bootstrap 配置选择该模式或原 WebSocket/整段模式。分段回调仅作草稿；停止后整段结果为最终文本，过期会话回调不得覆盖新录音。

@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## 分段语音转写
+
+分段 ASR 的录音中文字仅为草稿，停止后整段转写校正；音频窗口和并发必须有界，关闭或会话切换禁止迟到结果串线。模式及分段时长由后台 bootstrap 下发，不新增客户端供应商凭据；默认回归使用 Fake，真实模型结果另记。
+
 ## 机构知识检索入口
 
 独立知识库按钮进入KnowledgeBasePanel工作台，机构资料使用features/knowledge/api中的签名服务端接口，人卫页面保留独立入口；问诊分类检索仍走pmphai.ts。新UI/状态进入features/knowledge，不在App增加业务逻辑，不新增Pinia store。单测覆盖签名、错误/零命中、迟到结果隔离和原文文本安全；执行type-check/test:unit/build，真实Tauri/WeKnora联调单列。

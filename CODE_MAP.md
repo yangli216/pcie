@@ -292,8 +292,9 @@ useEventListeners (全局事件) -> 触发 useNavigation & useWorkMode
 
 | 服务 | 行数 | 职责 |
 |------|------|------|
-| **aliyunSpeech.ts** | ~275 | 语音转写编排：阿里云 DashScope 实时优先，兼容 OpenAI 风格批量转写兜底 |
-| **speechConfig.ts** | -- | 统一管理语音转写 provider / API Key / Base URL / Model 配置，并兼容旧配置迁移 |
+| **aliyunSpeech.ts** | -- | 语音转写编排：DashScope / FunASR 签名 WebSocket，OpenAI 兼容提供方按 bootstrap 选择整段或分段草稿，停止后完整转写校正；隔离过期录音回调 |
+| **speechConfig.ts** | -- | 读取服务端 bootstrap 的 provider / model / transcriptionMode / segmentDurationMs，归一模式及分段时长；不持有供应商凭据 |
+| **segmentedSpeechTranscriber.ts** | -- | 有界 PCM 预览窗口、串行转写、重叠草稿合并与关闭隔离；完整录音仍由 aliyunSpeech.ts 保留 |
 | **audioRecorder.ts** | ~317 | 浏览器音频录制（Web Audio API, PCM16），并统一处理输入设备枚举、首选设备持久化、首开权限预热和失效回退 |
 
 ### 辅助服务

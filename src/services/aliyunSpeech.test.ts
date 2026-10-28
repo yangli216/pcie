@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  speechProvider: 'aliyun-dashscope',
+  transcriptionMode: 'batch',
+  transcribeAudio: vi.fn(),
   buildRegionalSpeechUploadPayload: vi.fn(async () => ({
     audio: 'encoded-audio',
     mimeType: 'audio/pcm',
@@ -21,16 +24,18 @@ vi.mock('./regionalClient', () => ({
 
 vi.mock('./speechConfig', () => ({
   getSpeechConfig: () => ({
-    provider: 'aliyun-dashscope',
+    provider: mocks.speechProvider,
     model: 'qwen-audio-3.0-asr-flash-streaming',
     sampleRate: 16000,
     format: 'pcm',
+    transcriptionMode: mocks.transcriptionMode,
+    segmentDurationMs: 2000,
   }),
-  supportsRealtimeSpeech: () => true,
+  supportsRealtimeSpeech: (provider: string) => provider !== 'openai-compatible',
 }));
 
 vi.mock('./llm', () => ({
-  transcribeAudio: vi.fn(),
+  transcribeAudio: mocks.transcribeAudio,
 }));
 
 vi.mock('./aiTrace', () => ({
@@ -111,6 +116,9 @@ describe('RealtimeSpeechService recovery', () => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
     localStorage.removeItem('SPEECH_TEST_MODE');
+    mocks.speechProvider = 'aliyun-dashscope';
+    mocks.transcriptionMode = 'batch';
+    mocks.transcribeAudio.mockReset();
     mocks.buildRegionalSpeechUploadPayload.mockClear();
     mocks.createRegionalWebSocketUrl.mockClear();
     mocks.createRegionalWebSocketUrl.mockImplementation(async () => (
@@ -222,5 +230,69 @@ describe('RealtimeSpeechService recovery', () => {
     await expect(finishing).resolves.toBe('完整批量文本');
     expect(mocks.regionalPost).toHaveBeenCalledTimes(1);
     expect(onText).toHaveBeenLastCalledWith('完整批量文本', true);
+  });
+
+  it('uses the same HTTP model for drafts and replaces them with a full-recording final response', async () => {
+    mocks.speechProvider = 'openai-compatible';
+    mocks.transcriptionMode = 'segmented';
+    mocks.transcribeAudio.mockResolvedValueOnce('分段草稿').mockResolvedValueOnce('完整校正文本');
+    const service = new RealtimeSpeechService();
+    const onText = vi.fn();
+    await service.start(onText);
+    service.sendAudio(new Int16Array(32000));
+    await vi.waitFor(() => expect(onText).toHaveBeenCalledWith('分段草稿', false));
+    service.sendAudio(new Int16Array(16000));
+    await expect(service.finish()).resolves.toBe('完整校正文本');
+    expect(onText).toHaveBeenLastCalledWith('完整校正文本', true);
+    expect(mocks.transcribeAudio.mock.calls[0][0].size).toBe(64000);
+    expect(mocks.transcribeAudio.mock.calls[0][2].maxRetries).toBe(0);
+    expect(mocks.transcribeAudio.mock.calls[1][0].size).toBe(96000);
+    expect(mocks.createRegionalWebSocketUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not run preview requests for an old batch-only configuration', async () => {
+    mocks.speechProvider = 'openai-compatible';
+    mocks.transcribeAudio.mockResolvedValue('整段文本');
+    const service = new RealtimeSpeechService();
+    await service.start();
+    service.sendAudio(new Int16Array(64000));
+    await Promise.resolve();
+    expect(mocks.transcribeAudio).not.toHaveBeenCalled();
+    await expect(service.finish()).resolves.toBe('整段文本');
+  });
+
+  it('avoids extra preview calls when the caller only consumes final text', async () => {
+    mocks.speechProvider = 'openai-compatible';
+    mocks.transcriptionMode = 'segmented';
+    mocks.transcribeAudio.mockResolvedValue('最终文本');
+    const service = new RealtimeSpeechService();
+    await service.start();
+    service.sendAudio(new Int16Array(64000));
+    await Promise.resolve();
+    expect(mocks.transcribeAudio).not.toHaveBeenCalled();
+    await expect(service.finish()).resolves.toBe('最终文本');
+    expect(mocks.transcribeAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a late final HTTP response notify or close a newly started session', async () => {
+    mocks.speechProvider = 'openai-compatible';
+    mocks.transcriptionMode = 'segmented';
+    let resolveOld!: (text: string) => void;
+    mocks.transcribeAudio.mockReturnValueOnce(new Promise<string>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce('新会话草稿');
+    const service = new RealtimeSpeechService();
+    const oldCallback = vi.fn();
+    await service.start(oldCallback);
+    service.sendAudio(new Int16Array(100));
+    const oldFinish = service.finish();
+    const nextCallback = vi.fn();
+    await service.start(nextCallback);
+    resolveOld('旧会话最终结果');
+    await oldFinish;
+    expect(oldCallback).not.toHaveBeenCalled();
+    expect(nextCallback).not.toHaveBeenCalled();
+    service.sendAudio(new Int16Array(32000));
+    await vi.waitFor(() => expect(nextCallback).toHaveBeenCalledWith('新会话草稿', false));
+    service.close();
   });
 });

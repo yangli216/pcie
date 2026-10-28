@@ -36,6 +36,8 @@ export interface BootstrapConfig {
   speech?: {
     provider: string;
     model?: string;
+    transcriptionMode?: 'batch' | 'segmented';
+    segmentDurationMs?: number;
   };
   knowledgeBase?: {
     enabled: boolean;
