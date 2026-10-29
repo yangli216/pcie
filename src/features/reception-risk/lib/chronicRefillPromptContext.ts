@@ -134,6 +134,7 @@ interface MedicationScopeGroup {
   candidateConditionIds: string[];
   name: string;
   spec: string;
+  regimen: string;
 }
 
 export interface ChronicRefillMedicationScopePromptContext {
@@ -187,6 +188,7 @@ export function buildChronicRefillMedicationScopePromptContext(
       candidateConditionIds: candidateIds,
       name: cleanMedicineName(item.medication.name),
       spec: cleanText(item.medication.spec),
+      regimen: formatStructuredRegimen(item.medication),
     });
   });
 
@@ -203,6 +205,7 @@ export function buildChronicRefillMedicationScopePromptContext(
       group.name,
       group.spec,
       group.candidateConditionIds.map((id) => conditionRefById.get(id)).filter(Boolean),
+      group.regimen,
     ]),
   });
 

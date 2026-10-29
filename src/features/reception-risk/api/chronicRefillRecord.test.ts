@@ -848,6 +848,11 @@ describe('generateChronicRefillRecord', () => {
 
     const result = await generateChronicRefillRecord(patient, scoped, { timing });
 
+    const prompt = vi.mocked(chatStream).mock.calls[0][0].map((message) => message.content).join('\n');
+    expect(prompt).toContain('不要只挑一种或只返回后续推荐药');
+    expect(prompt).toContain('暂无直接归属的处方；下方混合处方待归类');
+    expect(prompt).toContain('格列齐特缓释片');
+    expect(prompt).toContain('阿卡波糖片');
     expect(result.currentMedicationHistory).toBe('格列齐特缓释片、苯磺酸氨氯地平片、阿卡波糖片');
     expect(result.treatments.map((item) => item.name)).toEqual([
       '苯磺酸氨氯地平片',

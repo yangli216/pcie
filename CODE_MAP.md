@@ -1,5 +1,7 @@
 # CODE_MAP.md
 
+慢病药品归类上下文位于 `features/reception-risk/lib/chronicRefillPromptContext.ts`，同次流提示词位于 `features/reception-risk/api/chronicRefillRecord.ts`；只返回相关药品，未归类和无效判断不得进入本次处方。
+
 ## 药品卡片说明书浮窗
 
 - `features/knowledge/index.ts`：公开 `DrugInstructionPopover`，供治疗卡片引用。

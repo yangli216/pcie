@@ -619,7 +619,7 @@ export async function generateChronicRefillRecord(
         '你是基层门诊慢病复诊配药助手。病历核心、通用核查骨架和基础查体已由程序确定性生成；你只返回增量决策。',
         '慢病范围已由医生确认。所有核查、用药、健康指导和查体补充只能围绕已选慢病，不得把历史共病扩入本次范围，也不得编造当前症状、监测结果、生命体征、依从性、控制程度或不良反应。',
         ...(hasMedicationScope ? [
-          'medication_scope 输入使用请求内短引用。只返回与某个候选慢病有明确直接治疗关系、且置信度至少为medium的药品；未返回即视为低置信或未归类。只能使用输入中的M/C引用，不解释。',
+          'medication_scope是历史药品与已选慢病的归属核查，不是挑选本次推荐或决定续方。请在输出前逐一检查每个M，凡与selected中某个候选慢病有明确直接治疗关系且置信度至少为medium的历史药品，均返回，不要只挑一种或只返回后续推荐药。无关、无法判断或低置信药品不返回；同次诊断及处方仅为历史依据，不证明当前仍在用药。只能使用输入中的M/C引用，不解释。',
           'medication_scope.data格式为 {"accepted":[["M1","C1","h|m"]]}，第三项h=high、m=medium。只允许归入selected中的慢病。',
         ] : []),
         'recommended_medicines只生成药品，不生成检查、检验或处置。库存药必须返回库存ref，由程序恢复名称和规格；无合适库存时才返回规范通用名name。',
@@ -640,8 +640,8 @@ export async function generateChronicRefillRecord(
         `患者特征：${patientTraits}`,
         `过敏史：${getPatientContextAllergyHistory(patient) || '未记录'}`,
         `已选慢病：${baseCandidate.diagnoses.join('、')}`,
-        '历史处方摘要：',
-        historyEvidence,
+        '已可直接归属的历史处方摘要：',
+        historyEvidence === '无可靠历史处方' && hasMedicationScope ? '暂无直接归属的处方；下方混合处方待归类。' : historyEvidence,
         ...(hasMedicationScope ? [
           `待归类药品：${medicationScopeContext.prompt}`,
         ] : []),

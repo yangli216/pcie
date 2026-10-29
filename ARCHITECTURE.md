@@ -1,5 +1,9 @@
 # 架构文档 (ARCHITECTURE.md)
 
+## 慢病历史药品归类提示优化（2026-10-29）
+
+单次慢病流要求模型内部逐药核查，但仅输出与所选慢病明确相关的短引用，不逐项输出无关药；既有白名单和置信度门禁不变。输入明确区分未归属混合处方与确无历史处方，并提供历史处方摘要供归类，不视为已确认续方。
+
 ## 治疗药品卡片说明书浮窗（2026-10-15）
 
 `TreatmentRecommendationCard` 提供用法用量行的 `summary-action` 插槽，`TreatmentRecommendationSection` 在药品行接入 knowledge 公开导出的 `DrugInstructionPopover`。商品 ID 复用 `getMatchedOrderServiceId` 的已绑定目录事实源（优先 raw.idMedPro，随后已匹配商品 ID），不得以 AI 推荐名、候选项或历史同名药猜测 ID；未绑定商品 ID 时入口禁用。该跨功能组件通过 `features/knowledge/index.ts` 公开。
