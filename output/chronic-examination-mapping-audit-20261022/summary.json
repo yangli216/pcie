@@ -1,0 +1,18 @@
+{
+  "cdw_contrast_count": 0,
+  "cdw_standard_count": 27,
+  "cdw_standard_has_cd_yb": false,
+  "standard_code_overlaps_phis_cd_cli": [],
+  "outpatient_org_count": 31,
+  "outpatient_clinical_rows": 17247,
+  "outpatient_distinct_clinical_ids": 2550,
+  "recommendation_count": 17,
+  "standard_exact_names": 13,
+  "standard_variant_hints": 3,
+  "standard_missing": 1,
+  "recommendations_with_exact_phis_dictionary_name": [
+    "同型半胱氨酸",
+    "糖化血红蛋白"
+  ],
+  "automatic_mapping_not_verified": true
+}

@@ -1,0 +1,10 @@
+{
+  "summary.json": "facde8b0442efaef8b59341207999e62b288007c334e8fd1345df34103824a79",
+  "recommendation-candidates.json": "291f0dd823e76658fd33325f3c61a63e0249f20ae1cc5376bdf2920474abe764",
+  "recommendation-comparison.csv": "9acf2fbe411be07724a872ea1ad920a9fd6799fabe8203afc85f38f8a38cfd0d",
+  "live-dictionaries.json": "9121a4a40e15c8e4b97c4244dba58e81d563d58dd0fed8db02a6d91c307c6881",
+  "README.md": "c7c83793f2d8b8344bb85e2d9c2ee72217cb389a962ca687f2e866484882df4d",
+  "02-phis-readonly.sql": "5ae5de6932fdd65e2ce56399fc6e6c88090972c7454a9a404c92d86ad8467700",
+  "01-cdw-readonly.sql": "a695bc6bbf8b4b0073fae24a67269d158508d89a2908d88a468ae02f6b687d88",
+  "organization-catalog-counts.csv": "13f96bcd051245877fc63494ee3f0281cef38e8a3f191c6f3dbc6a01ac279cbc"
+}
