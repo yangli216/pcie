@@ -1,5 +1,7 @@
 # CODE_MAP.md
 
+慢病药品归类上下文位于 `features/reception-risk/lib/chronicRefillPromptContext.ts`，同次流提示词位于 `features/reception-risk/api/chronicRefillRecord.ts`；只返回相关药品，未归类和无效判断不得进入本次处方。
+
 ## 白云分支站点能力差异
 
 - 白云分支不启用药品卡片说明书浮窗和知识库“药品说明书”页签，不请求 `/v1/knowledge/drug-instructions/*`；`features/knowledge` 只保留机构资料与人卫知识。

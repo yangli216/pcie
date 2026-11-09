@@ -51,7 +51,7 @@ describe('chronicRefillPromptContext', () => {
 
   it('groups repeated attribution items behind short refs and expands accepted refs safely', () => {
     const shared = {
-      medication: { name: '苯磺酸氨氯地平片', spec: '5mg*28片/盒' },
+      medication: { name: '苯磺酸氨氯地平片', spec: '5mg*28片/盒', dose: '5', doseUnit: 'mg' },
       source: 'structured' as const,
       candidateConditionIds: ['高血压', '糖尿病'],
     };
@@ -70,6 +70,7 @@ describe('chronicRefillPromptContext', () => {
     expect(context.groupCount).toBe(1);
     expect(context.prompt).toContain('M1');
     expect(context.prompt).toContain('C1');
+    expect(context.prompt).toContain('每次5mg');
     expect(context.prompt).not.toContain('long-visit-id');
     expect(context.decode({ accepted: [['M1', 'C1', 'h'], ['unknown', 'C1', 'h']] })).toEqual({
       assignments: [
