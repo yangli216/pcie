@@ -32,7 +32,7 @@
 5. 涉及交互、产品约束时再读 [PRODUCT.md](./PRODUCT.md)
 6. 遇到疑似踩过的坑时，先查 [RETRO.md](./RETRO.md) 已有经验
 7. 涉及历史上反复摇摆的设计决策时，先查 [DECISION_DRIFT.md](./DECISION_DRIFT.md)
-8. 涉及服务端接入、设备签名或 `/v1/*` 契约时，读取 [../floating-ball-server/API.md](../floating-ball-server/API.md)、真实调用代码和 `requestSigner.ts`；旧区域化草案已归档，不作为当前契约
+8. 涉及服务端接入、设备签名或 `/v1/*` 契约时，读取 [../pcie-server/API.md](../pcie-server/API.md)、真实调用代码和 `requestSigner.ts`；旧区域化草案已归档，不作为当前契约
 
 ## 强制流程
 
