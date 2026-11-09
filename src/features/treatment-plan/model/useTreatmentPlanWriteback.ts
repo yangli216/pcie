@@ -14,7 +14,6 @@ import {
   useClinicalResultWritebackPayload,
   useClinicalResultWritebackPreflight,
   useConsultationReferenceFeedbackListener,
-  useMutualRecognitionDecision,
   useWritebackFeedbackController,
   useWritebackStatus,
   type ClinicalResultWritebackPharmacyOption,
@@ -79,16 +78,9 @@ export function useTreatmentPlanWriteback(options: TreatmentPlanWritebackOptions
   const {
     clearLastFeedback,
     markWritebackPending,
-    pendingWritebackRequestId,
     resetWritebackState,
     applyWritebackFeedback: applyWritebackFeedbackStatus,
   } = writebackStatus;
-
-  const mutualRecognition = useMutualRecognitionDecision({
-    resolveConsultationId,
-    resolvePendingRequestId: () => pendingWritebackRequestId.value,
-    notify,
-  });
 
   const { buildDiagList, buildOrderList, orderItemResolvers } = useClinicalResultWritebackPayload({
     selectedDiagnoses: selectedDiagnoses as unknown as Ref<Diagnosis[]>,
@@ -136,12 +128,19 @@ export function useTreatmentPlanWriteback(options: TreatmentPlanWritebackOptions
     resolveConsultationId,
     logContext: 'TreatmentPlanPage',
     onFeedback: (payload) => {
-      if (mutualRecognition.handleFeedback(payload)) return;
+      // 白云已移除互认决策弹窗：宿主历史 pending 中间态由原回写状态机按未完成清算
       writebackFeedbackController.applyWritebackFeedback(payload);
     },
   });
 
   async function submit(): Promise<boolean> {
+    // 白云已移除互认决策：pending 等待期是同一真实保存状态，handler 层阻断重复提交，
+    // 避免再次 submit 得到新 requestId 引出重复开立；新请求只在真实终态/会话切换后允许。
+    if (writebackStatus.isWritebackBusy.value) {
+      notify('HIS 正在处理本次回写，请等待结果回执。', 'info');
+      return false;
+    }
+
     if (!resolveConsultationId()) {
       notify('缺少当前患者标识，暂不能回写诊疗方案。');
       return false;
@@ -204,7 +203,6 @@ export function useTreatmentPlanWriteback(options: TreatmentPlanWritebackOptions
     } catch (error) {
       console.error('[TreatmentPlan] Failed to submit treatment plan', error);
       resetWritebackState();
-      mutualRecognition.clearDialog();
       notify('诊疗方案提交失败，请稍后重试。', 'error');
       return false;
     } finally {
@@ -216,7 +214,6 @@ export function useTreatmentPlanWriteback(options: TreatmentPlanWritebackOptions
     submitting,
     submit,
     writebackStatus,
-    mutualRecognition,
   };
 }
 

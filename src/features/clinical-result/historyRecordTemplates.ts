@@ -101,7 +101,104 @@ function hasNegationBeforeAlias(clause: string, alias: string): boolean {
   return (negativeMatch?.index ?? -1) > (positiveMatch?.index ?? -1);
 }
 
+type PersonalHabitKey = 'smokingHistory' | 'drinkingHistory';
+type PersonalHabitValue = '有' | '否认';
+type PersonalHabitSubject = 'patient' | 'other';
+
+const PERSONAL_HABIT_SUBJECT_PATTERN = /(?:父亲|母亲|其父|其母|父母|家属|亲属|家人|丈夫|妻子|配偶|儿子|女儿|兄弟|姐妹|哥哥|姐姐|弟弟|妹妹|同事|室友|朋友|医生|护士|他人|有人)(?:本人)?|患者本人|患者|病人|患儿|本人/gu;
+
+function findPersonalHabitSubjects(value: string): Array<{
+  subject: PersonalHabitSubject;
+  start: number;
+  end: number;
+}> {
+  const subjects: ReturnType<typeof findPersonalHabitSubjects> = [];
+  for (const match of value.matchAll(PERSONAL_HABIT_SUBJECT_PATTERN)) {
+    const subject = /^(?:患者本人|患者|病人|患儿|本人)$/u.test(match[0]) ? 'patient' : 'other';
+    const previous = subjects[subjects.length - 1];
+    if (previous && /^\s*(?:和|与|及|、|跟|同)\s*$/u.test(value.slice(previous.end, match.index))) {
+      // A coordinated subject containing the patient still states their fact.
+      previous.subject = previous.subject === 'patient' || subject === 'patient' ? 'patient' : 'other';
+      previous.end = match.index! + match[0].length;
+    } else {
+      subjects.push({ subject, start: match.index!, end: match.index! + match[0].length });
+    }
+  }
+  return subjects;
+}
+
+function isPersonalHabitSlot(slot: HistoryRecordTemplateSlot): slot is HistoryRecordTemplateSlot & { key: PersonalHabitKey } {
+  return slot.field === 'personalHistory' && (slot.key === 'smokingHistory' || slot.key === 'drinkingHistory');
+}
+
+/**
+ * Read each habit locally, without carrying a negation across commas/contrasts.
+ * A coordinated group (否认吸烟、饮酒史) shares its qualifier; unknown or
+ * contradictory statements are deliberately not projected as a patient fact.
+ * Explicit subject changes delimit statements; relatives and passive exposure
+ * cannot add or cancel the patient's active habit. This is a bounded local
+ * projection, not a rewrite or a general clinical-language interpreter.
+ * Other history slots retain their existing customer-template rules.
+ */
+function collectPersonalHabitValues(value: string): Partial<Record<PersonalHabitKey, PersonalHabitValue>> {
+  const mentions: Record<PersonalHabitKey, Set<PersonalHabitValue | undefined>> = {
+    smokingHistory: new Set(),
+    drinkingHistory: new Set(),
+  };
+  const clauses = stripHistoryRecordTemplateMarkers(value).split(
+    /[，,。；;！？!?\n]|但是|但|然而|不过|\s*[/／]\s*(?=(?:吸烟(?:史)?|烟龄|饮酒(?:史)?|酒龄)\s*[：:])/u,
+  );
+  let subject: PersonalHabitSubject = 'patient';
+  clauses.forEach((clause) => {
+    const groups = Array.from(clause.matchAll(
+      /(?:吸烟(?:史)?|烟龄|饮酒(?:史)?|酒龄)(?:\s*[、及和与]\s*(?:吸烟(?:史)?|烟龄|饮酒(?:史)?|酒龄))*/gu,
+    ));
+    groups.forEach((group, index) => {
+      const previous = groups[index - 1];
+      const before = clause.slice(previous ? previous.index! + previous[0].length : 0, group.index);
+      const subjects = findPersonalHabitSubjects(before);
+      const explicitSubject = subjects[subjects.length - 1];
+      if (explicitSubject) subject = explicitSubject.subject;
+      if (subject !== 'patient') return;
+      // Keep a reporter's uncertainty for the first statement; after a prior
+      // habit, an explicit new subject starts a separate statement instead.
+      const prefix = (explicitSubject && previous ? before.slice(explicitSubject.end) : before)
+        .replace(PERSONAL_HABIT_SUBJECT_PATTERN, '');
+      const after = clause.slice(group.index! + group[0].length, groups[index + 1]?.index);
+      // A following subject's status/qualifier cannot change this statement.
+      const suffix = after.slice(0, findPersonalHabitSubjects(after)[0]?.start);
+      // An exposure mention is neither an active habit nor its denial. Ignore
+      // only this mention, preserving any explicit active history elsewhere.
+      if (/被动(?:性)?\s*$/u.test(prefix)) return;
+      const context = prefix + suffix;
+      let polarity: PersonalHabitValue | undefined;
+      if (/不详|不明|不清楚|未知|未明确|未询问|未问|未提及|未提供|未记录|不确定|待核实|待确认|不能排除|不排除|无法确定|是否|有无|不是不|并非不|可能|疑似|或许|也许/u.test(context)) {
+        polarity = undefined;
+      } else if (
+        /(?:否认有?|没有|从不|从未|未曾|未有|不曾|无|未|不)\s*$/u.test(prefix)
+        || /^\s*[：:]?\s*(?:否认|没有|无)\s*$/u.test(suffix)
+      ) {
+        polarity = '否认';
+      } else if (!prefix.trim() && !suffix.trim() && /史$|龄$/u.test(group[0])) {
+        polarity = undefined;
+      } else {
+        polarity = '有';
+      }
+      if (/吸烟|烟龄/u.test(group[0])) mentions.smokingHistory.add(polarity);
+      if (/饮酒|酒龄/u.test(group[0])) mentions.drinkingHistory.add(polarity);
+    });
+  });
+  const values: Partial<Record<PersonalHabitKey, PersonalHabitValue>> = {};
+  (Object.keys(mentions) as PersonalHabitKey[]).forEach((key) => {
+    if (mentions[key].size !== 1) return;
+    const [value] = mentions[key];
+    if (value) values[key] = value;
+  });
+  return values;
+}
+
 function hasExplicitPositiveMention(context: string, slot: HistoryRecordTemplateSlot): boolean {
+  if (isPersonalHabitSlot(slot)) return collectPersonalHabitValues(context)[slot.key] === '有';
   const aliases = [slot.label, ...slot.aliases];
   return splitContextClauses(context).some((clause) => aliases.some((alias) => (
     clause.includes(alias) && !hasNegationBeforeAlias(clause, alias)
@@ -157,7 +254,7 @@ export function resolveHistoryRecordTemplate(
     .filter((slot) => hasExplicitPositiveMention(explicitContext, slot));
   const usesTemplate = isHistoryRecordTemplate(field, normalizedCurrent);
 
-  if (normalizedCurrent && !usesTemplate && positiveSlots.length === 0) {
+  if (normalizedCurrent && !usesTemplate && (field === 'personalHistory' || positiveSlots.length === 0)) {
     return normalizedCurrent;
   }
 
@@ -183,9 +280,12 @@ export function collectHistoryRecordTemplateChanges(
     if (!included.has(field)) return;
     const value = record[field] || '';
     if (!isHistoryRecordTemplate(field, value)) return;
+    const personalHabits = field === 'personalHistory' ? collectPersonalHabitValues(value) : {};
     getFieldSlots(field)
       .filter((slot) => slot.defaultValue === '否认')
-      .filter((slot) => value.includes(`{有}${slot.label}`) || stripHistoryRecordTemplateMarkers(value).includes(`有${slot.label}`))
+      .filter((slot) => isPersonalHabitSlot(slot)
+        ? personalHabits[slot.key] === '有'
+        : value.includes(`{有}${slot.label}`) || stripHistoryRecordTemplateMarkers(value).includes(`有${slot.label}`))
       .forEach((slot) => {
         items.push({
           field,
@@ -217,10 +317,18 @@ export function collectHistoryRecordTemplateSlotValues(
   (Object.keys(record) as HistoryRecordTemplateField[]).forEach((field) => {
     if (!included.has(field)) return;
     const source = record[field] || '';
+    if (field === 'personalHistory') {
+      const habits = collectPersonalHabitValues(source);
+      (Object.keys(habits) as PersonalHabitKey[]).forEach((slotKey) => {
+        const value = habits[slotKey];
+        if (value) values.push({ field, slotKey, value });
+      });
+    }
     if (!isHistoryRecordTemplate(field, source)) return;
     const normalized = stripHistoryRecordTemplateMarkers(source);
 
     getFieldSlots(field).forEach((slot) => {
+      if (isPersonalHabitSlot(slot)) return;
       if (slot.defaultValue === '体健') {
         if (source.includes(`${slot.label}{体健}`) || normalized.includes(`${slot.label}体健`)) {
           values.push({ field, slotKey: slot.key, value: '体健' });

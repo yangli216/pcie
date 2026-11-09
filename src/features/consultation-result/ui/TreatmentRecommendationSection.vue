@@ -9,7 +9,6 @@ import {
   getTreatmentNumericFieldConstraintText,
   getTreatmentNumericFieldIssue,
   getMedicineManufacturer,
-  getMatchedOrderServiceId,
   getTreatmentRemarkLength,
   isTreatmentNumericInputAllowed,
   isTreatmentRemarkOverLimit,
@@ -20,7 +19,6 @@ import type { SecondarySelectorField } from '../model/useSecondarySelector';
 import { buildAuxiliaryRecommendationGroups } from '../model/auxiliaryRecommendationPresentation';
 import ManualMatchPicker, { type ManualMatchCandidate } from './ManualMatchPicker.vue';
 import MedicationPrescriptionHistoryReview from './MedicationPrescriptionHistoryReview.vue';
-import { DrugInstructionPopover } from '@features/knowledge';
 import TreatmentItemEditor from './TreatmentItemEditor.vue';
 import TreatmentRecommendationCard from './TreatmentRecommendationCard.vue';
 
@@ -41,7 +39,6 @@ type TreatmentRecommendationAttributeOption = Pick<UsageOption, 'key' | 'text'> 
 
 const props = withDefaults(defineProps<{
   section: TreatmentRecommendationSectionData;
-  patientAgeText?: string;
   selectedCount?: number;
   totalCount?: number;
   layoutVariant?: TreatmentRecommendationSectionLayout;
@@ -889,15 +886,6 @@ function getFeedbackSubmittedLabel(item: TreatmentRecommendation): string {
             @toggle-rejected="emit('toggleRejected', item, $event)"
             @toggle-editor="emit('toggleTreatmentEditor', item, $event)"
           >
-        <template v-if="item.type === 'medicine'" #summary-action>
-          <DrugInstructionPopover
-            :product-id="getMatchedOrderServiceId(item)"
-            :product-name="item.matchedItem?.name || item.name"
-            :drug-spec="getTreatmentSpec(item)"
-            :producer="getMedicineManufacturer(item)"
-            :patient-age-text="patientAgeText"
-          />
-        </template>
         <template #actions>
           <button
             v-if="showBodySiteChip && item.type === 'exam'"

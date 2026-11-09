@@ -158,24 +158,22 @@ describe('generateChronicRefillRecord', () => {
     });
   });
 
-  it('keeps the immediate record visible while recommendations load and merges them without a second model call', async () => {
-    let resolveRecommendations!: (value: Awaited<ReturnType<typeof loadChronicExaminationRecommendations>>) => void;
-    vi.mocked(loadChronicExaminationRecommendations).mockReturnValue(new Promise((resolve) => { resolveRecommendations = resolve; }));
+  it('does not request or merge Xiaoshan chronic examination recommendations', async () => {
     const patient = buildPatientContext({ payload: { patientId: 'p', visitId: 'v' } })!;
     const candidate = assessChronicRefillCandidate({ patientId: 'p', visits: [
       { visitTime: Date.now() - 86400000, diagnoses: ['高血压'], medications: [] },
     ] })!;
     const partial = vi.fn();
-    const pending = generateChronicRefillRecord(patient, candidate, { onPartial: partial });
+    const result = await generateChronicRefillRecord(patient, candidate, { onPartial: partial });
     expect(partial).toHaveBeenCalled();
-    await vi.waitFor(() => expect(chatStream).toHaveBeenCalledOnce());
-    resolveRecommendations({ reminders: { sourceStatus: 'ready', catalogStatus: 'ready', historyStatus: 'complete', regionalHistoryStatus: 'not_connected',
-      items: [{ name: '心电图', matchStatus: 'matched', recentReports: [] }] },
-      treatments: [{ type: 'examination', name: '心电图', text: '健康处方推荐', selected: false, matchedItem: { id: 'exam', name: '心电图' }, matchStatus: 'exact' }] });
-    const result = await pending;
-    expect(result.treatments).toContainEqual(expect.objectContaining({ type: 'examination', name: '心电图', selected: false }));
-    expect(result.chronicExaminationReminders?.items).toHaveLength(1);
-    expect(result.recommendationPolicy?.autoFetchTreatments).toBe(false);
+    expect(loadChronicExaminationRecommendations).not.toHaveBeenCalled();
+    expect(result.treatments.every((item) => item.type === 'medicine')).toBe(true);
+    expect(result).not.toHaveProperty('chronicExaminationReminders');
+    expect(result.recommendationPolicy).toEqual({
+      autoFetchTreatments: false,
+      allowTreatmentRefresh: false,
+      allowedTreatmentTypes: ['medicine'],
+    });
     expect(chatStream).toHaveBeenCalledOnce();
     expect(result.historyOfPresentIllness).not.toContain('心电图');
   });
@@ -360,7 +358,7 @@ describe('generateChronicRefillRecord', () => {
     expect(result.recommendationPolicy).toEqual({
       autoFetchTreatments: false,
       allowTreatmentRefresh: false,
-      allowedTreatmentTypes: ['medicine', 'examination', 'labTest'],
+      allowedTreatmentTypes: ['medicine'],
     });
     expect(onProgress.mock.calls.map(([stage]) => stage)).toEqual([
       'generating-content',

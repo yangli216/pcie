@@ -362,6 +362,7 @@ describe('buildRecordConfirmedPayload outpatientRecord', () => {
       现病史文本: '受凉后出现咳嗽。',
       现病史: '受凉后出现咳嗽。',
       个人史文本: '否认吸烟史。',
+      吸烟史标志: '0',
     });
     expect(payload).not.toHaveProperty('diagList');
     expect(payload.orderList).toEqual([]);

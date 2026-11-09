@@ -193,15 +193,6 @@ export function getOrderFgSkintest(rec: TreatmentRecommendation): string {
   return (rec.matchedItem?.fgSkintest || readFirstString(raw, ['fgSkintest']) || '0').trim() || '0';
 }
 
-export function getOrderMutualRecognitionCode(rec: TreatmentRecommendation): string {
-  const raw = getMatchedItemRaw(rec);
-  const matchedItem = rec.matchedItem as { mutualRecognitionCode?: unknown } | undefined;
-  return (
-    readFirstString(matchedItem as Record<string, unknown> | undefined, ['mutualRecognitionCode'])
-    || readFirstString(raw, ['mutualRecognitionCode'])
-  ).trim();
-}
-
 // ===== diagList =====
 
 export interface BuildDiagListInput {
@@ -355,8 +346,10 @@ export function buildOrderListItem(
     ...base,
     ...(partId ? { idPart: partId } : {}),
     ...(jsonField ? { jsonField } : { jsonField: '{}' }),
+    // 白云已移除检验检查互认决策流程：检查 / 检验项保留 wire 键位但固定空字符串
+    // （api.md 既有语义“空字符串表示不参与互认”），不透传目录真实编码，避免触发宿主互认中间态。
     ...((rec.type === 'exam' || rec.type === 'lab_test')
-      ? { mutualRecognitionCode: getOrderMutualRecognitionCode(rec) }
+      ? { mutualRecognitionCode: '' }
       : {}),
   };
 }
@@ -471,6 +464,10 @@ export function buildRecordConfirmedPayload(
   } = input;
 
   const resolvedFamilyHistory = familyHistory || outpatientRecord?.familyHistory || '';
+  // This is the doctor's final field, including an explicit deletion. Draft
+  // generation may prefill a template; final submission must not recreate it.
+  const confirmedPersonalHistory = (outpatientRecord?.personalHistory ?? personalHistory)
+    ?.replace(/^\s*个人史[：:]?\s*/u, '');
   const includeFemaleHistory = isFemaleHistoryEligible({
     gender: patientGender,
     ageText: patientAgeText,
@@ -481,7 +478,7 @@ export function buildRecordConfirmedPayload(
         chiefComplaint: outpatientRecord?.chiefComplaint || chiefComplaint,
         historyOfPresentIllness: outpatientRecord?.historyOfPresentIllness || historyOfPresentIllness,
         pastMedicalHistory: outpatientRecord?.pastMedicalHistory || pastMedicalHistory,
-        personalHistory: outpatientRecord?.personalHistory || personalHistory,
+        personalHistory: confirmedPersonalHistory,
         menstrualHistory: includeFemaleHistory
           ? outpatientRecord?.menstrualHistory || menstrualHistory
           : '',
@@ -496,6 +493,9 @@ export function buildRecordConfirmedPayload(
         patientGender,
       })
     : undefined;
+  if (fullOutpatientRecord && typeof confirmedPersonalHistory === 'string') {
+    fullOutpatientRecord.personalHistory = confirmedPersonalHistory;
+  }
   const isScopedWriteback = resultType === 'record-confirmed' && Boolean(writebackScope);
   const selectedRecordFields = new Set<RecordConfirmedWritebackField>(
     isScopedWriteback ? writebackScope?.recordFields || [] : RECORD_CONFIRMED_WRITEBACK_FIELDS,
@@ -542,7 +542,7 @@ export function buildRecordConfirmedPayload(
           chiefComplaint: resolvedChiefComplaint,
           historyOfPresentIllness: resolvedHistoryOfPresentIllness,
           pastMedicalHistory: resolvedPastMedicalHistory,
-          personalHistory: writebackOutpatientRecord?.personalHistory || personalHistory || '',
+          personalHistory: writebackOutpatientRecord?.personalHistory ?? personalHistory ?? '',
           menstrualHistory: resolvedMenstrualHistory,
           maritalReproductiveHistory: resolvedMaritalReproductiveHistory,
           familyHistory: resolvedWritebackFamilyHistory,

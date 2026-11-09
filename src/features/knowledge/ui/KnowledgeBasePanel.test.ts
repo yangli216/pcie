@@ -60,6 +60,13 @@ describe('knowledge workbench production components', () => {
     host.querySelectorAll<HTMLButtonElement>('.source-navigation button')[0]!.click(); await settle();
     expect(host.querySelector('form')).not.toBeNull(); expect(host.querySelector('article')).toBeNull();
   });
+  it('exposes only institution and PMPHAI knowledge sources on this branch', async () => {
+    mount(); await settle();
+    const labels = [...host.querySelectorAll('.source-navigation button')].map((button) => button.textContent);
+    expect(labels).toEqual(['机构资料', '人卫知识']);
+    expect(host.querySelector('.drug-instructions')).toBeNull();
+    expect(host.textContent).not.toContain('药品说明书');
+  });
   it('the existing close event still closes the workbench', async () => {
     const onClose = mount(); await settle(); host.querySelector<HTMLButtonElement>('[aria-label="关闭知识库"]')!.click();
     expect(onClose).toHaveBeenCalledOnce();

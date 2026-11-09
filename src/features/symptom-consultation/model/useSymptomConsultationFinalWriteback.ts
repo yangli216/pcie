@@ -8,10 +8,12 @@ import {
   type OrderItemResolvers,
 } from '../../clinical-result/recordConfirmedPayload';
 import { buildTreatmentPlanSummary } from '../../clinical-result/consultationSubmitPayload';
-import {
-  useMutualRecognitionDecision,
-  type MutualRecognitionFeedbackPayload,
-} from '../../consultation-result/model/useMutualRecognitionDecision';
+
+/** 回执最小形态：与 consultation-reference-feedback 事件 payload 对齐。 */
+export interface SymptomFinalWritebackFeedbackPayload {
+  requestId: string;
+  status: string;
+}
 
 export interface SymptomFinalWritebackPreflightResult {
   ready: boolean;
@@ -44,16 +46,9 @@ export function useSymptomConsultationFinalWriteback(
   const busy = ref(false);
   const pendingRequestId = ref('');
 
-  const mutualRecognition = useMutualRecognitionDecision({
-    resolveConsultationId: options.resolveConsultationId,
-    resolvePendingRequestId: () => pendingRequestId.value,
-    notify: (message, type) => options.notify(message, type === 'error' ? 'error' : 'info'),
-  });
-
   function reset(): void {
     busy.value = false;
     pendingRequestId.value = '';
-    mutualRecognition.clearDialog();
   }
 
   async function submit(): Promise<void> {
@@ -115,12 +110,15 @@ export function useSymptomConsultationFinalWriteback(
     }
   }
 
-  function consumeMutualRecognitionFeedback(payload: MutualRecognitionFeedbackPayload): boolean {
-    return mutualRecognition.handleFeedback(payload);
-  }
-
-  function finalizeFeedback(payload: MutualRecognitionFeedbackPayload): void {
-    if (!pendingRequestId.value || payload.requestId !== pendingRequestId.value || payload.status === 'pending') {
+  // 白云已移除互认决策弹窗：pending（宿主历史互认中间态）是中间态而非终态，
+  // 不得误作成功、不得写成"已由 HIS 保存失败"，也不清算等待态；
+  // 保持 busy 与 requestId 关联，等待同 requestId 的真实 success/failed/cancelled，
+  // 其间 submit() 的 busy 守卫阻断重复提交；等待期页面原有退出/新接诊 reset 渠道仍可安全结束。
+  function finalizeFeedback(payload: SymptomFinalWritebackFeedbackPayload): void {
+    if (!pendingRequestId.value || payload.requestId !== pendingRequestId.value) {
+      return;
+    }
+    if (payload.status !== 'success' && payload.status !== 'failed' && payload.status !== 'cancelled') {
       return;
     }
     pendingRequestId.value = '';
@@ -131,9 +129,7 @@ export function useSymptomConsultationFinalWriteback(
   return {
     busy,
     pendingRequestId,
-    mutualRecognition,
     submit,
-    consumeMutualRecognitionFeedback,
     finalizeFeedback,
     reset,
   };

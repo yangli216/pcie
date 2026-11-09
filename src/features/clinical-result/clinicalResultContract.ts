@@ -150,7 +150,6 @@ export interface ClinicalResultInput {
   recommendationPolicy?: ClinicalResultRecommendationPolicy;
   /** 慢病复诊结果页的回写前核查；推荐值不等于医生已确认。 */
   chronicRefillReview?: ChronicRefillReviewPlan;
-  chronicExaminationReminders?: ChronicExaminationReminders;
   /** 共享结果页的分区流式生成状态；非流式场景可不提供。 */
   generation?: ClinicalResultGenerationState;
   channel?: ClinicalResultChannel;

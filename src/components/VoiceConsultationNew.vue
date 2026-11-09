@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ChronicExaminationReminderPanel from '@features/consultation-result/ui/ChronicExaminationReminderPanel.vue';
 import { useFemaleHistoryFields } from '@features/consultation-result/model/useFemaleHistoryFields';
 import { voiceTimingTracker, useVoiceTimingPresentation, restoreVoiceEditorSnapshot } from '@features/voice-consultation';
 import {
@@ -100,6 +99,7 @@ import {
   type ClinicalRecordFactSuggestion,
   type MedicinePrimaryField,
   type ManualMatchRawCandidate,
+  getAllowedIntentTreatments,
 } from '@features/clinical-result';
 import { requestDiagnosisChecklist } from '@features/clinical-result/api/diagnosisChecklistRequest';
 import {
@@ -134,7 +134,6 @@ import {
   DiagnosisRecommendationCard,
   isDoctorOwnedTreatment,
   mergeGeneratedTreatmentBranches,
-  MutualRecognitionDecisionHost,
   TreatmentGenerationPlaceholder,
   TreatmentRecommendationSection,
   buildClinicalResultIntentRecordSnapshot,
@@ -168,7 +167,6 @@ import {
   useMedicalDictionaries,
   useMedicineFieldEditing,
   useMedicineUsageSearch,
-  useMutualRecognitionDecision,
   useReasonTooltipState,
   useRecommendationFeedbackPopover,
   useRelatedDiagnosisDropdown,
@@ -328,7 +326,6 @@ const writebackStatus = useWritebackStatus({
 });
 const {
   waitingWritebackFeedback,
-  pendingWritebackRequestId,
   isWritebackBusy,
   writebackBannerTone,
   writebackBannerText,
@@ -528,12 +525,6 @@ const displayedTreatmentEmptyText = computed(() => (
 
 const getPatientAnchorId = (): string => patientAnchorId.value;
 const resolveConsultationId = (): string => consultationId.value;
-
-const mutualRecognition = useMutualRecognitionDecision({
-  resolveConsultationId,
-  resolvePendingRequestId: () => pendingWritebackRequestId.value,
-  notify: showToast,
-});
 
 function getFactRecord() {
   return {
@@ -1321,12 +1312,6 @@ function buildIntentResultKey(result: ClinicalResultInput | VoiceIntentResult): 
   });
 }
 
-function getAllowedIntentTreatments(result: ClinicalResultInput): ClinicalResultInput['treatments'] {
-  const allowed = result.recommendationPolicy?.allowedTreatmentTypes;
-  if (!allowed) return result.treatments;
-  return result.treatments.filter((item) => item.sourceType === 'explicit' || allowed.includes(item.type));
-}
-
 function getManualMatchPickerCandidates(rec: TreatmentRecommendation): ManualMatchCandidate[] {
   return getManualMatchCandidates(rec).map(toManualMatchCandidateView);
 }
@@ -1672,7 +1657,7 @@ useConsultationReferenceFeedbackListener<ReferenceFeedbackPayload>({
       action: payload.action,
       referenceType: payload.referenceType,
     });
-    if (mutualRecognition.handleFeedback(payload)) return;
+    // 白云已移除互认决策弹窗：宿主历史 pending 中间态由原回写状态机按未完成清算
     applyWritebackFeedback(payload);
   },
 });
@@ -2317,7 +2302,6 @@ const { resetForIntent } = useClinicalResultIntentReset({
   closeSessionFeedback: () => undefined,
   resetWritebackState: () => {
     resetWritebackState();
-    mutualRecognition.clearDialog();
   },
   resetDiagnosisSelection,
   resetFirstUserLogSnapshot,
@@ -3898,10 +3882,6 @@ useChronicRefillTimingPresentation(() => ({
               已切换主诊断，当前方案仍保留上一版；点击“刷新方案”获取当前诊断方案。
             </div>
 
-            <ChronicExaminationReminderPanel
-              v-if="resultChannel === 'chronic-refill' && intentResult?.chronicExaminationReminders"
-              :reminders="intentResult.chronicExaminationReminders"
-            />
             <CurrentInformationMedication
               v-if="showCurrentInformationMedication"
               :disabled="currentInformationMedicationDisabled"
@@ -3918,7 +3898,6 @@ useChronicRefillTimingPresentation(() => ({
                   v-if="section.items.length > 0"
                   :data-clinical-section="section.type"
                   :section="section"
-                  :patient-age-text="patientAge"
                   :selected-count="section.items.filter((item) => item.selected).length"
                   :total-count="section.items.length"
                   :requires-manual-match-before-select="requiresManualMatchBeforeSelect"
@@ -4082,8 +4061,6 @@ useChronicRefillTimingPresentation(() => ({
       @close="closeSupplementDialog"
       @confirm="handleSupplementRegenerate"
     />
-
-    <MutualRecognitionDecisionHost :decision="mutualRecognition" />
 
     <div v-if="showCancelConfirm" class="confirm-overlay" @click.self="closeCancelConfirm">
       <div class="confirm-dialog pane-card" role="dialog" aria-modal="true" aria-labelledby="voice-cancel-title">

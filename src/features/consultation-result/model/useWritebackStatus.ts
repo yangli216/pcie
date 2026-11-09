@@ -42,6 +42,8 @@ export function useWritebackStatus(options: Options = {}) {
   const writebackBannerTone = computed<'info' | 'error'>(() => {
     if (waitingWritebackFeedback.value) return 'info';
     if (lastWritebackFeedback.value?.status === 'failed') return 'error';
+    // 白云已移除互认决策：宿主历史 pending 中间态按未完成清算，不误作成功
+    if (lastWritebackFeedback.value?.status === 'pending') return 'error';
     return 'info';
   });
   const writebackBannerText = computed(() => {
@@ -51,8 +53,11 @@ export function useWritebackStatus(options: Options = {}) {
     if (lastWritebackFeedback.value?.status === 'failed') {
       return lastWritebackFeedback.value.message || options.failedMessage || 'HIS 回写失败，请根据提示修改后重试。';
     }
+    if (lastWritebackFeedback.value?.status === 'pending') {
+      return lastWritebackFeedback.value.message || 'HIS 返回未完成状态，本次回写未完成，请根据提示修改后重试。';
+    }
     if (lastWritebackFeedback.value?.status === 'cancelled') {
-      return lastWritebackFeedback.value.message || '本次互认决策已取消，当前内容仍保留。';
+      return lastWritebackFeedback.value.message || '本次回写已取消，当前内容仍保留。';
     }
     return '';
   });
@@ -98,6 +103,14 @@ export function useWritebackStatus(options: Options = {}) {
       referenceType: payload.referenceType || payload.action || 'batch',
       timestamp: payload.timestamp || Date.now(),
     };
+    // 白云已移除互认决策：宿主历史 pending 是中间态，不得误作成功也不得写成失败；
+    // 保持等待态与 requestId 关联，透传宿主 message 作中立提示，等待同 requestId 真实终态。
+    if (safePayload.status === 'pending') {
+      if (payload.message) {
+        pendingWritebackMessage.value = payload.message;
+      }
+      return safePayload;
+    }
     lastWritebackFeedback.value = safePayload;
     waitingWritebackFeedback.value = false;
     pendingWritebackRequestId.value = '';

@@ -10,6 +10,7 @@ export interface WritebackFeedbackControllerOptions {
   onCancelled?: (payload: WritebackFeedbackPayload) => void;
   successMessage?: string;
   failedMessage?: string;
+  pendingMessage?: string;
 }
 
 export function useWritebackFeedbackController(options: WritebackFeedbackControllerOptions) {
@@ -17,6 +18,17 @@ export function useWritebackFeedbackController(options: WritebackFeedbackControl
     const safePayload = options.applyFeedback(payload);
     if (!safePayload) {
       return null;
+    }
+
+    if (safePayload.status === 'pending') {
+      // 白云已移除互认决策：宿主历史 pending 是中间态，不是终态，
+      // 只发中立"尚未完成"提示，不调 onSuccess/onFailed/onCancelled，
+      // 保持等待态直到同 requestId 的真实终态到达。
+      options.notify?.(
+        safePayload.message || options.pendingMessage || 'HIS 正在处理本次回写，请等待结果回执。',
+        'info',
+      );
+      return safePayload;
     }
 
     if (safePayload.status === 'success') {
@@ -27,7 +39,7 @@ export function useWritebackFeedbackController(options: WritebackFeedbackControl
 
     if (safePayload.status === 'cancelled') {
       options.onCancelled?.(safePayload);
-      options.notify?.(safePayload.message || '本次互认决策已取消，当前内容仍保留。', 'info');
+      options.notify?.(safePayload.message || '本次回写已取消，当前内容仍保留。', 'info');
       return safePayload;
     }
 

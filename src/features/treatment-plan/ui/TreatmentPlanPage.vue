@@ -13,7 +13,6 @@ import {
   submitConsultationUserLog,
 } from '@/services/consultationUserLog';
 import { getPatientContextAnchorId } from '@/utils/patientContext';
-import { resolvePatientAge } from '@/utils/patientProfile';
 import { formatUserFacingError } from '@shared/lib/errorMessages';
 import {
   useBodySiteOptions,
@@ -21,7 +20,6 @@ import {
   useMedicineFieldEditing,
   useMedicineUsageSearch,
   useManualMatchState,
-  MutualRecognitionDecisionHost,
   useMedicalDictionaries,
   useSecondarySelector,
   useTreatmentAttributeSearch,
@@ -890,7 +888,6 @@ onMounted(() => {
               v-for="section in recommendationSections"
               :key="section.key"
               :section="section"
-              :patient-age-text="resolvePatientAge(patient)"
               :selected-count="getGroupSelectedCount(section.itemType)"
               :total-count="section.items.length"
               :is-pharmacy-required="treatmentGates.isPharmacyRequired"
@@ -976,8 +973,6 @@ onMounted(() => {
         </button>
       </div>
     </footer>
-
-    <MutualRecognitionDecisionHost :decision="writeback.mutualRecognition" />
   </div>
 </template>
 

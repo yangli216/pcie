@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildChronicExaminationReminders } from './chronicExaminationReminders';
 import { initClinicalTreatments } from '@features/clinical-result/clinicalResultInitialization';
-import { buildOrderListItem, buildRecordConfirmedPayload, getOrderJsonField, getOrderMutualRecognitionCode } from '@features/clinical-result/recordConfirmedPayload';
+import { buildOrderListItem, buildRecordConfirmedPayload, getOrderJsonField } from '@features/clinical-result/recordConfirmedPayload';
 import type { TreatmentRecommendation } from '@/types/consultation';
 import type { MedicalItem } from '@/services/medicalData';
 
@@ -91,7 +91,8 @@ describe('chronic examination reminders', () => {
       getPartId: rec => rec.matchedItem.idPart || '', getJsonField: getOrderJsonField,
     }));
     expect(orders.map(order => order.idSrv)).toEqual(['srv-hba', 'srv-exam']);
-    expect(orders[0]).toMatchObject({ jsonField: lab.jsonField, mutualRecognitionCode: 'recognition' });
+    // 白云已移除互认决策流程：目录编码只作目录事实，orderList 固定空字符串
+    expect(orders[0]).toMatchObject({ jsonField: lab.jsonField, mutualRecognitionCode: '' });
     expect(orders[1]).toMatchObject({ idPart: 'part', idDeptExec: 'dept' });
   });
   it('deduplicates recommendations without duplicating orders', () => {
@@ -119,8 +120,7 @@ describe('chronic examination reminders', () => {
       getPartId: (rec) => rec.matchedItem.idPart || '', getJsonField: getOrderJsonField,
     }));
     expect(orders).toHaveLength(1);
-    expect(orders[0]).toMatchObject({ idSrv: 'srv-lab', idDeptExec: 'dept', jsonField: lab.jsonField, mutualRecognitionCode: 'recognition' });
-    expect(getOrderMutualRecognitionCode(initialized[1])).toBe('');
+    expect(orders[0]).toMatchObject({ idSrv: 'srv-lab', idDeptExec: 'dept', jsonField: lab.jsonField, mutualRecognitionCode: '' });
     const payload = buildRecordConfirmedPayload({ consultationId: 'current', requestId: 'one-batch',
       chiefComplaint: '高血压复诊配药', historyOfPresentIllness: '医生确认的随访内容', pastMedicalHistory: '',
       diagList: [], orderList: orders, extra: { referenceType: 'batch', action: 'batch', referenceStatus: 'pending' }, precautions: '医生编辑的监测建议',

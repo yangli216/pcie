@@ -21,7 +21,6 @@ type TreatmentPlanAttributeOption = { key: string; text: string; mcode?: string 
 
 const props = defineProps<{
   section: TreatmentPlanRecommendationSection;
-  patientAgeText?: string;
   selectedCount: number;
   totalCount: number;
   isPharmacyRequired: (item: TreatmentRecommendation) => boolean;
@@ -106,7 +105,6 @@ function getDisplayTreatmentMatchLabel(item: TreatmentRecommendation): string {
 <template>
   <TreatmentRecommendationSection
     :section="section"
-    :patient-age-text="patientAgeText"
     :selected-count="selectedCount"
     :total-count="totalCount"
     layout-variant="worklist"

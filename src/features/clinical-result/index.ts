@@ -46,6 +46,8 @@ export type {
   ClinicalResultTreatment,
 } from './clinicalResultContract';
 
+export { getAllowedIntentTreatments } from './intentTreatmentScope';
+
 export {
   FEMALE_HISTORY_MAX_AGE_YEARS_EXCLUSIVE,
   FEMALE_HISTORY_MIN_AGE_YEARS,
@@ -53,17 +55,6 @@ export {
   resolveFemaleHistoryAgeYears,
 } from './lib/femaleHistoryEligibility';
 export type { FemaleHistoryEligibilityInput } from './lib/femaleHistoryEligibility';
-
-export {
-  buildMutualRecognitionDecisionPayload,
-  normalizeMutualRecognitionItems,
-} from './mutualRecognition';
-export type {
-  BuildMutualRecognitionDecisionPayloadInput,
-  MutualRecognitionDecisionType,
-  MutualRecognitionFeedbackLike,
-  MutualRecognitionItem,
-} from './mutualRecognition';
 
 export {
   buildClinicalRecordFactSuggestionRequest,

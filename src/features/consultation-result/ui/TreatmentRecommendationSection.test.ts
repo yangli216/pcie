@@ -1,7 +1,153 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createApp, nextTick, type App } from 'vue';
 import source from './TreatmentRecommendationSection.vue?raw';
 import cardSource from './TreatmentRecommendationCard.vue?raw';
 import diagnosisCardSource from './DiagnosisRecommendationCard.vue?raw';
+import TreatmentRecommendationSection from './TreatmentRecommendationSection.vue';
+import type { TreatmentRecommendation } from '@/types/consultation';
+
+let app: App | undefined;
+let host: HTMLDivElement | undefined;
+
+afterEach(() => {
+  app?.unmount();
+  app = undefined;
+  host?.remove();
+  host = undefined;
+});
+
+function medicine(patch: Partial<TreatmentRecommendation> = {}): TreatmentRecommendation {
+  return {
+    type: 'medicine',
+    name: '苯磺酸氨氯地平片',
+    reason: '高血压续方',
+    dosage: '5',
+    dosageUnit: 'mg',
+    frequency: '每日一次',
+    route: '口服',
+    days: '28',
+    totalQty: '28',
+    totalUnit: '片',
+    selected: false,
+    ...patch,
+  } as TreatmentRecommendation;
+}
+
+type SectionListeners = Record<string, ReturnType<typeof vi.fn>>;
+
+function mountSection(items: TreatmentRecommendation[], overrides: Record<string, unknown> = {}) {
+  const listeners: SectionListeners = {
+    onToggle: vi.fn(),
+    onToggleManualMatch: vi.fn(),
+    onToggleEditor: vi.fn(),
+  };
+  host = document.createElement('div');
+  document.body.append(host);
+  const props = {
+    section: { type: 'medicine', title: '推荐用药', items },
+    requiresManualMatchBeforeSelect: () => false,
+    getReasonKey: (item: TreatmentRecommendation) => item.name,
+    getTreatmentSpec: () => '',
+    getTreatmentMatchLabel: () => '',
+    hasProbableMatch: () => false,
+    getSuggestedMatchName: () => '',
+    getTreatmentOriginalName: () => '',
+    getEditorKey: (item: TreatmentRecommendation) => item.name,
+    isPharmacyRequired: () => false,
+    getPharmacyDisplay: () => '',
+    hasRequiredPharmacy: () => true,
+    isExecDeptRequired: () => false,
+    getExecDeptDisplay: () => '',
+    hasRequiredExecDept: () => true,
+    getBodySiteDisplay: () => '',
+    hasRequiredBodySite: () => true,
+    frequencyOptions: [],
+    routeOptions: [],
+    shouldShowTreatmentEditor: () => false,
+    isTreatmentEditorExpanded: () => false,
+    isEditableFieldActive: () => false,
+    getEditableFieldKey: (item: TreatmentRecommendation, field: string) => `${item.name}:${field}`,
+    getMedicineFieldDisplay: () => '',
+    getMedicineInlineSummary: () => '5mg 每日一次',
+    isMedicineInventoryChecking: () => false,
+    getMedicineInventoryWarning: () => '',
+    isSecondarySelectorOpen: () => false,
+    getPharmacySearchKeyword: () => '',
+    getFilteredPharmacyOptions: () => [],
+    getExecDeptSearchKeyword: () => '',
+    getFilteredExecDeptOptions: () => [],
+    getBodySiteSearchKeyword: () => '',
+    getFilteredBodySiteOptions: () => [],
+    getInsuranceSearchKeyword: () => '',
+    getFilteredInsuranceOptions: () => [],
+    isManualMatchOpen: () => false,
+    getManualMatchKeyword: () => '',
+    getManualMatchCandidates: () => [],
+    ...overrides,
+    ...listeners,
+  };
+  app = createApp(TreatmentRecommendationSection, props);
+  app.mount(host);
+  return { host, listeners };
+}
+
+async function tick() {
+  await nextTick();
+  await nextTick();
+}
+
+describe('TreatmentRecommendationSection medicine card behavior', () => {
+  it('renders no drug instruction trigger or popover on a matched medicine card', async () => {
+    const { host } = mountSection([medicine({
+      matchedItem: { id: 'med-1', name: '苯磺酸氨氯地平片' },
+      matchStatus: 'exact',
+    })]);
+    await tick();
+    expect(host.textContent).not.toContain('说明书');
+    expect(host.querySelector('.instruction-trigger')).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('.treatment-select-button')).not.toBeNull();
+  });
+
+  it('keeps selection, editing and recent prescription history available for a matched medicine', async () => {
+    const item = medicine({
+      matchedItem: { id: 'med-1', name: '苯磺酸氨氯地平片' },
+      matchStatus: 'exact',
+      recentPrescriptionHistory: {
+        lookbackDays: 90,
+        matchedName: '苯磺酸氨氯地平片',
+        matchedProductId: 'med-1',
+        matchBasis: 'product-id',
+        entries: [{ prescribedAt: Date.parse('2026-09-01T08:00:00+08:00'), name: '苯磺酸氨氯地平片', totalQty: '28', totalUnit: '片' }],
+      },
+    });
+    const { host, listeners } = mountSection([item], {
+      shouldShowTreatmentEditor: () => true,
+      isTreatmentEditorExpanded: () => true,
+    });
+    await tick();
+    host.querySelector<HTMLButtonElement>('.treatment-select-button')!.click();
+    expect(listeners.onToggle).toHaveBeenCalledWith(item);
+    expect(host.querySelector('.editor-shell')).not.toBeNull();
+    expect(host.querySelector('.prescription-history-review')).not.toBeNull();
+    expect(host.textContent).not.toContain('说明书');
+    expect(host.querySelector('.instruction-trigger')).toBeNull();
+  });
+
+  it('keeps manual catalog matching available for an unmatched medicine without the instruction entry', async () => {
+    const item = medicine({ matchedItem: undefined, matchStatus: 'unmatched' });
+    const { host, listeners } = mountSection([item]);
+    await tick();
+    const matchButton = host.querySelector<HTMLButtonElement>('.manual-match-btn')!;
+    expect(matchButton.textContent).toContain('匹配院内药品');
+    matchButton.click();
+    expect(listeners.onToggleManualMatch).toHaveBeenCalledWith(item, expect.anything());
+    expect(host.querySelector('.instruction-trigger')).toBeNull();
+    expect(host.textContent).not.toContain('说明书');
+  });
+});
+
 
 describe('TreatmentRecommendationSection match adjustment', () => {
   it('allows matched auxiliary items to change while limiting medicines to initial catalog alignment', () => {

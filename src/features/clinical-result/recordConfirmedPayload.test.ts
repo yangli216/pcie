@@ -74,8 +74,9 @@ describe('record confirmed mutual recognition code', () => {
     });
   });
 
-  it('keeps the code for examination and lab items', () => {
-    const item = {
+  it('submits exam and lab orders with an empty recognition code even when the catalog carries one', () => {
+    // 白云已移除互认决策流程：orderList 不透传目录真实互认编码，避免触发宿主互认中间态
+    const labItem = {
       type: 'lab_test',
       name: '血常规',
       reason: '辅助判断感染',
@@ -83,15 +84,28 @@ describe('record confirmed mutual recognition code', () => {
         id: 'LAB-1',
         name: '血常规',
         sdSrv: '41',
+        mutualRecognitionCode: 'B32R1WZZZ-00',
         raw: { mutualRecognitionCode: 'B32R1WZZZ-00' },
       },
     } satisfies TreatmentRecommendation;
+    const examItem = {
+      type: 'exam',
+      name: '胸部CT',
+      reason: '辅助判断',
+      matchedItem: {
+        id: 'EXAM-1',
+        name: '胸部CT',
+        sdSrv: '31',
+        raw: { mutualRecognitionCode: 'B32R1WZZZ-01' },
+      },
+    } satisfies TreatmentRecommendation;
 
-    expect(buildOrderListItem(item, resolvers)).toMatchObject({
+    expect(buildOrderListItem(labItem, resolvers)).toMatchObject({
       idSrv: 'LAB-1',
       sdSrv: '41',
-      mutualRecognitionCode: 'B32R1WZZZ-00',
+      mutualRecognitionCode: '',
     });
+    expect(buildOrderListItem(examItem, resolvers)).toHaveProperty('mutualRecognitionCode', '');
   });
 
   it('writes an empty string when a check item does not participate in recognition', () => {

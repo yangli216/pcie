@@ -120,7 +120,7 @@
 
 1. HIS / PHIS 通过 WebSocket 收到 `record-confirmed` 或 `reference-request`
 2. 收到 `record-confirmed` 时，读取 `requestId`、`writebackScope` 与 `referenceType/action = batch`；只处理 payload 中真实出现的 `outpatientRecord / diagList`，未出现范围保持 PHIS 原值；`orderList` 始终为数组，`writebackScope.orderTypes = []` 且 `orderList = []` 表示本次不处理医嘱
-3. 收到 `reference-request` 时，若存在 `recognitionDecision`，按原 `record-confirmed` 的互认中间决策继续保存；否则读取 `action/referenceType`、`referenceItems`，按引用对象类型处理历史或单项引用
+3. 收到 `reference-request` 时，读取 `action/referenceType`、`referenceItems`，按引用对象类型处理历史或单项引用。当前线（白云）已移除检验检查互认决策流程，桌面端不会发送 `recognitionDecision`；若历史宿主逻辑仍保留该分支，可按兼容逻辑处理但不会收到新请求
 4. 处理成功或失败后，**必须**调用 `POST /api/consultation/reference-feedback`
 5. `全医慧助（PCIE）` 收到回执后会更新当前页面状态，并通过 WebSocket 事件流推送 `reference-feedback`
 
@@ -214,27 +214,17 @@ PHIS                                全医慧助（PCIE）
  |                                       |  回写完成
 ```
 
-`reference-request` 仍可能出现在历史兼容、单项引用，以及检验检查互认的医生中间决策场景；它不会替代当前一键回写的首条 `record-confirmed`。
+`reference-request` 仍可能出现在历史兼容与单项引用场景；它不会替代当前一键回写的首条 `record-confirmed`。
 
-#### 5.3.1 检验检查互认中间决策
+#### 5.3.1 检验检查互认中间决策（当前线已移除）
 
-当 `record-confirmed.orderList` 中的检查 / 检验项目命中 PHIS 可互认报告时，PHIS 不立即保存，而是通过同一回执接口返回中间态：
+白云线已移除检验检查互认决策流程：`record-confirmed.orderList` 中的检查 / 检验项目固定携带 `mutualRecognitionCode: ""`（不参与互认），桌面端不再透传目录中的真实互认编码，检查 / 检验一律随普通医嘱直接保存。
 
-1. PHIS 调用 `sendFeedback(requestId, "pending", "存在可互认的检验检查项目，请医生在智医端决策", recognizableItems)`；`requestId` 必须与原 `record-confirmed` 一致。
-2. 全医慧助保持原回写等待状态，弹出互认决策框。医生可部分勾选项目并选择互认、不互认或取消。
-3. 全医慧助通过 WebSocket 结果流发送一条 `reference-request`，仍使用原 `requestId`，并携带 `recognitionDecision`。
-4. PHIS 根据决策执行保存，再调用 `sendFeedback` 返回最终 `success / failed / cancelled`。
+1. 桌面端不会主动发起互认查询、不会弹出互认决策框，也不会发送 `reference-request + recognitionDecision`（不伪造医生互认 / 不互认 / 取消决定）。
+2. 若宿主仍按历史逻辑对个别请求返回 `status = pending`（含 `recognizableItems`），桌面端把它视为中间态而非终态：保持原回写等待态并继续关联原 `requestId`，以中立"尚未完成 / 请在 HIS 处理"提示（宿主 `message` 优先原样透传）告知医生；不宣告成功、不写成保存失败、不清空等待态、不允许在等待期重复提交产生新请求。医生可通过页面既有的退出 / 放弃 / 取消 / 新接诊渠道安全结束本次等待。同一 `requestId` 随后到达的真实 `success / failed / cancelled` 必须被接受且只收尾一次（相同终态重复不重复收尾）；仅当新请求已经开始（真实终态或会话切换之后）时，旧 `requestId` 的 pending / 终态才被身份校验隔离，不得覆盖新请求状态。
+3. 最终 `success / failed / cancelled` 回执仍按原 `requestId` 进入原回写状态机收尾。
 
-```text
-PHIS                                全医慧助（PCIE）
- |  <-- record-confirmed (requestId=R)    |
- |  sendFeedback(R, pending, items) ----> |
- |                                       |  医生部分勾选并决策
- |  <-- reference-request                |
- |      recognitionDecision, requestId=R |
- |  sendFeedback(R, success/failed/      |
- |               cancelled, savedItems)->|  最终收尾
-```
+历史协议（已不在当前线触发，仅供宿主兼容参考）：`record-confirmed.orderList` 命中可互认报告时，宿主曾以 `sendFeedback(requestId, "pending", …, recognizableItems)` 返回中间态，桌面端弹出互认决策框后以同一 `requestId` 回发 `reference-request + recognitionDecision`，宿主再返回最终 `success / failed / cancelled`。
 
 ### 5.4 联调日志与 traceId
 
@@ -1767,7 +1757,7 @@ ws://127.0.0.1:8081/api/consultation/events/ws
       "idSrv": "642546e0fc69e81ae058f3ad",
       "idDeptExec": "63e0bd493c6f495f34444b69",
       "jsonField": "{\"idLisCategory\":\"63e1e5f362f1a02fb8e76ad8\",\"fgCombination\":\"1\"}",
-      "mutualRecognitionCode": "B32R1WZZZ-00"
+      "mutualRecognitionCode": ""
     },
     {
       "amount": 1,
@@ -1833,6 +1823,7 @@ ws://127.0.0.1:8081/api/consultation/events/ws
 8. 为兼容 PHIS 既有的顶层病历字段读取方式，选择 `precautions` 时 `record-confirmed` 同时返回顶层 `precautions`，其值与 `outpatientRecord.precautions` 完全一致；未选择时两处都不出现。主诉、现病史、既往史、月经史和家族史的顶层兼容字段同样只在对应 record field 被选择时出现；男性患者或月经史为空时不得出现 `menstrualHistory`。
 9. 没有 `writebackScope` 的历史客户端仍按完整回写契约处理，继续携带完整 `outpatientRecord`、`diagList` 与 `orderList`；PHIS 不得要求旧版本补传 scope。
 10. 固定既往史、个人史、家族史模板在桌面端编辑时使用 `{体健}` / `{否认}` / `{有}` 状态槽位；为兼容既有 PHIS，顶层病历字段和 `outpatientRecord` 中发送的是去掉花括号后的自然文本。若医生选择回写的病史字段中存在由明确上下文改为 `{有}` 的槽位，payload 额外携带 `recordTemplateChanges`；PHIS 应优先按 `field + slotKey` 精确更新对应模板值。未选字段不出现在变化清单中；没有变化时整个对象省略。旧 PHIS 可忽略此新增对象并继续读取自然文本。
+   个人史提交保留医生当前正文（含显式空字符串），不在 `record-confirmed` 构造时重新填充模板；`outpatientRecord.personalHistory` 与 `emrFieldValues["个人史文本"]` 来自同一个最终值，仅去除可选的个人史字段前缀和状态花括号。仅明确的患者本人烟酒肯定／否定分别映射到既有 `吸烟史标志/饮酒史标志` 的 `1/0`；共享否定的并列项、逗号和转折须按各自语义作用范围处理；半角/全角斜线分隔的命名槽位独立解释其值。他人陈述、被动暴露不作为患者主动烟酒史，相邻明确本人事实不得一并丢弃。未知、未提及或已清空时省略对应标志；生成阶段既有默认模板的显式槽位仍按原规则投影。`recordTemplateChanges` 仅描述最终正文仍存在的阳性模板槽位，不恢复已被医生删除或否定的旧变化，不新增 wire 字段。
 11. `physicalExam` 固定以 `T:{体温}℃ P:{脉搏}次/分 R:{呼吸}次/分 Bp:{收缩压}/{舒张压}mmHg。` 槽位开头；对话、结构化问诊或本次 HIS 上下文有明确数值时，各槽位分别替换为带花括号的值。花括号是 PHIS 体格检查字段标记，不等同于已确认状态。选择回写体格检查且至少一个槽位已有数值时，payload 额外携带 `physicalExamVitalSigns`；未选择体格检查或仍全部为具名占位词时省略该对象。
 12. `emrFieldValues` 始终是扁平的 `{ [data-id]: 绑定值 }`，只展开本次 `writebackScope.recordFields` 已选病历字段。标准正文同时覆盖 PHIS 当前兼容 data-id，例如主诉覆盖 `主诉/主诉文本`、现病史覆盖 `门诊现病史文本/现病史文本/现病史`；选择既往史、个人史或家族史时，在保留兼容文本字段的同时完整展开相应固定结构槽位，`平素体健` 写 `平素: "1"`，阳性写 `"1"`，阴性写 `"0"`。结构名称按当前 PHIS 模板精确映射，例如吸烟史写 `吸烟史标志`，家族重大遗传病史写 `家族病史标志`。传染病阳性的显示文本虽为“患有”，直接绑定值仍为 `"1"`。体格检查保留 `体格检查` 完整正文；明确生命体征分别展开为 `体温/脉搏/呼吸/收缩压/舒张压`，剥离固定 T/P/R/BP 片段、身高/体重/腰围测量槽位，以及正常意识/精神/病容表述（如神清、精神佳、无病容；明确异常保留）后的描述性查体正文同时写入 `其他体格检查/其他体格检查文本`。剩余正文为空时省略这两个字段，不能用空值清除 PHIS 原内容。PHIS 可直接调用 `medEleDatabinds(data.emrFieldValues)`，无需再次解析正文、`recordTemplateChanges` 或 `physicalExamVitalSigns`。未选择字段不会出现在对象中，不得在 PHIS 侧补空值。
 13. `prescriptionAttributes.chronicLongTerm = true` 只允许出现在 `chronic-refill` 慢病复诊渠道、本次 `orderList` 至少包含一项已选药品且 HIS 当前患者签约状态明确为已签约时；它是跨 HIS 的中性处方头语义，不是药品明细字段。未签约、签约状态未知、普通语音、症状问诊、独立诊疗方案以及无药回写必须省略该对象并按普通处方处理。PHIS 收到后仍须复用 `searchByIdPiMB` 的签约判定，并校验本次正式诊断是否命中院内慢病长处方诊断配置；校验通过后映射为普通西药 / 中成药处方头 `slowMedicine = "1"`，失败必须回执失败，不得保存成普通处方。后续打印以落库的处方头标志选择慢病长处方版式。
@@ -1963,11 +1954,11 @@ $env.doctorStationEventBus.$on("updateDraftEMR", (data) => {
 | :--- | :--- | :--- |
 | `idPart` | String | 检查部位 ID，检查项目必填 |
 | `jsonField` | String | 检验附加 JSON，检验项目必填且不能是空对象，常见为 `idLisCategory`、`fgCombination` 等组合信息 |
-| `mutualRecognitionCode` | String | 检验检查互认编码；检查 / 检验项目必传，原样来自 `queryAvailableExamLabItems`。空字符串表示该项目不参与互认；处置项目不传 |
+| `mutualRecognitionCode` | String | 检验检查互认编码；检查 / 检验项目必传。当前线（白云）已移除互认决策流程，桌面端固定传空字符串表示不参与互认，不再透传目录中的真实编码；处置项目不传 |
 
 #### 成功响应: 引用请求（历史/单项引用）
 
-> 当前一键回写首条请求使用上方 `record-confirmed` 契约；`reference-request` 保留给历史兼容、单项引用，以及检验检查互认的医生中间决策。若 `referenceType` 为 `batch` 且存在 `recognitionDecision`，必须按互认决策处理；否则才按旧批量引用结构处理。
+> 当前一键回写首条请求使用上方 `record-confirmed` 契约；`reference-request` 保留给历史兼容与单项引用。当前线（白云）已移除检验检查互认决策，桌面端不会发送 `recognitionDecision`；宿主若仍保留该兼容分支，只可能收到历史/单项引用请求。
 
 ```json
 {
@@ -2142,7 +2133,7 @@ HIS 处理建议：
 2. 建议优先按 `event.id` 做去重；如果 HIS 需要自定义幂等键，可退化到 `event.consultationId + event.requestId + event.type + event.timestamp`。
 3. 判断“这是一条什么回执”时，建议优先看 `event.type + event.payload.referenceType`：
    - `record-confirmed + batch` = 当前一键回写请求，读取 `diagList/orderList` 完成 PHIS 调入确认
-   - `reference-request + batch + recognitionDecision` = 检验检查互认决策，必须与原 `record-confirmed` 使用同一 `requestId`
+   - `reference-request + batch + recognitionDecision` = 历史互认决策分支；当前线（白云）已移除互认决策，桌面端不会发送，仅供宿主兼容旧部署
    - `reference-request + batch + referenceItems` = 旧批量引用请求，按每项 `type` 分类处理
    - `reference-request + diagnosis` = 请求 PHIS 保存诊断（单项引用场景）
    - `reference-feedback + batch` = 一键回写或旧批量引用回执；需结合此前的 `requestId` 对应的是 `record-confirmed` 还是 `reference-request`
@@ -2173,11 +2164,13 @@ http://127.0.0.1:8081/api/consultation/reference-feedback
 | `requestId` | String | 是 | 对应 `record-confirmed` 或 `reference-request` 中的请求 ID |
 | `referenceType` | String | 否 | 建议新接入显式传入的引用对象类型，支持 `diagnosis` / `medication` / `examination` / `lab_test` / `procedure` / `batch`；若回执的是 `record-confirmed`，留空时默认按 `batch` 处理 |
 | `action` | String | 否 | 兼容旧版字段，语义与 `referenceType` 相同；`reference-request` 场景下 `referenceType` 与 `action` 至少要传一个；回执 `record-confirmed` 时两者可同时省略 |
-| `status` | String | 是 | `success` / `failed` / `pending` / `cancelled`；`pending` 仅用于检验检查互认的医生中间决策，`cancelled` 表示医生取消互认决策 |
+| `status` | String | 是 | `success` / `failed` / `pending` / `cancelled`；`pending` 历史上仅用于检验检查互认的医生中间决策，当前线（白云）已移除互认流程，桌面端收到 `pending` 视为中间态：保持原回写等待态并继续关联原 `requestId`，以中立提示等待真实终态，不宣告成功、不写成保存失败、不清空等待；`cancelled` 表示取消，历史语义为医生取消互认决策 |
 | `message` | String | 否 | 成功说明或失败原因 |
 | `items` | Array | 否 | `pending` 时为可互认项目列表；最终状态时为本次实际保存项目列表。SDK 第四参数 `recognizableItems/items` 会写入此字段 |
 
-互认 `pending` 请求示例：
+客户端处理最终回写反馈时，提示、最近回执、项目状态和收尾均受同一请求/视图约束：本分支生成的 `record-confirmed-*` 请求只在拥有该待处理 `requestId` 的结果视图生效一次；结果页返回主页后重复终态、旧 ID 或错配 ID 不得再次提示或覆盖新请求状态。宿主继续原样回传收到的 `requestId`，接口字段不变。历史/单项 `reference-request`（包括 `ref-batch-*` 的普通 batch）仍按其真实状态正常反馈，不按 `action=batch` 一律屏蔽。
+
+互认 `pending` 请求示例（历史协议；当前线已移除互认决策，桌面端收到该状态视为中间态，保持等待态与 `requestId` 关联并中立提示等待真实终态，不回应决策）：
 
 ```json
 {
@@ -2260,11 +2253,11 @@ HTTP 状态码：`409`
 1. 当前回执必须匹配“最新一条结果”里的 `requestId`，且其 `resultType` 必须还是 `reference-request` 或 `record-confirmed`。
 2. 如果 HIS 传错 `consultationId` 或 `requestId`，会返回 `409 REFERENCE_REQUEST_MISMATCH`。
 3. `referenceType` 与 `action` 如果同时传入，语义必须一致；不一致时接口会返回 `400 INVALID_REFERENCE_TYPE`。若当前待确认结果是 `record-confirmed` 且两者都未传，服务端会默认按 `batch` 处理。
-4. `status = pending` 只允许用于当前待处理 `record-confirmed + batch` 的检验检查互认中间态；桌面端不会把它当成最终回执。`items` 中至少应包含 `idSrv / naSrv / sdSrv / mutualRecognitionCode`，也兼容 `idCli / naCli / priceSale`。
-5. `status = failed` 时应把失败原因写进 `message`；`status = cancelled` 时应说明医生取消了互认决策。两者都会保留当前页面现场。
+4. `status = pending` 历史上只用于当前待处理 `record-confirmed + batch` 的检验检查互认中间态；当前线（白云）已移除互认决策，桌面端收到 `pending` 不会把它当成终态：保持原回写等待态与 `requestId` 关联、以中立提示等待真实终态，且不会发送任何决策请求。`items` 中至少应包含 `idSrv / naSrv / sdSrv / mutualRecognitionCode`，也兼容 `idCli / naCli / priceSale`。
+5. `status = failed` 时应把失败原因写进 `message`；`status = cancelled` 时应说明取消原因。两者都会保留当前页面现场。
 6. 如果想让页面上的逐项“已引用/引用失败”状态更准确，建议原样回传本次成功或失败的 `items`。
 
-互认决策 `reference-request` payload：
+互认决策 `reference-request` payload（历史协议；当前线已移除，桌面端不会发送，仅供宿主兼容旧部署参考）：
 
 ```json
 {
@@ -2440,7 +2433,7 @@ HIS 侧至少要识别以下 5 类结果：
 | `draft` | 病历草稿回写（早期病历字段） | 回填主诉、现病史等医生站草稿字段 |
 | `final-report` | 【已废弃】完整问诊最终报告（含诊断、治疗方案） | 仅作历史兼容，新链路不产生此类型，统一使用 `record-confirmed` |
 | `record-confirmed` | 问诊一键确认回写（`orderList` 统一格式） | 直接用于 PHIS 调入确认弹窗，不走 `reference-request` 引用请求 |
-| `reference-request` | `全医慧助（PCIE）` 请求 PHIS 保存引用，或回传检验检查互认决策 | 先判断 `recognitionDecision`，否则按历史 / 单项引用处理，并准备最终回执 |
+| `reference-request` | `全医慧助（PCIE）` 请求 PHIS 保存引用；当前线（白云）已移除互认决策发送 | 按历史 / 单项引用处理，并准备最终回执（历史部署兼容的 `recognitionDecision` 分支不会再收到新请求） |
 | `reference-feedback` | PHIS 回执后的最新状态 | 更新医生站状态，提示成功或失败 |
 
 补充说明：
@@ -2449,7 +2442,7 @@ HIS 侧至少要识别以下 5 类结果：
 2. `record-confirmed` 来自问诊结果确认提交或独立诊疗方案推荐提交，其 `diagList` 和 `orderList` 已转换成 PHIS 可直接消费的结构。PHIS 收到后可直接按 `fgMain` 识别主诊断并生成病历诊断行，再按 `sdSrv`、`idSrv`、`idDeptExec`、`doseOnce`、`idFreq`、`idUsge`、`jsonField`、`idPart` 等字段填充调入确认弹窗，无需二次补录。
 3. `reference-request` 和 `reference-feedback` 都可能附带同一份病历上下文，便于 HIS 在当前界面直接处理。
 4. 对回写 / 引用闭环结果，HIS 应继续结合 `resultType + referenceType` 判断具体业务对象，不建议只看 `referenceType`。
-5. 当前一键回写场景下，`record-confirmed.referenceType/action` 为 `batch`；`diagList` 仅在选择诊断时出现，`orderList` 始终出现且仅包含 `writebackScope.orderTypes` 范围内医生已经选中的治疗项目，未选择时为 `[]`。互认决策使用 `reference-request + batch + recognitionDecision`；旧批量引用才使用 `referenceItems` 按 `type` 区分业务类型。单项引用场景下 `referenceType` 仍为具体类型（如 `diagnosis`）。
+5. 当前一键回写场景下，`record-confirmed.referenceType/action` 为 `batch`；`diagList` 仅在选择诊断时出现，`orderList` 始终出现且仅包含 `writebackScope.orderTypes` 范围内医生已经选中的治疗项目，未选择时为 `[]`；检查 / 检验项的 `mutualRecognitionCode` 固定为空字符串（当前线已移除互认决策）。旧批量引用使用 `referenceItems` 按 `type` 区分业务类型；历史部署的互认决策使用 `reference-request + batch + recognitionDecision`，当前线不会发送。单项引用场景下 `referenceType` 仍为具体类型（如 `diagnosis`）。
 
 ## 8. WebSocket 订阅与去重策略
 
@@ -2553,11 +2546,9 @@ HIS 接入完成后，至少验证以下场景：
 
 `emrFieldValues["月经史文本"]` 只承载月经史，`emrFieldValues["婚育史文本"]` 承载婚育史。选中婚育史时，可按明确无冲突事实同时传“婚育状况”：未婚未育=1、已婚未育=2、已婚已育=3、未婚已育=4、离异=5；“怀孕标志”：本次明确未孕=0、本次明确已孕=1。缺失、存疑、冲突或仅有历史孕产事实时省略对应字典，不以年龄、婚育或月经状态推断。PHIS 应用原有 dictionary VALUE/TEXT 转换，不把月经史回填到婚育史，仍沿用单条 record-confirmed + batch / 单次回执。动态模板模式以实际 targetFieldIds 为准，独立保留婚育史章节映射。
 
-### 慢病检查检验提醒一期
+### 慢病检查检验提醒（白云分支不启用）
 
-推荐来自 PCIE Server 鉴权查询的 getUserInfo（与两慢病 getJYJCPro 同源）；仅唯一匹配本次实时目录（含糖化血红蛋白、同型半胱氨酸、常规心电图的固定完整名称同义词）且被医生选择的检查/检验进入现有 record-confirmed.orderList，随本次所选病历合并为同一条 batch，不新增本地 Bridge 出口或私有医嘱字段。保留 idSrv、执行科室、部位、jsonField.idLisCategory 和 mutualRecognitionCode，互认 pending 继续使用同一 requestId。提醒和来源/覆盖范围只用于阅读，不作为 PHIS 病历事实自动回写；随访参考由医生选择增量写入现病史，注意事项依原选择范围回写。
-
-慢病检查检验匹配说明：同义词匹配不改变请求/回写结构；组套、部位或多个同义候选存在歧义时不进入 orderList，完整提醒收进结果页提示图标。匹配成功仍默认未选，必须由医生选择。
+白云分支不调用萧山健康处方 `/v1/client/chronic-disease/examination-recommendations/query`，也不自动生成慢病检查/检验候选，因此不会新增该来源的 `record-confirmed.orderList` 项。通用检查/检验目录、医生明确医嘱和既有 batch 回写契约不变；医生选择的检查/检验仍携带 idSrv、执行科室、部位和 jsonField.idLisCategory，并使用同一 requestId。白云已移除检验检查互认决策流程：`orderList` 检查/检验项的 `mutualRecognitionCode` 固定为空字符串（不参与互认，不透传目录真实编码），不弹互认决策、不发送 `recognitionDecision`。宿主若仍返回互认 `pending` 回执，桌面端视为中间态：保持原回写等待态并继续关联原 requestId，以中立提示等待真实终态，不误作成功、不写成保存失败；同一 requestId 随后真实 success / failed / cancelled 只收尾一次，新请求（真实终态或会话切换后）开始后旧 requestId 才被隔离。
 
 住院病历回填重试关联：首次发送保留入口requestId；如果前一次已成功发送给HIS，医生在失败回执后重试或重新生成后再发送时使用新的requestId。HIS必须按本次record-confirmed的requestId回执，不得复用上一条回执标识。SDK生成Promise仍在首次匹配的record-confirmed时resolve，后续回填尝试沿用事件订阅。字段结构保持原契约。
 

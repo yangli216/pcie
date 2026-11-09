@@ -1,5 +1,4 @@
 import type { KnowledgeCollection, KnowledgeSearchRequest } from '../../src/features/knowledge/api/knowledgeRetrieval';
-import type { DrugInstructionSearchRequest } from '../../src/features/knowledge/api/drugInstructions';
 
 const collection: KnowledgeCollection = {
   id: 'synthetic', name: '工程接入验证资料（合成）', releaseVersion: 'synthetic-v1',
@@ -7,20 +6,11 @@ const collection: KnowledgeCollection = {
 };
 
 export async function regionalGet(path: string) {
-  if (path.startsWith('/v1/knowledge/drug-instructions/')) {
-    const id = path.split('/').pop();
-    return { ...drugs.find(item => item.productId === id), summary: '【药品名称】\r\n合成药品，仅用于工程预览\r\n【用法用量】\r\n此处是合成说明文字，不构成医学建议。\r\n【禁忌】\r\n合成测试章节，请勿用于临床。\r\n【注意事项】\r\n' + '用于检查长文换行、滚动和章节跳转的合成内容。'.repeat(30), createDate: '' };
-  }
   if (path !== '/v1/knowledge/collections') throw new Error('Unexpected preview request');
   return { enabled: true, collections: [collection] };
 }
 
-export async function regionalPost(path: string, request: KnowledgeSearchRequest | DrugInstructionSearchRequest) {
-  if (path === '/v1/knowledge/drug-instructions/search') {
-    const query = request as DrugInstructionSearchRequest;
-    if (query.keyword === '失败') throw { code: 'DRUG_INSTRUCTIONS_UNAVAILABLE' };
-    return { current: query.current, size: query.size, hasMore: false, records: query.keyword === '零命中' ? [] : drugs };
-  }
+export async function regionalPost(path: string, request: KnowledgeSearchRequest) {
   if (path !== '/v1/knowledge/search') throw new Error('Unexpected preview request');
   const query = request as KnowledgeSearchRequest;
   await new Promise(resolve => setTimeout(resolve, 250));
@@ -35,8 +25,3 @@ export async function regionalPost(path: string, request: KnowledgeSearchRequest
     }],
   };
 }
-
-const drugs = [
-  { productId: 'synthetic-A', productName: '合成药品（工程预览）', genericName: '', drugSpec: '合成规格甲', producer: '合成厂家甲', drugForm: '合成剂型', category: '' },
-  { productId: 'synthetic-B', productName: '合成药品（工程预览）', genericName: '', drugSpec: '合成规格乙', producer: '合成厂家乙', drugForm: '合成剂型', category: '' },
-];

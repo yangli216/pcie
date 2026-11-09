@@ -533,8 +533,6 @@
       @close="showKnowledgePanel = false"
     />
 
-    <MutualRecognitionDecisionHost :decision="finalWriteback.mutualRecognition" />
-
   </div>
 </template>
 
@@ -558,7 +556,6 @@ import {
   FactCheckWidget,
 } from '@features/feedback';
 import {
-  MutualRecognitionDecisionHost,
   useClinicalResultUserLogController,
   useClinicalResultWritebackPreflight,
   useConsultationReferenceFeedbackListener,
@@ -1324,6 +1321,8 @@ const handleGenerateDynamicSymptom = async (name: string) => {
 };
 
 const applyReferenceFeedback = (payload: ReferenceFeedbackPayload) => {
+  if (payload.requestId.startsWith('record-confirmed-')
+    && (currentView.value !== 'final_report' || payload.requestId !== finalWriteback.pendingRequestId.value)) return;
   const safePayload = normalizeReferenceFeedbackPayload(payload);
   lastReferenceFeedback.value = safePayload;
   activeReferenceRequest.value =
@@ -1355,12 +1354,14 @@ const applyReferenceFeedback = (payload: ReferenceFeedbackPayload) => {
   if (safePayload.status === 'success') {
     showToast(safePayload.message || 'PHIS 已完成引用保存。', 'success');
   } else if (safePayload.status === 'pending') {
-    showToast(safePayload.message || '等待医生完成检验检查互认决策。', 'info');
+    // 白云已移除互认决策流程：pending 是中间态而非终态，只提示尚未完成，不误作成功/失败
+    showToast(safePayload.message || 'HIS 正在处理本次操作，请等待结果回执。', 'info');
   } else if (safePayload.status === 'cancelled') {
-    showToast(safePayload.message || '本次互认决策已取消。', 'info');
+    showToast(safePayload.message || '本次回写已取消。', 'info');
   } else {
     showToast(safePayload.message || 'PHIS 引用保存失败。', 'error');
   }
+  finalWriteback.finalizeFeedback(safePayload);
 };
 
 /* writeRecordToHIS / confirmDiagnosisSelection removed - template usage commented out */
@@ -1499,11 +1500,7 @@ useOutsideInteraction({
 useConsultationReferenceFeedbackListener<ReferenceFeedbackPayload>({
   resolveConsultationId, isActive: () => props.active !== false && currentView.value !== 'record',
   logContext: 'ConsultationPage',
-  onFeedback: (payload) => {
-    if (finalWriteback.consumeMutualRecognitionFeedback(payload)) return;
-    applyReferenceFeedback(payload);
-    finalWriteback.finalizeFeedback(payload);
-  },
+  onFeedback: applyReferenceFeedback,
 });
 
 onMounted(() => {

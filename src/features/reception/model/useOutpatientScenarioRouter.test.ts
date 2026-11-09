@@ -461,7 +461,7 @@ describe('chronic examination late result isolation', () => {
     await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
     if (change === 'opportunity') session.replaceOpportunity('chronic-refill', null);
     else currentPatient.value = buildPatientContext({ payload: { patientId: change === 'patient' ? 'other' : 'p', visitId: 'new-visit' } });
-    const result = { channel: 'chronic-refill', chronicExaminationReminders: { sourceStatus: 'ready', items: [{ name: '旧患者推荐' }] } };
+    const result = { channel: 'chronic-refill', healthEducation: '旧患者建议' };
     emitPartial?.(result);
     finish(result);
     await pending;

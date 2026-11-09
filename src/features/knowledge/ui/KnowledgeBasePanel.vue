@@ -2,10 +2,9 @@
 import { shallowRef } from 'vue';
 import InstitutionKnowledgePanel from './InstitutionKnowledgePanel.vue';
 import PmphaiKnowledgeEntry from './PmphaiKnowledgeEntry.vue';
-import DrugInstructionsPanel from './DrugInstructionsPanel.vue';
 
 const emit = defineEmits<{ close: [] }>();
-const activeSource = shallowRef<'institution' | 'pmphai' | 'drug'>('institution');
+const activeSource = shallowRef<'institution' | 'pmphai'>('institution');
 </script>
 
 <template>
@@ -17,12 +16,10 @@ const activeSource = shallowRef<'institution' | 'pmphai' | 'drug'>('institution'
     <nav class="source-navigation" aria-label="知识来源">
       <button type="button" :aria-pressed="activeSource === 'institution'" @click="activeSource = 'institution'">机构资料</button>
       <button type="button" :aria-pressed="activeSource === 'pmphai'" @click="activeSource = 'pmphai'">人卫知识</button>
-      <button type="button" :aria-pressed="activeSource === 'drug'" @click="activeSource = 'drug'">药品说明书</button>
     </nav>
     <div class="workbench-content">
       <InstitutionKnowledgePanel v-if="activeSource === 'institution'" />
-      <PmphaiKnowledgeEntry v-else-if="activeSource === 'pmphai'" />
-      <DrugInstructionsPanel v-else />
+      <PmphaiKnowledgeEntry v-else />
     </div>
   </section>
 </template>
