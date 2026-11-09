@@ -181,7 +181,7 @@ pcie/
 |------|------|------|
 | **SettingsPanel.vue** | -- | 设置页根级历史入口和 shell：只编排通用/关于页签、服务端连接保存与重连、窗口置顶、音频采集、缓存/HIS 联调入口和更新检查；通用设置页签位于 `features/settings/ui/SettingsGeneralTab.vue`，音频设备、录音目录、保存快照/dirty 状态分别下沉到 settings model，底部保存状态条位于 `SettingsSaveBar.vue` |
 | **HisIntegrationLogPanel.vue** | -- | HIS 联调日志独立视图面板：筛选、查看详情、复制、导出、清空本地 JSONL 日志；真实实现已迁至 `src/features/settings/ui/HisIntegrationLogPanel.vue`，旧 `src/components/HisIntegrationLogPanel.vue` 已删除 |
-| **MedicalCatalogCachePanel.vue** | -- | 缓存管理独立视图：当前负责诊断 / 诊疗项目 / 药品等基础目录缓存状态、同步和按目录 / 机构 / 租户 / 药房清理；真实实现已迁至 `src/features/medical-catalog/ui/MedicalCatalogCachePanel.vue`，旧 `src/components/MedicalCatalogCachePanel.vue` 已删除 |
+| **MedicalCatalogCachePanel.vue** | -- | 缓存管理独立视图：当前负责诊断 / 诊疗项目 / 药品等基础目录缓存状态、同步和按目录 / 机构 / 租户 / 药房清理。清理范围语义：机构 / 租户 / 药房均留空时清理所选目录在所有机构范围下的缓存（经 `clearDebugCache({ allScopes: true })`，不再隐式退回当前接诊机构）；按机构清理须同时填写机构与租户，药房仅对药品生效且须先填机构与租户，缺项时面板直接提示、不调用清理命令；真实实现已迁至 `src/features/medical-catalog/ui/MedicalCatalogCachePanel.vue`，旧 `src/components/MedicalCatalogCachePanel.vue` 已删除 |
 | **FeedbackSubmissionPanel.vue** | ~560 | 统一问题反馈面板（一键回写 + 右上角入口共用），紧凑星级 + 问题标签 + 选填截图；真实实现已迁至 `src/features/feedback/ui/FeedbackSubmissionPanel.vue`，旧 `src/components/FeedbackSubmissionPanel.vue` 已删除 |
 | **KnowledgePanel.vue** | ~850 | PMPHAI 医学知识检索；真实实现已迁至 `src/features/knowledge/ui/KnowledgePanel.vue`，旧 `src/components/KnowledgePanel.vue` 已删除 |
 | **BodyPartSelector.vue** | ~830 | 人体部位交互选症状（分性别）；真实实现已迁至 `src/features/symptom-consultation/ui/BodyPartSelector.vue`，旧 `src/components/BodyPartSelector.vue` 已删除 |

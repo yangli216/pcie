@@ -11,6 +11,8 @@
  * 详见 [services/his/index.ts](./his/index.ts) 与 AGENTS.md。
  */
 import { fetch } from '@tauri-apps/plugin-http';
+import { HIS_DIRECT_CONNECTION_OPTIONS } from './hisDirectConnection';
+import { normalizeTreatmentCatalogItems, type HiBdCliOrgItem, type HiBdCliOrgListBody } from './hisTreatmentItemCatalog';
 import {
   createHisTraceId,
   getHisBusinessCode,
@@ -565,6 +567,7 @@ interface OrganDeptListBody {
 const HIS_CATALOG_ENDPOINTS = {
   diagnoses: 'api/phis.aiAdapterService/queryDiagnosisCatalog',
   availableExamLabItems: 'api/phis.aiInpatientEmrContextService/queryAvailableExamLabItems',
+  institutionTreatmentItems: 'api/phis.hiBdCliOrgService/queryHiBdCliOrgList',
   medicalItemDetail: 'api/phis.aiAdapterService/loadHiBdCliDetail',
   medicalItemParts: 'api/phis.aiAdapterService/queryExaPartAndWayList',
   medicineStores: 'api/phis.aiAdapterService/queryDispensingSto',
@@ -645,6 +648,7 @@ export class HisService {
         headers,
         body: JSON.stringify(data),
         connectTimeout: 10000,
+        ...HIS_DIRECT_CONNECTION_OPTIONS,
       });
 
       if (!response.ok) {
@@ -731,6 +735,7 @@ export class HisService {
         method: 'GET',
         headers,
         connectTimeout: 10000,
+        ...HIS_DIRECT_CONNECTION_OPTIONS,
       });
 
       if (!response.ok) {
@@ -890,6 +895,42 @@ export class HisService {
       normalizedCount: normalizedList.length,
     });
 
+    return normalizedList;
+  }
+
+  /**
+   * 从 PHIS 机构诊疗目录分页拉取“治疗 / 处置”类项目（检查 / 检验已在映射中丢弃）。
+   * 请求条件沿用 bfd4b04 之前的同步口径；机构由 PHIS 令牌上下文确定。
+   */
+  async fetchInstitutionTreatmentItemsCatalog(): Promise<HisMedicalItemCatalogItem[]> {
+    const pageSize = 500;
+    let start = 0;
+    let total = 0;
+    let pages = 0;
+    const items: HiBdCliOrgItem[] = [];
+
+    do {
+      const response = await this.post<HiBdCliOrgListBody>(
+        HIS_CATALOG_ENDPOINTS.institutionTreatmentItems,
+        [{ start, limit: pageSize, params: { fgActive: '1', fgSingle: '1', source: '-1' } }],
+      );
+      this.assertBusinessSuccess(HIS_CATALOG_ENDPOINTS.institutionTreatmentItems, response);
+      const body = response.body ?? response.data ?? {};
+      const pageItems = body.items ?? [];
+      total = Number(body.total ?? 0);
+      items.push(...pageItems);
+      pages += 1;
+      start += pageSize;
+      if (pageItems.length === 0) break;
+    } while (total > 0 && items.length < total);
+
+    const normalizedList = normalizeTreatmentCatalogItems(items);
+    console.log('[HisService] Institution treatment items catalog summary', {
+      pages,
+      total,
+      rawCount: items.length,
+      normalizedCount: normalizedList.length,
+    });
     return normalizedList;
   }
 

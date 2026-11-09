@@ -126,8 +126,38 @@ export interface MedicalCatalogDebugState {
   }>;
 }
 
+interface CatalogSyncFailure {
+  label: string;
+  error: unknown;
+}
+
+function describeCatalogSyncError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const httpStatus = raw.match(/HIS HTTP Error:\s*(\d{3})/);
+  if (httpStatus) return `HIS 返回 HTTP ${httpStatus[1]}`;
+  // 底层网络错误转为中文原因，避免通用错误格式化按英文关键词把整条汇总替换掉。
+  if (/timed?\s*out|timeout/i.test(raw)) return '连接 HIS 超时';
+  if (/error sending request|connect|network|load failed|failed to fetch/i.test(raw)) return '无法连接 HIS';
+  if (/Missing tk token/i.test(raw)) return '缺少 HIS 登录令牌，请重新从 HIS 发起握手';
+  // HIS 业务失败只保留 HIS 返回的提示与业务码，不带出接口地址等原文。
+  const business = raw.match(/failed:\s*(.+?)\s*\(code=([^)]*)\)\s*$/);
+  if (business) return `HIS 业务失败：${business[1].slice(0, 80)}（code=${business[2]}）`;
+  return 'HIS 请求失败';
+}
+
+function formatCatalogSyncFailures(failures: CatalogSyncFailure[]): string {
+  const details = failures.map(({ label, error }) => `${label}（${describeCatalogSyncError(error)}）`).join('、');
+  return `基础数据同步未完成：${details}；已保留原有缓存，请检查到 HIS 的网络连接后重试`;
+}
+
 export interface MedicalCatalogClearOptions {
   catalogType?: 'all' | 'diagnoses' | 'items' | 'medicines';
+  /**
+   * 为 true 时清理所选目录在所有机构 / 租户 / 药房范围下的缓存，忽略 orgCode/tenantId/storeId，
+   * 也不回退到当前接诊机构。
+   */
+  allScopes?: boolean;
+  /** 未提供时回退到当前接诊机构与租户；显式提供时租户只取 tenantId，不再混用当前租户。 */
   orgCode?: string;
   tenantId?: string;
   storeId?: string;
@@ -714,9 +744,14 @@ class MedicalDataService {
   }
 
   public async clearDebugCache(options: MedicalCatalogClearOptions = {}): Promise<MedicalCatalogClearResult> {
-    const normalizedOrgCode = this.normalizeScopeValue(options.orgCode ?? this.currentOrgCode);
-    const normalizedTenantId = this.normalizeScopeValue(options.tenantId ?? this.currentTenantId);
-    const normalizedStoreId = this.normalizeScopeValue(options.storeId);
+    const useCurrentScope = !options.allScopes && options.orgCode === undefined;
+    const normalizedOrgCode = options.allScopes
+      ? null
+      : this.normalizeScopeValue(useCurrentScope ? this.currentOrgCode : options.orgCode);
+    const normalizedTenantId = options.allScopes
+      ? null
+      : this.normalizeScopeValue(useCurrentScope ? (options.tenantId ?? this.currentTenantId) : options.tenantId);
+    const normalizedStoreId = options.allScopes ? null : this.normalizeScopeValue(options.storeId);
     const result = await invoke<MedicalCatalogClearResult>('clear_medical_catalog_cache', {
       catalogType: options.catalogType ?? 'all',
       orgCode: normalizedOrgCode ?? undefined,
@@ -1821,19 +1856,33 @@ class MedicalDataService {
     options: MedicalCatalogSyncOptions = {}
   ): Promise<void> {
     const forceSync = options.force === true;
-    await this.syncGlobalDiagnosesIfNeeded(hisService, snapshot, forceSync);
-
-    if (!this.currentOrgCode) {
-      console.warn('[MedicalData] Skip org-scoped catalog sync because orgCode is missing');
-      return;
+    const failures: CatalogSyncFailure[] = [];
+    try {
+      await this.syncGlobalDiagnosesIfNeeded(hisService, snapshot, forceSync);
+    } catch (error) {
+      failures.push({ label: '诊断目录', error });
     }
 
-    const orgCode = this.currentOrgCode;
-    await Promise.allSettled([
-      this.syncInstitutionItemsIfNeeded(hisService, orgCode, snapshot, forceSync),
-      this.syncInstitutionMedicinesIfNeeded(hisService, orgCode, snapshot, forceSync),
-      this.syncActivePharmacyStoreIds(hisService),
-    ]);
+    if (this.currentOrgCode) {
+      const orgCode = this.currentOrgCode;
+      const [itemsResult, medicinesResult] = await Promise.allSettled([
+        this.syncInstitutionItemsIfNeeded(hisService, orgCode, snapshot, forceSync),
+        this.syncInstitutionMedicinesIfNeeded(hisService, orgCode, snapshot, forceSync),
+        this.syncActivePharmacyStoreIds(hisService),
+      ]);
+      if (itemsResult.status === 'rejected') {
+        failures.push({ label: '其他诊疗项目', error: itemsResult.reason });
+      }
+      if (medicinesResult.status === 'rejected') {
+        failures.push({ label: '药品目录', error: medicinesResult.reason });
+      }
+    } else {
+      console.warn('[MedicalData] Skip org-scoped catalog sync because orgCode is missing');
+    }
+
+    if (forceSync && failures.length > 0) {
+      throw new Error(formatCatalogSyncFailures(failures));
+    }
   }
 
   /**
@@ -1888,8 +1937,9 @@ class MedicalDataService {
       console.log('[MedicalData] Diagnosis catalog synced', {
         itemCount: diagnoses.length,
       });
-    } catch {
+    } catch (error) {
       console.warn('[MedicalData] Failed to sync diagnosis catalog from HIS, keep current cache');
+      if (forceSync) throw error;
     }
   }
 
@@ -1917,7 +1967,7 @@ class MedicalDataService {
         hasCache: Boolean(snapshot?.items.length),
         hasCacheDate: Boolean(snapshot?.itemSyncDate),
       });
-      const items = this.normalizeMedicalItems(await hisService.fetchInstitutionMedicalItemsCatalog(orgCode));
+      const items = this.normalizeMedicalItems(await hisService.fetchInstitutionTreatmentItemsCatalog());
       const persistableItems = items.filter((item) => !isExamOrLabItem(item));
       if (!items.length) {
         console.warn('[MedicalData] Medical items catalog returned empty result', {
@@ -1936,11 +1986,12 @@ class MedicalDataService {
         hasTenantId: Boolean(this.currentTenantId),
         itemCount: persistableItems.length,
       });
-    } catch {
+    } catch (error) {
       console.warn('[MedicalData] Failed to sync medical items for current organization, keep current cache', {
         hasOrgCode: Boolean(orgCode),
         hasTenantId: Boolean(this.currentTenantId),
       });
+      if (forceSync) throw error;
     }
   }
 
@@ -2019,12 +2070,13 @@ class MedicalDataService {
         storeCount: normalizedStoreIds.length,
         itemCount: medicines.length,
       });
-    } catch {
+    } catch (error) {
       console.warn('[MedicalData] Failed to sync medicines for current organization, cached pharmacy-scoped catalog remains in use', {
         hasOrgCode: Boolean(orgCode),
         hasTenantId: Boolean(this.currentTenantId),
         storeCount: normalizedStoreIds.length,
       });
+      if (forceSync) throw error;
     }
   }
 

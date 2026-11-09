@@ -761,6 +761,11 @@ export class PhisHisAdapter implements HisAdapter {
     return items.map(mapMedicalItemCatalog);
   }
 
+  async fetchInstitutionTreatmentItemsCatalog(): Promise<MedicalItemCatalogEntry[]> {
+    const items = await this.service.fetchInstitutionTreatmentItemsCatalog();
+    return items.map(mapMedicalItemCatalog);
+  }
+
   async fetchInstitutionMedicineCatalog(orgCode: string): Promise<MedicineCatalogEntry[]> {
     const items = await this.service.fetchInstitutionMedicineCatalog(orgCode);
     return items.map(mapMedicineCatalog);

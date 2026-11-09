@@ -68,6 +68,9 @@ describe('medicalData console privacy', () => {
       fetchInstitutionMedicalItemsCatalog: vi.fn().mockResolvedValue([
         { id: 'I-1', code: 'ITEM-1', name: '检查一', category: '检查' },
       ]),
+      fetchInstitutionTreatmentItemsCatalog: vi.fn().mockResolvedValue([
+        { id: 'T-1', code: 'TREAT-1', name: '治疗一', category: '治疗' },
+      ]),
       fetchMedicineStoreIds: vi.fn().mockResolvedValue(['STORE-SENTINEL-A', 'STORE-SENTINEL-B']),
       fetchInstitutionMedicineCatalog: vi.fn().mockResolvedValue([
         { id: 'M-1', name: '药品一', spec: '1mg' },
@@ -84,7 +87,11 @@ describe('medicalData console privacy', () => {
       tenantId: 'TENANT-SENTINEL',
     }, { force: true });
 
-    expect(adapter.fetchInstitutionMedicalItemsCatalog).toHaveBeenCalledWith('ORG-SENTINEL');
+    expect(adapter.fetchInstitutionTreatmentItemsCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      'replace_org_medical_item_catalog',
+      expect.objectContaining({ orgCode: 'ORG-SENTINEL', tenantId: 'TENANT-SENTINEL' }),
+    );
     expect(adapter.fetchMedicineStoreIds).toHaveBeenCalledWith('ORG-SENTINEL');
     expect(adapter.fetchInstitutionMedicineCatalog).toHaveBeenCalledWith('ORG-SENTINEL');
     expect(mocks.invoke).toHaveBeenCalledWith(
@@ -126,6 +133,7 @@ describe('medicalData console privacy', () => {
     const adapter = {
       fetchDiagnosisCatalog: vi.fn().mockRejectedValue(new Error('DIAGNOSIS-ERROR-SENTINEL')),
       fetchInstitutionMedicalItemsCatalog: vi.fn().mockRejectedValue(new Error('ITEM-ERROR-SENTINEL')),
+      fetchInstitutionTreatmentItemsCatalog: vi.fn().mockRejectedValue(new Error('TREATMENT-ERROR-SENTINEL')),
       fetchMedicineStoreIds: vi.fn().mockRejectedValue(new Error('STORE-ERROR-SENTINEL')),
       fetchInstitutionMedicineCatalog: vi.fn().mockRejectedValue(new Error('MEDICINE-ERROR-SENTINEL')),
       fetchAvailablePharmacies: vi.fn().mockRejectedValue(new Error('PHARMACY-ERROR-SENTINEL')),
@@ -133,23 +141,28 @@ describe('medicalData console privacy', () => {
     mocks.getHisAdapter.mockReturnValue(adapter);
 
     const { medicalDataService } = await import('./medicalData');
-    await medicalDataService.setCatalogContext({
+    // 强制同步失败须整体报错（不再伪成功）；错误文本同样不得带出机构或原始错误。
+    const failure = await medicalDataService.setCatalogContext({
       orgCode: 'ORG-FAILURE-SENTINEL',
       tenantId: 'TENANT-FAILURE-SENTINEL',
-    }, { force: true });
+    }, { force: true }).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
 
     const serializedLogs = serializeConsoleCalls(log, warn);
+    const failureMessage = (failure as Error).message;
     for (const sentinel of [
       'ORG-FAILURE-SENTINEL',
       'TENANT-FAILURE-SENTINEL',
       'IPC-ERROR-SENTINEL',
       'DIAGNOSIS-ERROR-SENTINEL',
       'ITEM-ERROR-SENTINEL',
+      'TREATMENT-ERROR-SENTINEL',
       'STORE-ERROR-SENTINEL',
       'MEDICINE-ERROR-SENTINEL',
       'PHARMACY-ERROR-SENTINEL',
     ]) {
       expect(serializedLogs).not.toContain(sentinel);
+      expect(failureMessage).not.toContain(sentinel);
     }
   });
 });

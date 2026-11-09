@@ -107,8 +107,11 @@ export interface HisAdapter {
   /** 全机构通用：标准诊断（ICD）目录 */
   fetchDiagnosisCatalog(): Promise<DiagnosisCatalogEntry[]>;
 
-  /** 机构维度：检查/检验/处置项目目录 */
+  /** 机构维度：当前可开立的检查/检验目录（接诊级实时事实，不写入缓存） */
   fetchInstitutionMedicalItemsCatalog(orgCode: string): Promise<MedicalItemCatalogEntry[]>;
+
+  /** 机构维度：治疗/处置等非检查检验诊疗项目目录（按机构 + 租户写入缓存） */
+  fetchInstitutionTreatmentItemsCatalog(): Promise<MedicalItemCatalogEntry[]>;
 
   /** 机构维度：药品目录 */
   fetchInstitutionMedicineCatalog(orgCode: string): Promise<MedicineCatalogEntry[]>;

@@ -5,10 +5,10 @@ import Icon from '@shared/ui/Icon.vue';
 import { formatUserFacingError } from '@shared/lib/errorMessages';
 import {
   medicalDataService,
-  type MedicalCatalogClearOptions,
   type MedicalCatalogClearResult,
   type MedicalCatalogDebugState,
 } from '@services/medicalData';
+import { resolveCacheClearScope } from '../lib/cacheClearScope';
 
 type CatalogType = 'all' | 'diagnoses' | 'items' | 'medicines';
 
@@ -82,34 +82,26 @@ async function syncCatalogs(): Promise<void> {
 
 async function clearCache(): Promise<void> {
   const selectedType = catalogType.value;
-  const selectedOrg = orgCode.value.trim();
-  const selectedTenant = tenantId.value.trim();
-  const selectedStore = storeId.value.trim();
+  const scope = resolveCacheClearScope({
+    catalogType: selectedType,
+    orgCode: orgCode.value,
+    tenantId: tenantId.value,
+    storeId: storeId.value,
+  });
+  if (!scope.ok) {
+    message.value = scope.error;
+    messageTone.value = 'error';
+    return;
+  }
   const scopeText = selectedType === 'all' ? '全部基础数据缓存' : getCatalogLabel(selectedType);
-  const parts = [
-    selectedOrg ? `机构：${selectedOrg}` : '',
-    selectedTenant ? `租户：${selectedTenant}` : '',
-    selectedStore ? `药房：${selectedStore}` : '',
-  ].filter(Boolean);
-  const scopeSuffix = parts.length > 0 ? `（${parts.join('，')}）` : '';
-  const confirmed = await confirm(`确认清理${scopeText}${scopeSuffix}？清理后可重新同步。`);
+  const confirmed = await confirm(`确认清理${scopeText}（${scope.scopeLabel}）？清理后可重新同步。`);
   if (!confirmed) return;
 
   clearing.value = true;
   message.value = '';
   messageTone.value = 'neutral';
   try {
-    const options: MedicalCatalogClearOptions = { catalogType: selectedType };
-    if (selectedOrg) {
-      options.orgCode = selectedOrg;
-    }
-    if (selectedTenant) {
-      options.tenantId = selectedTenant;
-    }
-    if (selectedStore) {
-      options.storeId = selectedStore;
-    }
-    const result = await medicalDataService.clearDebugCache(options);
+    const result = await medicalDataService.clearDebugCache(scope.options);
     await refreshState();
     message.value = formatClearResult(result);
     messageTone.value = 'success';
@@ -221,7 +213,7 @@ onMounted(refreshAll);
           </label>
           <label>
             机构（可选）
-            <input v-model="orgCode" placeholder="留空表示当前机构或全部" />
+            <input v-model="orgCode" placeholder="机构、租户、药房均留空表示所有机构" />
           </label>
           <label>
             租户（可选）
@@ -236,7 +228,7 @@ onMounted(refreshAll);
             清理缓存
           </button>
         </div>
-        <p class="hint">检查检验目录不持久化、也不计入本页统计；其他诊疗项目按机构 + 租户缓存，药品按机构 + 租户 + 药房缓存。</p>
+        <p class="hint">检查检验目录不持久化、也不计入本页统计；其他诊疗项目按机构 + 租户缓存，药品按机构 + 租户 + 药房缓存；机构、租户、药房均留空时清理所有机构，按机构清理须同时填写机构和租户，药房仅用于药品目录。</p>
       </div>
 
       <p v-if="message" :class="['message', `message-${messageTone}`]">{{ message }}</p>

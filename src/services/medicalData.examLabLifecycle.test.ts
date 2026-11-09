@@ -40,8 +40,12 @@ const emptySnapshot = {
   medicines: [],
 };
 
-function createAdapter(fetchInstitutionMedicalItemsCatalog = vi.fn().mockResolvedValue([])) {
+function createAdapter(
+  fetchInstitutionMedicalItemsCatalog = vi.fn().mockResolvedValue([]),
+  fetchInstitutionTreatmentItemsCatalog = vi.fn().mockResolvedValue([]),
+) {
   return {
+    fetchInstitutionTreatmentItemsCatalog,
     getContextScope: vi.fn(() => ({ orgCode: 'ORG-1', tenantId: 'TENANT-1' })),
     getDefaultExecDeptId: vi.fn(() => 'DEPT-1'),
     fetchInstitutionMedicalItemsCatalog,
@@ -152,11 +156,13 @@ describe('medicalData exam/lab reception lifecycle', () => {
   });
 
   it('filters exam/lab rows before writing the remaining item catalog to SQLite', async () => {
-    const fetchItems = vi.fn().mockResolvedValue([
+    // 治疗目录理论上已在 HIS 映射层丢弃检查检验；这里仍混入一条检验，验证写库前的防御性过滤。
+    const fetchTreatmentItems = vi.fn().mockResolvedValue([
       { id: 'LAB-1', code: 'LAB-1', name: '血常规', category: '检验' },
       { id: 'PROC-1', code: 'PROC-1', name: '雾化治疗', category: '治疗' },
     ]);
-    mocks.getHisAdapter.mockReturnValue(createAdapter(fetchItems));
+    const fetchExamLabItems = vi.fn().mockResolvedValue([]);
+    mocks.getHisAdapter.mockReturnValue(createAdapter(fetchExamLabItems, fetchTreatmentItems));
 
     const { medicalDataService } = await import('./medicalData');
     await medicalDataService.setCatalogContext(

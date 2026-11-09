@@ -90,6 +90,10 @@ const MOCK_MEDICAL_ITEMS: MedicalItemCatalogEntry[] = [
   { id: 'mock-itm-3', code: 'EX003', name: '心电图', category: '检查', keywords: ['心电图', 'xdt'] },
 ];
 
+const MOCK_TREATMENT_ITEMS: MedicalItemCatalogEntry[] = [
+  { id: 'mock-trt-1', code: 'TR001', name: '雾化吸入', category: '治疗', keywords: ['雾化', 'wh'] },
+];
+
 const MOCK_FREQUENCIES: DictionaryEntry[] = [
   { key: 'qd', text: '每日一次', py: 'mryc', properties: { execCount: 1 } },
   { key: 'bid', text: '每日两次', py: 'mrlc', properties: { execCount: 2 } },
@@ -151,6 +155,10 @@ export class MockHisAdapter implements HisAdapter {
 
   async fetchInstitutionMedicalItemsCatalog(_orgCode: string): Promise<MedicalItemCatalogEntry[]> {
     return MOCK_MEDICAL_ITEMS.map((i) => ({ ...i }));
+  }
+
+  async fetchInstitutionTreatmentItemsCatalog(): Promise<MedicalItemCatalogEntry[]> {
+    return MOCK_TREATMENT_ITEMS.map((i) => ({ ...i }));
   }
 
   async fetchInstitutionMedicineCatalog(_orgCode: string): Promise<MedicineCatalogEntry[]> {

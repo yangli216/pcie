@@ -463,3 +463,86 @@ describe('HisService high-level log privacy', () => {
     });
   });
 });
+
+describe('HisService direct connection', () => {
+  beforeEach(() => {
+    mocks.fetch.mockReset();
+    mocks.invoke.mockReset();
+    mocks.invoke.mockResolvedValue('log-id');
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({ code: 200, body: { items: [] } }),
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const expectedDirectProxy = {
+    all: { url: 'http://127.0.0.1:9', noProxy: '*,0.0.0.0/0,::/0' },
+  };
+
+  it('bypasses the operating system proxy for POST requests', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const service = new HisService('http://10.165.230.211/rbmh-phis/', 'token');
+
+    await service.post('api/phis.aiAdapterService/queryDiagnosisCatalog', [{}]);
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      'http://10.165.230.211/rbmh-phis/api/phis.aiAdapterService/queryDiagnosisCatalog',
+      expect.objectContaining({ method: 'POST', proxy: expectedDirectProxy }),
+    );
+  });
+
+  it('bypasses the operating system proxy for GET requests', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const service = new HisService('http://10.165.230.211/rbmh-phis/', 'token');
+
+    await service.fetchMedicineUsageDictionary();
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('http://10.165.230.211/rbmh-phis/'),
+      expect.objectContaining({ method: 'GET', proxy: expectedDirectProxy }),
+    );
+  });
+});
+
+describe('HisService fetchInstitutionTreatmentItemsCatalog', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('pages through the PHIS institution catalog and returns treatment items only', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const service = new HisService('http://localhost/', 'token');
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({
+      id: `T-${index}`, naCli: `治疗${index}`, sdCliText: index === 0 ? '检验' : '治疗',
+    }));
+    const post = vi.spyOn(service, 'post')
+      .mockResolvedValueOnce({ code: 200, body: { total: 501, items: firstPage } })
+      .mockResolvedValueOnce({ code: 200, body: { total: 501, items: [{ id: 'T-500', naCli: '换药', sdCli: '9' }] } });
+
+    const items = await service.fetchInstitutionTreatmentItemsCatalog();
+
+    expect(post).toHaveBeenNthCalledWith(1, 'api/phis.hiBdCliOrgService/queryHiBdCliOrgList', [
+      { start: 0, limit: 500, params: { fgActive: '1', fgSingle: '1', source: '-1' } },
+    ]);
+    expect(post).toHaveBeenNthCalledWith(2, 'api/phis.hiBdCliOrgService/queryHiBdCliOrgList', [
+      { start: 500, limit: 500, params: { fgActive: '1', fgSingle: '1', source: '-1' } },
+    ]);
+    expect(items).toHaveLength(500);
+    expect(items.every((item) => item.category === '治疗')).toBe(true);
+    expect(items.some((item) => item.id === 'T-0')).toBe(false);
+  });
+
+  it('rejects when PHIS reports a business failure', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = new HisService('http://localhost/', 'token');
+    vi.spyOn(service, 'post').mockResolvedValue({ code: 500, message: '无权限' });
+
+    await expect(service.fetchInstitutionTreatmentItemsCatalog()).rejects.toThrow('无权限');
+  });
+});
