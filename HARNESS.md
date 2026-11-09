@@ -8,7 +8,7 @@
 
 ## 分段语音转写
 
-停录失败恢复补 `useVoiceTranscriptionReview.test.ts` 与 `VoiceCapsule.test.ts`，覆盖实时中断后补录失败传播、异常/非法结果门禁、成功空文本清草稿与保留审核前缀、完整录音重试、再次失败、续采前缀、重复点击、放弃/卸载迟到隔离和草稿不可确认；上传回归核对 WAV MIME、文件名与原始字节，仍使用 Fake。
+停录失败恢复补 `useVoiceTranscriptionReview.test.ts` 与 `VoiceCapsule.test.ts`，覆盖实时中断后补录失败传播、异常/非法结果门禁、成功空文本清草稿与保留审核前缀、完整录音重试、再次失败、续采前缀、重复点击、放弃/卸载迟到隔离、失败后未修改草稿不可确认、强制编辑后可确认及重试覆盖手动编辑；上传回归核对 WAV MIME、文件名与原始字节，仍使用 Fake。
 
 分段语音回归执行 `yarn test:unit src/services/segmentedSpeechTranscriber.test.ts src/services/speechConfig.test.ts src/services/aliyunSpeech.test.ts`，覆盖顺序/背压、边界重叠、空结果/失败、关闭后的迟到回调及停止后完整转写。真实验证区分停止前字幕、停止后完整文本和医学病历；默认使用 Fake 转写，真实模型仍需独立机构与显式运行。
 

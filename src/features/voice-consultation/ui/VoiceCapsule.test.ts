@@ -147,17 +147,39 @@ afterEach(async () => {
 });
 
 describe('voice capsule full-recording transcription recovery', () => {
-  it('keeps failed drafts read-only and blocks confirmation and continuing instead of silently accepting them', async () => {
+  it('lets the doctor force-edit a failed draft but blocks confirming the unchanged draft or continuing', async () => {
     await failInitial();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('录音');
     const field = await editor();
     expect(field.value).toBe('合成分段草稿');
-    expect(field.readOnly || field.disabled).toBe(true);
+    expect(field.readOnly || field.disabled).toBe(false);
+    expect(field.placeholder).toContain('手动填写');
     expectBlocked();
     expect(button('重试整段转写').disabled).toBe(false);
     button('确认').click(); button('继续采集').click(); await settle();
     expect(onStop).not.toHaveBeenCalled();
     expect(mocks.recorder.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirms the doctor-edited text with the saved recording after a failed transcription', async () => {
+    await failInitial();
+    const field = await editor();
+    field.value = '医生核对后手动填写的合成文字';
+    field.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(button('确认').disabled).toBe(false);
+    expect(button('继续采集').disabled).toBe(true);
+    button('确认').click(); await settle();
+    expect(onStop).toHaveBeenCalledExactlyOnceWith(audio, '医生核对后手动填写的合成文字');
+  });
+
+  it('replaces a manual edit with a successful retry result', async () => {
+    await failInitial();
+    const field = await editor();
+    field.value = '医生临时手动修改';
+    field.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    button('重试整段转写').click(); await settle();
+    expect((await editor()).value).toBe('重试后的完整转写');
+    expect(button('确认').disabled).toBe(false);
   });
 
   it('retries the complete saved WAV once, replaces the draft, and confirms the matching audio and text', async () => {
@@ -182,7 +204,7 @@ describe('voice capsule full-recording transcription recovery', () => {
     expect(onStop).toHaveBeenCalledExactlyOnceWith(audio, '包含尾部的合成完整转写');
   });
 
-  it('retains the same recording and read-only draft after another retry failure', async () => {
+  it('retains the same recording and the editable but unconfirmed draft after another retry failure', async () => {
     await failInitial();
     mocks.transcribeAudio.mockRejectedValueOnce(new Error('still offline'));
     button('重试整段转写').click(); await settle();
@@ -190,7 +212,7 @@ describe('voice capsule full-recording transcription recovery', () => {
     expectBlocked();
     const field = await editor();
     expect(field.value).toBe('合成分段草稿');
-    expect(field.readOnly).toBe(true);
+    expect(field.readOnly).toBe(false);
     expect(mocks.transcribeAudio.mock.calls[0][0]).toBe(audio);
     expect(onStop).not.toHaveBeenCalled();
   });

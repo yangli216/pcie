@@ -178,6 +178,9 @@ describe('stopped voice transcription review', () => {
     expect(review.canRetry.value).toBe(false);
     expect(review.canContinue.value).toBe(false);
     expect(review.canConfirm.value).toBe(false);
+    review.text.value = '医生手动填写';
+    expect(review.canEdit.value).toBe(true);
+    expect(review.canConfirm.value).toBe(false);
     await review.retry();
     expect(retryTranscription).not.toHaveBeenCalled();
   });
@@ -261,5 +264,56 @@ describe('stopped voice transcription review', () => {
     review.text.value = '医生修订文字';
     expect(review.canConfirm.value).toBe(true);
     expect(review.text.value).toBe('医生修订文字');
+  });
+
+  it('lets the doctor force-edit a failed draft and confirm only after changing it', async () => {
+    const review = useVoiceTranscriptionReview({ retryTranscription: vi.fn() });
+    await review.complete({ audio: recording(), prefix: '已审核前段', draft: '未校正草稿', finish: failedFinish });
+
+    expect(review.status.value).toBe('failed');
+    expect(review.canEdit.value).toBe(true);
+    expect(review.canConfirm.value).toBe(false);
+    expect(review.canContinue.value).toBe(false);
+
+    review.text.value = '已审核前段\n医生核对后的文字';
+    expect(review.canConfirm.value).toBe(true);
+    expect(review.canContinue.value).toBe(false);
+
+    review.text.value = '已审核前段\n未校正草稿';
+    expect(review.canConfirm.value).toBe(false);
+    review.text.value = '   ';
+    expect(review.canConfirm.value).toBe(false);
+  });
+
+  it('blocks editing while a retry is in flight and lets a successful retry replace the manual edit', async () => {
+    const pending = deferred<string>();
+    const review = useVoiceTranscriptionReview({ retryTranscription: () => pending.promise });
+    await review.complete({ audio: recording(), prefix: '', draft: '草稿', finish: failedFinish });
+    review.text.value = '医生手动修改';
+    expect(review.canConfirm.value).toBe(true);
+
+    const retrying = review.retry();
+    expect(review.canEdit.value).toBe(false);
+    expect(review.canConfirm.value).toBe(false);
+    pending.resolve('重试成功的完整转写');
+    await retrying;
+
+    expect(review.status.value).toBe('ready');
+    expect(review.text.value).toBe('重试成功的完整转写');
+    expect(review.canConfirm.value).toBe(true);
+  });
+
+  it('keeps a manual edit confirmable when another retry fails', async () => {
+    const retryTranscription = vi.fn().mockRejectedValue(new Error('still offline'));
+    const review = useVoiceTranscriptionReview({ retryTranscription });
+    await review.complete({ audio: recording(), prefix: '', draft: '草稿', finish: failedFinish });
+    review.text.value = '第一次手动修改';
+    await review.retry();
+
+    expect(review.status.value).toBe('failed');
+    expect(review.text.value).toBe('第一次手动修改');
+    expect(review.canConfirm.value).toBe(true);
+    review.text.value = '草稿';
+    expect(review.canConfirm.value).toBe(false);
   });
 });

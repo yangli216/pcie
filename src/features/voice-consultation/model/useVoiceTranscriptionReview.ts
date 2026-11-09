@@ -22,10 +22,21 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
   let audio: Blob | null = null;
   let prefix = '';
   let requestId = 0;
+  /** 当前停录段首次失败时的文字快照：失败后须由医生改出不同的非空文字才可确认；重试再失败不重拍快照。 */
+  const failedText = ref('');
+  let hasFailedSnapshot = false;
 
   const isPending = computed(() => status.value === 'transcribing');
   const canContinue = computed(() => status.value === 'ready' || status.value === 'empty');
-  const canConfirm = computed(() => canContinue.value && Boolean(text.value.trim()));
+  /** 失败时允许医生强制编辑；转写中禁止编辑，避免与迟到结果互相覆盖。 */
+  const canEdit = computed(() => canContinue.value || status.value === 'failed');
+  const isFailedTextEdited = computed(() => (
+    status.value === 'failed'
+    && Boolean(audio?.size)
+    && Boolean(text.value.trim())
+    && text.value !== failedText.value
+  ));
+  const canConfirm = computed(() => (canContinue.value && Boolean(text.value.trim())) || isFailedTextEdited.value);
   const canRetry = computed(() => (status.value === 'failed' || status.value === 'empty') && Boolean(audio?.size));
 
   function reset() {
@@ -33,8 +44,19 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
     audio = null;
     prefix = '';
     text.value = '';
+    failedText.value = '';
+    hasFailedSnapshot = false;
     errorMessage.value = '';
     status.value = 'idle';
+  }
+
+  function markFailed(message: string) {
+    errorMessage.value = message;
+    if (!hasFailedSnapshot) {
+      failedText.value = text.value;
+      hasFailedSnapshot = true;
+    }
+    status.value = 'failed';
   }
 
   async function resolveTranscription(transcribe: () => Promise<string>) {
@@ -45,16 +67,14 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
       const result = await transcribe();
       if (currentRequest !== requestId) return;
       if (typeof result !== 'string') {
-        errorMessage.value = '转写结果异常，录音已保留。请重试后再确认。';
-        status.value = 'failed';
+        markFailed('转写结果异常，录音已保留。请重试，或手动编辑文字后确认。');
         return;
       }
       text.value = appendVoiceTranscript(prefix, result);
       status.value = result.trim() ? 'ready' : 'empty';
     } catch {
       if (currentRequest !== requestId) return;
-      errorMessage.value = '整段转写失败，录音已保留。请重试后再确认。';
-      status.value = 'failed';
+      markFailed('整段转写失败，录音已保留。请重试，或手动编辑文字后确认。');
     }
   }
 
@@ -64,8 +84,7 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
     prefix = recording.prefix;
     text.value = appendVoiceTranscript(prefix, recording.draft);
     if (!audio.size) {
-      errorMessage.value = '录音保存失败，无法重试。请放弃后重新采集。';
-      status.value = 'failed';
+      markFailed('录音保存失败，无法重试。请放弃后重新采集。');
       return;
     }
     await resolveTranscription(recording.finish);
@@ -79,7 +98,7 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
 
   return {
     status: readonly(status), text, errorMessage: readonly(errorMessage),
-    isPending, canContinue, canConfirm, canRetry,
+    isPending, canContinue, canEdit, canConfirm, canRetry,
     complete, retry, reset,
   };
 }

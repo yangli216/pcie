@@ -96,9 +96,9 @@
         <textarea
           class="text-editor"
           v-model="editableText"
-          :readonly="!canContinueRecording || isFinalizing"
+          :readonly="!canEditTranscript || isFinalizing"
           aria-label="语音转写文字"
-          :placeholder="canContinueRecording ? '可审核并编辑转写文字' : '整段转写尚未完成'"
+          :placeholder="transcriptionPlaceholder"
           :rows="transcriptionStatus === 'failed' || transcriptionStatus === 'empty' ? 2 : 6"
         ></textarea>
       </div>
@@ -181,6 +181,7 @@ const {
   errorMessage: transcriptionError,
   isPending: isTranscribing,
   canContinue: canContinueRecording,
+  canEdit: canEditTranscript,
   canConfirm: canConfirmTranscript,
   canRetry: canRetryTranscription,
 } = transcriptionReview;
@@ -188,6 +189,11 @@ const stoppedLabel = computed(() => isTranscribing.value
   ? '正在完成整段转写…'
   : transcriptionStatus.value === 'failed' ? '整段转写未完成'
   : transcriptionStatus.value === 'empty' ? '未识别到新增文字' : '音频采集完成');
+const transcriptionPlaceholder = computed(() => {
+  if (canContinueRecording.value) return '可审核并编辑转写文字';
+  if (transcriptionStatus.value === 'failed' && canRetryTranscription.value) return '整段转写未完成，可重试或手动填写后确认';
+  return '整段转写尚未完成';
+});
 const isFinalizing = ref(false);
 const confirmingAbandon = ref(false);
 let stoppedBlob: Blob | null = null;
