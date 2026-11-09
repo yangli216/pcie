@@ -21,7 +21,7 @@ const collectConsoleOutput = (...spies: Array<ReturnType<typeof vi.spyOn>>): str
 describe('PhisHisAdapter.fetchPatientInfo', () => {
   it('keeps PHIS month age as a complete ageText without exposing it as years', async () => {
     const service = {
-      searchPatientByIdPiMB: vi.fn().mockResolvedValue({
+      searchPatientByIdPi: vi.fn().mockResolvedValue({
         idPi: 'patient-infant',
         naPi: '婴儿',
         sdSex: '2',
@@ -42,7 +42,7 @@ describe('PhisHisAdapter.fetchPatientInfo', () => {
 
   it('keeps PHIS day age and derives adult years only for Y', async () => {
     const service = {
-      searchPatientByIdPiMB: vi
+      searchPatientByIdPi: vi
         .fn()
         .mockResolvedValueOnce({ idPi: 'patient-newborn', naPi: '新生儿', sdSex: '1', ageNum: 10, ageUnit: 'D', qyzt: '7' })
         .mockResolvedValueOnce({ idPi: 'patient-adult', naPi: '成人', sdSex: '1', ageNum: 35, ageUnit: 'Y' }),

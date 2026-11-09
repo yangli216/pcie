@@ -10,6 +10,7 @@ use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
 
 mod http_server;
 mod autostart;
+mod mouse_hover;
 mod win7_window_region;
 
 use serde::{Deserialize, Serialize};
@@ -734,17 +735,7 @@ async fn save_templates(content: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn check_mouse_hover(window: tauri::Window) -> Result<bool, String> {
-    let mouse = window.cursor_position().map_err(|e| e.to_string())?;
-    let win_pos = window.outer_position().map_err(|e| e.to_string())?;
-    let size = window.inner_size().map_err(|e| e.to_string())?;
-
-    let rel_x = mouse.x - win_pos.x as f64;
-    let rel_y = mouse.y - win_pos.y as f64;
-
-    let is_hovered =
-        rel_x >= 0.0 && rel_x <= size.width as f64 && rel_y >= 0.0 && rel_y <= size.height as f64;
-
-    Ok(is_hovered)
+    mouse_hover::sample_mouse_hover(&window).map(|snapshot| snapshot.is_hovered)
 }
 
 #[tauri::command]
@@ -1087,7 +1078,7 @@ pub fn run() {
             http_server::run_server(handle, state_for_server);
 
             // 启动鼠标位置轮询线程，解决失焦状态下无法检测 Hover 的问题
-            let win_clone = window.clone();
+            let win_clone = window.as_ref().window();
             std::thread::spawn(move || {
                 let mut was_hovered = false;
                 loop {
@@ -1101,26 +1092,9 @@ pub fn run() {
                     };
                     std::thread::sleep(sleep_duration);
 
-                    // 获取必要参数
-                    let mouse_ret = win_clone.cursor_position();
-                    let win_pos_ret = win_clone.outer_position();
-                    let win_size_ret = win_clone.inner_size();
-
-                    let (is_hovered, rel_x, rel_y) = if let (Ok(mouse), Ok(win_pos), Ok(size)) = (
-                        mouse_ret.as_ref(),
-                        win_pos_ret.as_ref(),
-                        win_size_ret.as_ref(),
-                    ) {
-                        let rel_x = mouse.x - win_pos.x as f64;
-                        let rel_y = mouse.y - win_pos.y as f64;
-
-                        let hovered = rel_x >= 0.0
-                            && rel_x <= size.width as f64
-                            && rel_y >= 0.0
-                            && rel_y <= size.height as f64;
-                        (hovered, rel_x, rel_y)
-                    } else {
-                        (false, 0.0, 0.0)
+                    let (is_hovered, rel_x, rel_y) = match mouse_hover::sample_mouse_hover(&win_clone) {
+                        Ok(snapshot) => (snapshot.is_hovered, snapshot.x, snapshot.y),
+                        Err(_) => (false, 0.0, 0.0),
                     };
 
                     if is_hovered != was_hovered {

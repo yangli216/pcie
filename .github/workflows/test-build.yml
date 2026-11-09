@@ -65,10 +65,6 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - platform: macos-14
-            artifact: macos-universal
-            build_args: '--target universal-apple-darwin'
-            bundle_path: src-tauri/target/universal-apple-darwin/release/bundle
           - platform: windows-latest
             artifact: windows-x86_64
             build_args: ''
@@ -95,6 +91,9 @@ jobs:
       - name: Test Windows autostart registry adapter
         if: matrix.platform == 'windows-latest'
         run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib autostart::'
+
+      - name: Test floating-ball mouse coordinates
+        run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib mouse_hover::'
 
       - name: Build signed candidate without publishing
         shell: bash

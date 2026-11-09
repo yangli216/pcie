@@ -22,6 +22,75 @@ vi.mock('./hisIntegrationLog', async (importOriginal) => {
 });
 
 import { HisService } from './hisService';
+import { PhisHisAdapter } from './his/PhisHisAdapter';
+
+describe('Baiyun patient lookup through PhisHisAdapter', () => {
+  beforeEach(() => {
+    mocks.fetch.mockReset();
+    mocks.invoke.mockReset();
+    mocks.invoke.mockResolvedValue('log-id');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses the standard patient endpoint and keeps absent signing status unknown', async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        code: 200,
+        body: { idPi: 'baiyun-patient', naPi: '合成患者', sdSex: '2', ageNum: 35, ageUnit: 'Y' },
+      }),
+    });
+    const service = new HisService('https://his.example/phis/', 'synthetic-token');
+    const hangzhouLookup = vi.spyOn(service, 'searchPatientByIdPiMB');
+
+    const patient = await new PhisHisAdapter(service).fetchPatientInfo('  baiyun-patient  ');
+
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith(
+      'https://his.example/phis/api/phis.aiAdapterService/searchByIdPi',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(['baiyun-patient']),
+        headers: expect.objectContaining({
+          Cookie: 'tk=synthetic-token',
+          Authorization: 'Bearer synthetic-token',
+          'X-Access-Token': 'synthetic-token',
+        }),
+      }),
+    );
+    expect(hangzhouLookup).not.toHaveBeenCalled();
+    expect(patient).toMatchObject({
+      patientId: 'baiyun-patient',
+      name: '合成患者',
+      gender: 'F',
+      age: 35,
+      ageText: '35岁',
+    });
+    expect(patient?.signed).toBeUndefined();
+  });
+
+  it('propagates a standard patient query failure without falling back to Hangzhou', async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({ code: 500, message: 'synthetic failure' }),
+    });
+    const service = new HisService('https://his.example/phis/', 'synthetic-token');
+    const hangzhouLookup = vi.spyOn(service, 'searchPatientByIdPiMB');
+
+    await expect(new PhisHisAdapter(service).fetchPatientInfo('baiyun-patient'))
+      .rejects.toThrow('synthetic failure');
+
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith(
+      'https://his.example/phis/api/phis.aiAdapterService/searchByIdPi',
+      expect.objectContaining({ body: JSON.stringify(['baiyun-patient']) }),
+    );
+    expect(hangzhouLookup).not.toHaveBeenCalled();
+  });
+});
 
 describe('HisService logging projection', () => {
   beforeEach(() => {
