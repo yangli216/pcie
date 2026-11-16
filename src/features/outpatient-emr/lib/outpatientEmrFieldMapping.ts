@@ -1,6 +1,6 @@
 import { RECORD_CONFIRMED_WRITEBACK_FIELDS } from '@features/clinical-result/recordConfirmedPayload';
 import type {
-  OutpatientEmrFieldMappingSource,
+  OutpatientEmrParsedFieldMappingSource,
   OutpatientEmrProjectionMode,
   OutpatientEmrRecordField,
   OutpatientEmrTemplateField,
@@ -163,7 +163,7 @@ export function resolveOutpatientEmrFieldMapping(input: {
   explicitArticleRecordField?: string;
 }): {
   recordField: OutpatientEmrRecordField | null;
-  mappingSource: OutpatientEmrFieldMappingSource;
+  mappingSource: OutpatientEmrParsedFieldMappingSource;
   projectionMode: OutpatientEmrProjectionMode | null;
 } {
   if (input.explicitRecordField && isOutpatientEmrRecordField(input.explicitRecordField)) {

@@ -162,6 +162,52 @@ describe('outpatientEmrTemplateSnapshotService', () => {
     expect(result.parseResult?.fields).toHaveLength(2);
   });
 
+  it('accepts a server manual-override mapping on a historical hit', async () => {
+    const templateHash = 'd'.repeat(64);
+    const parseResult = buildOutpatientEmrTemplateSnapshotRequest({
+      request,
+      template,
+      templateHash,
+    }).parseResult;
+    parseResult.fields[0] = {
+      ...parseResult.fields[0],
+      recordField: 'historyOfPresentIllness',
+      mappingSource: 'manual-override',
+      projectionMode: 'section-compose',
+    };
+    regionalMocks.post.mockResolvedValueOnce({
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
+      cacheHit: true,
+      id: 'snapshot-manual',
+      templateId: request.templateId,
+      templateHash,
+      parseResult,
+      receivedAt: 4,
+    });
+
+    const result = await resolveOutpatientEmrTemplateSnapshot({
+      templateId: request.templateId,
+      templateHash,
+    });
+
+    expect(result.parseResult?.fields[0]).toEqual(expect.objectContaining({
+      recordField: 'historyOfPresentIllness',
+      mappingSource: 'manual-override',
+      projectionMode: 'section-compose',
+    }));
+  });
+
+  it('never registers a manual-override mapping into the immutable automatic parse', () => {
+    expect(() => buildOutpatientEmrTemplateSnapshotRequest({
+      request,
+      template: {
+        ...template,
+        fields: [{ ...template.fields[0], mappingSource: 'manual-override' }, template.fields[1]],
+      },
+      templateHash: 'e'.repeat(64),
+    })).toThrow('人工映射不能登记');
+  });
+
   it('returns only an explicit miss and rejects malformed historical responses', async () => {
     const templateHash = 'c'.repeat(64);
     regionalMocks.post.mockResolvedValueOnce({

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { createApp, nextTick, type App } from 'vue';
+import { createApp, h, nextTick, reactive, type App } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OutpatientEmrTemplateField } from '../types';
+import type { OutpatientEmrFieldValueSource, OutpatientEmrTemplateField } from '../types';
 import OutpatientEmrTemplatePreview from './OutpatientEmrTemplatePreview.vue';
 
 let app: App<Element> | null = null;
@@ -33,6 +33,50 @@ afterEach(() => {
 });
 
 describe('OutpatientEmrTemplatePreview', () => {
+  it('updates provenance and clears a resolved conflict without replacing the doctor editor', async () => {
+    const state = reactive({
+      fieldValues: { personalHistory: '模板草稿' },
+      fieldSources: { personalHistory: 'template' } as Record<string, OutpatientEmrFieldValueSource>,
+      conflictFieldIds: new Set<string>(),
+    });
+    root = document.createElement('div');
+    document.body.append(root);
+    app = createApp({
+      setup: () => () => h(OutpatientEmrTemplatePreview, {
+        sanitizedHtml: '<span data-id="personalHistory" data-type="text">模板草稿</span>',
+        fields,
+        ...state,
+      }),
+    });
+    app.mount(root);
+    await nextTick();
+    const editor = root.querySelector<HTMLElement>('[data-outpatient-emr-field-id="personalHistory"]');
+    expect(editor?.title).toContain('未经本次病例核对');
+
+    state.conflictFieldIds = new Set(['personalHistory']);
+    await nextTick();
+    await nextTick();
+    expect(editor?.getAttribute('aria-invalid')).toBe('true');
+    expect(editor?.title).toContain('与同组标志矛盾');
+
+    state.fieldValues.personalHistory = '医生确认的正文';
+    state.fieldSources.personalHistory = 'doctor';
+    state.conflictFieldIds = new Set();
+    await nextTick();
+    await nextTick();
+    expect(root.querySelector('[data-outpatient-emr-field-id="personalHistory"]')).toBe(editor);
+    expect(editor?.textContent).toBe('医生确认的正文');
+    expect(editor?.title).toBe('医生已修改');
+    expect(editor?.hasAttribute('aria-invalid')).toBe(false);
+    expect(editor?.hasAttribute('data-outpatient-emr-issue')).toBe(false);
+
+    state.fieldSources = {};
+    await nextTick();
+    await nextTick();
+    expect(editor?.hasAttribute('title')).toBe(false);
+    expect(editor?.hasAttribute('data-outpatient-emr-source')).toBe(false);
+  });
+
   it('renders sanitized text values and emits only plain doctor edits', async () => {
     const onUpdateField = vi.fn();
     root = document.createElement('div');

@@ -1,0 +1,98 @@
+{
+  "consultationId": "SIM-VISIT-001",
+  "visitId": "SIM-VISIT-001",
+  "timestamp": 1794355499000,
+  "resultType": "record-confirmed",
+  "requestId": "SIM-REQUEST-001",
+  "referenceType": "batch",
+  "action": "batch",
+  "referenceStatus": "pending",
+  "referenceMessage": "等待 HIS 完成门诊模板参数回填并回执",
+  "emrType": "outpatient-emr",
+  "templateMetadata": {
+    "schemaVersion": "outpatient-emr-template-pair.v1",
+    "templateId": "SIM-TEMPLATE-001",
+    "templateName": "合成门诊模板接入示例",
+    "templateHash": "ab8c2e5ade4c7d0cc017d3ac001a0a60d5d32dee36ae01387b98ace6c66cc3de",
+    "fields": [
+      {
+        "id": "主诉文本",
+        "name": "主诉文本",
+        "type": "text",
+        "articleTemplateId": "article-chief",
+        "articleId": "主诉",
+        "articleName": "主诉",
+        "articleDefinitionName": "主诉",
+        "dictionaryItems": [],
+        "recordField": "chiefComplaint",
+        "mappingSource": "definition-record-field",
+        "projectionMode": "direct"
+      },
+      {
+        "id": "吸烟史标志",
+        "name": "吸烟史标志",
+        "type": "select",
+        "articleTemplateId": "article-personal",
+        "articleId": "个人史",
+        "articleName": "个人史",
+        "articleDefinitionName": "个人史",
+        "dictionaryItems": [
+          {
+            "value": "0",
+            "text": "否认"
+          },
+          {
+            "value": "1",
+            "text": "有"
+          }
+        ],
+        "recordField": "personalHistory",
+        "mappingSource": "definition-article-record-field",
+        "projectionMode": "section-compose"
+      },
+      {
+        "id": "吸烟史补充",
+        "name": "吸烟史补充",
+        "type": "text",
+        "articleTemplateId": "article-personal",
+        "articleId": "个人史",
+        "articleName": "个人史",
+        "articleDefinitionName": "个人史",
+        "dictionaryItems": [],
+        "recordField": "personalHistory",
+        "mappingSource": "definition-article-record-field",
+        "projectionMode": "section-compose"
+      }
+    ]
+  },
+  "fieldValues": {
+    "主诉文本": "咳嗽3天。",
+    "吸烟史标志": "有",
+    "吸烟史补充": "既往吸烟20年，已戒烟2年。"
+  },
+  "dictionarySelections": {
+    "吸烟史标志": {
+      "value": "1",
+      "text": "有"
+    }
+  },
+  "emrFieldValues": {
+    "主诉文本": "咳嗽3天。",
+    "吸烟史标志": "1",
+    "吸烟史补充": "既往吸烟20年，已戒烟2年。"
+  },
+  "outpatientRecord": {
+    "schemaVersion": "outpatient-record.v1",
+    "chiefComplaint": "咳嗽3天。",
+    "personalHistory": "吸烟史：有；吸烟史补充：既往吸烟20年，已戒烟2年。"
+  },
+  "writebackScope": {
+    "recordFields": [
+      "chiefComplaint",
+      "personalHistory"
+    ],
+    "includeDiagnosis": false,
+    "orderTypes": []
+  },
+  "orderList": []
+}

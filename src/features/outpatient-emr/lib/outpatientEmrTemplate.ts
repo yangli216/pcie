@@ -17,6 +17,7 @@ import {
 } from './outpatientEmrTemplateDefinition';
 import type {
   OutpatientEmrErrorCode,
+  OutpatientEmrFieldValueSource,
   OutpatientEmrTemplateField,
   OutpatientEmrTemplateInspectionResult,
   OutpatientEmrTemplateParseResult,
@@ -472,16 +473,50 @@ function inspectOutpatientEmrTemplate(
   };
 }
 
+const HIDDEN_STYLE_PATTERN = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)/iu;
+
+function isHiddenByRenderer(element: Element, root: Node): boolean {
+  let current: Element | null = element;
+  while (current && current !== root) {
+    if (current.hasAttribute('hidden')) return true;
+    if (HIDDEN_STYLE_PATTERN.test(current.getAttribute('style') || '')) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+// The renderer has already applied relationscript to this HTML instance; a target the
+// doctor cannot see in the preview must not be generated or written back unseen.
+function assertTargetFieldsVisible(
+  sanitizedHtml: string,
+  targetFields: OutpatientEmrTemplateField[],
+): void {
+  const template = createTemplateFragment(sanitizedHtml);
+  const targetIds = new Set(targetFields.map((field) => field.id));
+  const hiddenIds: string[] = [];
+  template.content.querySelectorAll<HTMLElement>('[data-id][data-type]').forEach((element) => {
+    const fieldId = element.getAttribute('data-id') || '';
+    if (targetIds.has(fieldId) && isHiddenByRenderer(element, template.content)) {
+      hiddenIds.push(fieldId);
+    }
+  });
+  if (hiddenIds.length > 0) {
+    throw new OutpatientEmrError(
+      'INVALID_TARGET_FIELD_IDS',
+      `targetFieldIds 包含当前渲染实例中隐藏的字段：${hiddenIds.join('、')}`,
+    );
+  }
+}
+
 export function parseOutpatientEmrTemplate(
   templateHtml: string,
   templateDefinition: string,
   targetFieldIds: string[],
 ): OutpatientEmrTemplateParseResult {
   const inspection = inspectOutpatientEmrTemplate(templateHtml, templateDefinition);
-  return {
-    ...inspection,
-    targetFields: resolveOutpatientEmrTargetFields(inspection.fields, targetFieldIds),
-  };
+  const targetFields = resolveOutpatientEmrTargetFields(inspection.fields, targetFieldIds);
+  assertTargetFieldsVisible(inspection.sanitizedHtml, targetFields);
+  return { ...inspection, targetFields };
 }
 
 function cloneOutpatientEmrTemplateField(
@@ -560,20 +595,51 @@ export function restoreOutpatientEmrTemplateFromSnapshot(
   targetFieldIds: string[],
 ): OutpatientEmrTemplateParseResult {
   const fields = snapshotFields.map(cloneOutpatientEmrTemplateField);
-  return {
-    sanitizedHtml: prepareOutpatientEmrTemplatePreview(templateHtml).innerHTML,
-    fields,
-    targetFields: resolveOutpatientEmrTargetFields(fields, targetFieldIds),
-  };
+  const sanitizedHtml = prepareOutpatientEmrTemplatePreview(templateHtml).innerHTML;
+  const targetFields = resolveOutpatientEmrTargetFields(fields, targetFieldIds);
+  assertTargetFieldsVisible(sanitizedHtml, targetFields);
+  return { sanitizedHtml, fields, targetFields };
 }
 
-export function buildOutpatientEmrAnalysisDraftValues(
-  fields: OutpatientEmrTemplateField[],
-): Record<string, string> {
-  return Object.fromEntries(fields.map((field) => [
-    field.id,
-    field.dictionaryItems.length > 0 ? '' : field.baselineValue,
-  ]));
+export const OUTPATIENT_EMR_FIELD_SOURCE_LABELS: Readonly<
+  Record<OutpatientEmrFieldValueSource, string>
+> = {
+  template: '模板预置，未经本次病例核对',
+  'template-matched': '模板预置，模型判定与本次病例一致，请核对',
+  ai: 'AI 依据本次病例生成',
+  structured: '来自已确认的结构化病历',
+  doctor: '医生已修改',
+  empty: '待填写',
+};
+
+export const OUTPATIENT_EMR_FIELD_CONFLICT_LABEL = '与同组标志矛盾，请修改其中一项';
+
+export function applyOutpatientEmrFieldSource(
+  element: HTMLElement,
+  source: OutpatientEmrFieldValueSource | undefined,
+  conflict = false,
+): void {
+  if (conflict) {
+    element.setAttribute('data-outpatient-emr-issue', 'conflict');
+    element.setAttribute('aria-invalid', 'true');
+  } else {
+    element.removeAttribute('data-outpatient-emr-issue');
+    element.removeAttribute('aria-invalid');
+  }
+  if (!source) {
+    element.removeAttribute('data-outpatient-emr-source');
+    if (conflict) {
+      element.setAttribute('title', OUTPATIENT_EMR_FIELD_CONFLICT_LABEL);
+    } else {
+      element.removeAttribute('title');
+    }
+    return;
+  }
+  element.setAttribute('data-outpatient-emr-source', source);
+  element.setAttribute(
+    'title',
+    conflict ? OUTPATIENT_EMR_FIELD_CONFLICT_LABEL : OUTPATIENT_EMR_FIELD_SOURCE_LABELS[source],
+  );
 }
 
 export function buildEditableOutpatientEmrPreviewHtml(
@@ -581,6 +647,8 @@ export function buildEditableOutpatientEmrPreviewHtml(
   editableFields: OutpatientEmrTemplateField[],
   fieldValues: Record<string, string>,
   editable = true,
+  fieldSources: Readonly<Record<string, OutpatientEmrFieldValueSource>> = {},
+  conflictFieldIds: ReadonlySet<string> = new Set(),
 ): string {
   const template = createTemplateFragment(sanitizeExternalHtml(sanitizedHtml));
   normalizeTemplateForPreview(template);
@@ -604,6 +672,7 @@ export function buildEditableOutpatientEmrPreviewHtml(
       select.setAttribute('data-outpatient-emr-field-id', fieldId);
       select.setAttribute('aria-label', field.name || fieldId);
       select.disabled = !editable;
+      applyOutpatientEmrFieldSource(select, fieldSources[fieldId], conflictFieldIds.has(fieldId));
 
       if (!dictionaryItem) {
         const placeholder = document.createElement('option');
@@ -633,6 +702,7 @@ export function buildEditableOutpatientEmrPreviewHtml(
       valueElement.textContent = fieldValues[fieldId];
     }
     valueElement.setAttribute('data-outpatient-emr-field-id', fieldId);
+    applyOutpatientEmrFieldSource(valueElement, fieldSources[fieldId], conflictFieldIds.has(fieldId));
     if (editable) {
       valueElement.setAttribute('contenteditable', 'true');
       valueElement.setAttribute('role', 'textbox');

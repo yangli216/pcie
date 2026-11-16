@@ -412,6 +412,33 @@ describe('MedHermes outpatient EMR SDK flow', () => {
     await expect(pending).resolves.toEqual(expected.event.payload);
   });
 
+  it('accepts a manual-override mapping onto the marital reproductive history projection', async () => {
+    const MedHermes = loadSdk();
+    const sdk = new MedHermes();
+    stubAcceptedBridge(sdk);
+    const request = createRequest();
+    const pending = sdk.analyzeOutpatientEmr(request);
+    const expected = createConfirmedEnvelope(request);
+    const metadata = expected.event.payload.templateMetadata as {
+      fields: Array<Record<string, unknown>>;
+    };
+    metadata.fields[0].recordField = 'maritalReproductiveHistory';
+    metadata.fields[0].mappingSource = 'manual-override';
+    metadata.fields[0].projectionMode = 'direct';
+    expected.event.payload.writebackScope = {
+      recordFields: ['maritalReproductiveHistory'],
+      includeDiagnosis: false,
+      orderTypes: [],
+    };
+    expected.event.payload.outpatientRecord = {
+      schemaVersion: 'outpatient-record.v1',
+      maritalReproductiveHistory: '医生确认值',
+    };
+
+    sdk._dispatchEnvelope(expected);
+    await expect(pending).resolves.toEqual(expected.event.payload);
+  });
+
   it('rejects an identity-matched result with an inconsistent fixed-field projection', async () => {
     const MedHermes = loadSdk();
     const sdk = new MedHermes();

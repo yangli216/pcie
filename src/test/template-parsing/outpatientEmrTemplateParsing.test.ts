@@ -3,10 +3,11 @@
 // 夹具为真实门诊病历模板对（HIS 导出的渲染 HTML + 结构化 JSON 定义），
 // 覆盖严格配对、字典基线、标准字段映射、目标字段校验与异常分支。
 import { describe, expect, it } from 'vitest';
+import { buildOutpatientEmrInitialDraft } from '@features/outpatient-emr/lib/outpatientEmrDraftSource';
 import {
-  buildOutpatientEmrAnalysisDraftValues,
   OutpatientEmrError,
   parseOutpatientEmrTemplate,
+  restoreOutpatientEmrTemplateFromSnapshot,
 } from '@features/outpatient-emr/lib/outpatientEmrTemplate';
 import { parseOutpatientEmrTemplateDefinition } from '@features/outpatient-emr/lib/outpatientEmrTemplateDefinition';
 import templateHtml from './fixtures/real-template.html?raw';
@@ -76,7 +77,7 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
       '注意事项文本',
     ]);
 
-    const drafts = buildOutpatientEmrAnalysisDraftValues(result.targetFields);
+    const drafts = Object.fromEntries(result.targetFields.map((field) => [field.id, buildOutpatientEmrInitialDraft(field).value]));
     // 字典字段草稿值必须为空（等待选择），文本字段取基线值
     expect(drafts['意识']).toBe('');
     expect(drafts['主诉文本']).toBe('');
@@ -205,6 +206,19 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
 
     const title = result.fields.find((field) => field.id === '页眉病历标题');
     expect(title).toMatchObject({ baselineValue: '门(急)诊病历', readonly: true });
+  });
+
+  it('TC-19 目标字段在渲染实例中被联动隐藏时报 INVALID_TARGET_FIELD_IDS', () => {
+    // 真实模板在“高血压病史标志=否认”时以内联 display:none 隐藏补充字段。
+    expectOutpatientError(
+      () => parseOutpatientEmrTemplate(templateHtml, templateDefinition, ['主诉文本', '高血压病史补充']),
+      'INVALID_TARGET_FIELD_IDS',
+    );
+    const probe = parseOutpatientEmrTemplate(templateHtml, templateDefinition, ['主诉文本']);
+    expectOutpatientError(
+      () => restoreOutpatientEmrTemplateFromSnapshot(templateHtml, probe.fields, ['高血压病史补充']),
+      'INVALID_TARGET_FIELD_IDS',
+    );
   });
 
   it('TC-08 目标字段为空时报 NO_SUPPORTED_TEMPLATE_FIELDS', () => {

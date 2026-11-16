@@ -1,0 +1,46 @@
+[
+  {
+    "ID": "article-chief",
+    "NAME": "主诉",
+    "ARTICLE": "主诉",
+    "eles": [
+      {
+        "ID": "主诉文本",
+        "NAME": "主诉文本",
+        "TYPE": "text",
+        "READONLY": false,
+        "VALUE": "",
+        "TEXT": "",
+        "RECORD_FIELD": "chiefComplaint"
+      }
+    ]
+  },
+  {
+    "ID": "article-personal",
+    "NAME": "个人史",
+    "ARTICLE": "个人史",
+    "RECORD_FIELD": "personalHistory",
+    "eles": [
+      {
+        "ID": "吸烟史标志",
+        "NAME": "吸烟史标志",
+        "TYPE": "select",
+        "READONLY": false,
+        "VALUE": "0",
+        "TEXT": "否认",
+        "BINDINGDATA": [
+          {"VALUE": "0", "TEXT": "否认"},
+          {"VALUE": "1", "TEXT": "有"}
+        ]
+      },
+      {
+        "ID": "吸烟史补充",
+        "NAME": "吸烟史补充",
+        "TYPE": "text",
+        "READONLY": false,
+        "VALUE": "",
+        "TEXT": "否认吸烟史。"
+      }
+    ]
+  }
+]

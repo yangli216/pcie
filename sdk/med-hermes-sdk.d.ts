@@ -368,6 +368,7 @@ export type OutpatientEmrRecordField =
   | 'pastMedicalHistory'
   | 'personalHistory'
   | 'menstrualHistory'
+  | 'maritalReproductiveHistory'
   | 'familyHistory'
   | 'physicalExam'
   | 'precautions';
@@ -396,6 +397,7 @@ export interface OutpatientEmrTemplateFieldMetadata {
     | 'canonical-id'
     | 'deterministic-alias'
     | 'deterministic-article'
+    | 'manual-override'
     | 'unmapped';
   projectionMode: OutpatientEmrProjectionMode | null;
 }
@@ -425,6 +427,8 @@ export interface OutpatientEmrWritebackPayload extends ConsultationResultPayload
   templateMetadata: OutpatientEmrTemplateMetadata;
   fieldValues: Record<string, string>;
   dictionarySelections: Record<string, OutpatientEmrDictionaryItem>;
+  /** PHIS medEleDatabinds 绑定值；文本字段为文本，字典字段为编码 */
+  emrFieldValues: Record<string, string>;
   outpatientRecord?: {
     schemaVersion: 'outpatient-record.v1';
   } & Partial<Record<OutpatientEmrRecordField, string>>;

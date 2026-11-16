@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
+import { buildOutpatientEmrInitialDraft } from './outpatientEmrDraftSource';
 import {
   buildEditableOutpatientEmrPreviewHtml,
-  buildOutpatientEmrAnalysisDraftValues,
   OutpatientEmrError,
   parseOutpatientEmrTemplate,
   restoreOutpatientEmrTemplateFromSnapshot,
@@ -138,7 +138,7 @@ describe('parseOutpatientEmrTemplate template pair', () => {
       articleName: '诊断',
       articleDefinitionName: '初步诊断',
     }));
-    expect(buildOutpatientEmrAnalysisDraftValues(result.targetFields)).toEqual({
+    expect(Object.fromEntries(result.targetFields.map((field) => [field.id, buildOutpatientEmrInitialDraft(field).value]))).toEqual({
       肝炎史标志: '',
       肝炎史补充: '',
       初步诊断内容: '上呼吸道感染',
@@ -299,5 +299,49 @@ describe('parseOutpatientEmrTemplate template pair', () => {
     expect(preview).toContain('outpatient-emr-dictionary-select');
     expect(preview).toContain('医生补充');
     expect(preview).toContain('data-id="article-diagnosis"');
+  });
+
+  it('marks each preview field with its draft source for doctor review', () => {
+    const parsed = parseOutpatientEmrTemplate(
+      html,
+      definition,
+      ['肝炎史标志', '肝炎史补充'],
+    );
+    const container = document.createElement('div');
+    container.innerHTML = buildEditableOutpatientEmrPreviewHtml(
+      parsed.sanitizedHtml,
+      parsed.targetFields,
+      { 肝炎史标志: '', 肝炎史补充: '模板补充' },
+      true,
+      { 肝炎史标志: 'empty', 肝炎史补充: 'template' },
+    );
+
+    const detail = container.querySelector('[data-outpatient-emr-field-id="肝炎史补充"]');
+    expect(detail?.getAttribute('data-outpatient-emr-source')).toBe('template');
+    expect(detail?.getAttribute('title')).toBe('模板预置，未经本次病例核对');
+    const flag = container.querySelector('select[data-outpatient-emr-field-id="肝炎史标志"]');
+    expect(flag?.getAttribute('data-outpatient-emr-source')).toBe('empty');
+  });
+
+  it('marks conflicting flag/detail fields over their source label', () => {
+    const parsed = parseOutpatientEmrTemplate(
+      html,
+      definition,
+      ['肝炎史标志', '肝炎史补充'],
+    );
+    const container = document.createElement('div');
+    container.innerHTML = buildEditableOutpatientEmrPreviewHtml(
+      parsed.sanitizedHtml,
+      parsed.targetFields,
+      { 肝炎史标志: '有', 肝炎史补充: '否认肝炎史' },
+      true,
+      { 肝炎史标志: 'ai', 肝炎史补充: 'template-matched' },
+      new Set(['肝炎史标志', '肝炎史补充']),
+    );
+
+    const detail = container.querySelector('[data-outpatient-emr-field-id="肝炎史补充"]');
+    expect(detail?.getAttribute('data-outpatient-emr-issue')).toBe('conflict');
+    expect(detail?.getAttribute('data-outpatient-emr-source')).toBe('template-matched');
+    expect(detail?.getAttribute('title')).toContain('矛盾');
   });
 });

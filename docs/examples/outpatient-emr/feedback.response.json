@@ -1,0 +1,8 @@
+{
+  "status": "success",
+  "consultationId": "SIM-VISIT-001",
+  "requestId": "SIM-VOICE-REQUEST-001",
+  "referenceType": "batch",
+  "timestamp": 1794355500000,
+  "traceId": "his-sim-feedback-001"
+}

@@ -53,7 +53,23 @@ export type OutpatientEmrFieldMappingSource =
   | 'canonical-id'
   | 'deterministic-alias'
   | 'deterministic-article'
+  | 'manual-override'
   | 'unmapped';
+
+/** Mapping sources a client-side parse may produce; manual-override only comes from server overlays. */
+export type OutpatientEmrParsedFieldMappingSource = Exclude<
+  OutpatientEmrFieldMappingSource,
+  'manual-override'
+>;
+
+/** Preview-only provenance of a field draft; never sent in record-confirmed. */
+export type OutpatientEmrFieldValueSource =
+  | 'template'
+  | 'template-matched'
+  | 'ai'
+  | 'structured'
+  | 'doctor'
+  | 'empty';
 
 export interface OutpatientEmrTemplateField {
   id: string;
@@ -89,6 +105,7 @@ export type OutpatientEmrErrorCode =
   | 'INVALID_DICTIONARY_DEFINITION'
   | 'MISSING_DICTIONARY_DEFINITION'
   | 'INVALID_DICTIONARY_VALUE'
+  | 'FIELD_VALUE_CONFLICT'
   | 'DUPLICATE_TEMPLATE_FIELD'
   | 'INVALID_RECORD_FIELD_MAPPING'
   | 'DUPLICATE_RECORD_FIELD_MAPPING'

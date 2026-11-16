@@ -1,0 +1,19 @@
+{
+  "idPi": "SIM-PATIENT-001",
+  "idVis": "SIM-VISIT-001",
+  "naPi": "模拟患者",
+  "sdSexText": "男性",
+  "ageText": "45岁",
+  "outpatientEmr": {
+    "templateId": "SIM-TEMPLATE-001",
+    "templateName": "合成门诊模板接入示例",
+    "templateHtml": "<section data-id=\"article-chief\" data-article=\"主诉\" data-name=\"主诉\">\n  <div data-id=\"主诉文本\" data-type=\"text\" data-name=\"主诉文本\" data-readonly=\"false\"><span class=\"tag-value\"></span></div>\n</section>\n<section data-id=\"article-personal\" data-article=\"个人史\" data-name=\"个人史\">\n  <div data-id=\"吸烟史标志\" data-type=\"select\" data-name=\"吸烟史标志\" data-readonly=\"false\"><span class=\"tag-value\">否认</span></div>\n  <div data-id=\"吸烟史补充\" data-type=\"text\" data-name=\"吸烟史补充\" data-readonly=\"false\"><span class=\"tag-value\">否认吸烟史。</span></div>\n</section>\n",
+    "templateDefinition": "[\n  {\n    \"ID\": \"article-chief\",\n    \"NAME\": \"主诉\",\n    \"ARTICLE\": \"主诉\",\n    \"eles\": [\n      {\n        \"ID\": \"主诉文本\",\n        \"NAME\": \"主诉文本\",\n        \"TYPE\": \"text\",\n        \"READONLY\": false,\n        \"VALUE\": \"\",\n        \"TEXT\": \"\",\n        \"RECORD_FIELD\": \"chiefComplaint\"\n      }\n    ]\n  },\n  {\n    \"ID\": \"article-personal\",\n    \"NAME\": \"个人史\",\n    \"ARTICLE\": \"个人史\",\n    \"RECORD_FIELD\": \"personalHistory\",\n    \"eles\": [\n      {\n        \"ID\": \"吸烟史标志\",\n        \"NAME\": \"吸烟史标志\",\n        \"TYPE\": \"select\",\n        \"READONLY\": false,\n        \"VALUE\": \"0\",\n        \"TEXT\": \"否认\",\n        \"BINDINGDATA\": [\n          {\"VALUE\": \"0\", \"TEXT\": \"否认\"},\n          {\"VALUE\": \"1\", \"TEXT\": \"有\"}\n        ]\n      },\n      {\n        \"ID\": \"吸烟史补充\",\n        \"NAME\": \"吸烟史补充\",\n        \"TYPE\": \"text\",\n        \"READONLY\": false,\n        \"VALUE\": \"\",\n        \"TEXT\": \"否认吸烟史。\"\n      }\n    ]\n  }\n]\n",
+    "targetFieldIds": [
+      "主诉文本",
+      "吸烟史标志",
+      "吸烟史补充"
+    ],
+    "requestId": "SIM-VOICE-REQUEST-001"
+  }
+}
