@@ -3,9 +3,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildEditableInpatientEmrPreviewHtml,
+  buildDefaultFieldValues,
   fillInpatientEmrTemplateHtml,
+  isInpatientEmrPlaceholderValue,
   parseInpatientEmrTemplate,
 } from './inpatientEmrTemplate';
+import type { InpatientEmrContext } from '../types';
 
 const MALICIOUS_TEMPLATE = `
   <section onclick="alert(1)">
@@ -17,6 +20,46 @@ const MALICIOUS_TEMPLATE = `
 `;
 
 describe('inpatient EMR HTML boundary', () => {
+  it('recognizes diagnostic narrative semantics while keeping objective diagnosis fields excluded', () => {
+    const parsed = parseInpatientEmrTemplate(`
+      <span data-id="syn-1" data-type="text" data-name="诊断依据">请输入诊断依据</span>
+      <span data-id="syn-2" data-type="text" data-name="鉴别诊断">请输入鉴别诊断</span>
+      <span data-id="syn-3" data-type="text" data-name="入院诊断">原诊断</span>
+      <span data-id="syn-4" data-type="text" data-name="诊断编码">原编码</span>
+      <span data-id="syn-5" data-type="text" data-name="诊断依据录入时间">时间</span>
+    `);
+    expect(parsed.fields.filter((field) => field.aiSuitable).map((field) => field.id)).toEqual(['syn-1', 'syn-2']);
+    expect(parsed.fields[0].meaning).toContain('支持证据');
+    expect(parsed.fields[1].meaning).toContain('待确认信息');
+    expect(parsed.fields[0].rule.source).toBe('ai');
+    expect(parsed.fields[1].rule.source).toBe('ai');
+  });
+
+  it('starts AI values empty without replacing non-AI template values with generated-looking defaults', () => {
+    const context: InpatientEmrContext = {
+      documentContext: { templateId: 'SYN', templateName: '首次病程记录', recordType: '首次病程记录', recordTime: '2026-11-17 14:00', recordDate: '2026-11-17' },
+      registration: null, orders: [], temperatureChart: null,
+    };
+    const parsed = parseInpatientEmrTemplate(`
+      <span data-id="diagnostic-basis" data-type="text" data-name="诊断依据">请输入诊断依据</span>
+      <span data-id="病程记录文本" data-type="text">模板原病程</span>
+      <span data-id="入院诊断" data-type="text">HIS原诊断</span>
+    `);
+    expect(buildDefaultFieldValues(parsed.fields, context)).toEqual({
+      'diagnostic-basis': '', 病程记录文本: '', 入院诊断: 'HIS原诊断',
+    });
+    parsed.fields[1].aiSuitable = false;
+    expect(buildDefaultFieldValues(parsed.fields, context).病程记录文本).toBe('模板原病程');
+  });
+
+  it.each(['请输入诊断依据', '请输入鉴别诊断…', '请填写诊疗计划。', '请录入正文', '待填写', '待补充……', '[请输入诊断依据]', '【请输入鉴别诊断】', '（待补充）', '( 待填写 )'])('rejects a whole-field entry hint: %s', (value) => {
+    expect(isInpatientEmrPlaceholderValue(value)).toBe(true);
+  });
+
+  it.each(['请补充维生素D。', '（请补充维生素D。）', '患者病史待补充，已知情况如下。', '仅依据现有资料。', '[待补充）', ''])('keeps clinical text distinct from a whole-field hint: %s', (value) => {
+    expect(isInpatientEmrPlaceholderValue(value)).toBe(false);
+  });
+
   it('sanitizes before parsing and preserves template field contracts', () => {
     const parsed = parseInpatientEmrTemplate(MALICIOUS_TEMPLATE);
 

@@ -1099,6 +1099,7 @@ HTTP Bridge 受理响应：
 7. HIS 完成回填后，建议调用 `POST /api/consultation/reference-feedback`，带回相同 `consultationId` 与 `requestId`。回执时 `referenceType` 可传 `batch`，也可留空由 Bridge 按 `batch` 处理；桌面端收到成功回执后会从病历生成界面收起回小球状态。
 8. 病程正文生成时，`recordTime` 的日期是“今日 / 本次查房日期”的唯一依据；若体温单最新记录早于该日期，只能表述为“最近一次体温单记录（YYYY-MM-DD）”，不得写成“今日（历史日期）查房”。
 9. 历史病历中 `medType=2` 的病案首页不进入 AI 上下文；`medType=0` 入院记录建议提取 `chiefComplaint`、`presentIllness` 和 `structuredSections`，不要只传整篇 HTML 文本。
+10. 正文生成按当前模板字段 ID 和后台最终 AI 开关执行；初次自动分类不参与最终模型指令。模型只能返回一个完整 JSON 对象，全部 AI 字段必须显式返回字符串；资料不足可显式为空，但空值、占位、漏项、未知项、重复键或错误类型不得显示为完整生成。合法部分只作可编辑预览，失败不自动发出回写事件，不追加非流式请求或临床兜底文本；医生仍按既有流程核对、编辑并确认回写。Bridge 的成功响应只表示入口请求已接收，不表示模型字段或 HIS 回填完成。
 
 说明：
 
@@ -1109,6 +1110,8 @@ HTTP Bridge 受理响应：
 5. 轻量质控只影响桌面端是否弹出确认提醒，不改变 `record-confirmed` payload 字段结构；HIS 侧仍按 `fieldValues` 回填当前模板。
 
 ### 6.3C `POST /api/outpatient/emr/analyze`
+
+HIS 接入先看 [病历模板上传与最终回写接口](docs/his-outpatient-emr-template-integration.md)：包含语音 / 独立分析上传、WebSocket 最终回写、HIS 保存和回执的完整报文。本节维护完整接口契约。
 
 用途：把 HIS 当前门急诊病历模板的渲染实例与结构定义成对交给全医慧助（PCIE），按渲染器给出的字段范围完成一次结构化分析，打开独立预览供医生修改，并按模板稳定字段 ID 返回参数。PCIE 负责“模板对解析 → 参数组织 → 结果事件”逻辑闭环，不负责 PHIS 最终写入动作。
 
@@ -1176,7 +1179,7 @@ HIS 必须显式提供全部必填字段；客户端不生成、不修剪、不�
 | `templateDefinition` | String | 是 | 与 HTML 属于同一套模板的 JSON 结构定义字符串；非空；UTF-8 原文最多 1 MiB |
 | `targetFieldIds` | String[] | 是 | 渲染器完成性别、年龄及联动后得出的当前可写字段白名单；至少 1 项、无空值、无首尾空白、无重复 |
 | `recordContext` | Object | 是 | 本次分析依据；必须是严格 JSON 对象，且至少包含一项非空临床事实 |
-| `patient` | Object | 否 | 只接受 `idPi / name / sdSexText / ageText`，用于患者主体和性别年龄校验 |
+| `patient` | Object | 否 | 只接受 `idPi / name / sdSexText / ageText`；`idPi / name` 只参与本地请求身份比对，不发送给模型，模型只获得 `sdSexText / ageText` |
 | `requestId` | String | 是 | HIS 生成的单次任务唯一标识；无首尾空白；用于 Promise 匹配、事件去重和回执闭环 |
 
 `recordContext` 没有强制业务字段枚举，但推荐使用以下稳定结构，便于不同 HIS 保持一致：
@@ -1250,7 +1253,7 @@ Bridge 同步受理响应：
 3. HTML 章节必须显式携带 `data-id / data-article / data-name`；每个非动作字段必须位于且只位于一个这样的章节节点内，并显式携带唯一的 `data-id / data-type / data-name / data-readonly`。解析器按章节 `JSON ID + ARTICLE ↔ HTML data-id + data-article`、字段 `JSON ID ↔ HTML data-id` 配对；字段所属业务章节取最近的章节祖先，非动作字段的类型、名称、只读状态和所属业务章节必须完全一致。渲染章节 `data-name` 可与定义章节 `NAME` 不同，二者分别保留，不能按名称配对。HTML 多出字段、缺少非动作字段、重复 ID 或身份不一致均返回 `TEMPLATE_PAIR_MISMATCH`。
 4. HTML 当前字段显示值必须与 JSON 归一后的 `TEXT` 一致。字典只由 JSON `BINDINGDATA[].VALUE/TEXT` 定义；HTML 不再接受 `data-dictionary-items / data-dictionary-value / data-options`。字典项 `VALUE/TEXT` 归一化后同时为空时是不可选占位并排除，因此真实模板中的 `VALUE="" / TEXT=" "` 合法；除此之外，字典编码或文字带首尾空白、非空编码缺少文字、重复编码或重复文字均返回 `INVALID_DICTIONARY_DEFINITION`。字典当前 `VALUE + TEXT` 必须命中同一合法项且 `TEXT` 与 HTML 显示值一致，否则返回 `TEMPLATE_PAIR_MISMATCH`。当前选择只作为源元数据，不成为模型结果或兜底。
 5. 定义中的 `RECORD_FIELD / AI_SUITABLE` 是扩展元数据权威来源。HTML 若同时携带 `data-record-field / data-ai-suitable`，值必须一致；HTML 单边声明而 JSON 未声明时拒绝。PCIE 保留 `relationscript / relationdata / HIDDEN` 等定义信息用于审计，但不执行模板脚本。
-6. `targetFieldIds` 是 HIS 渲染器执行性别、年龄和其他联动后给出的非空、无首尾空白、无重复白名单，只包含当前实际显示且需要分析的可写字段。PCIE 不推断、不扩充、不静默忽略；未知或只读目标使整次请求失败。
+6. `targetFieldIds` 是 HIS 渲染器执行性别、年龄和其他联动后给出的非空、无首尾空白、无重复白名单，只包含当前实际显示且需要分析的可写字段。PCIE 不推断、不扩充、不静默忽略；未知或只读目标使整次请求失败。若目标字段在 HIS 渲染实例中自身或任一祖先带 `hidden` 属性、内联 `display:none` 或 `visibility:hidden`，说明渲染器已把它隐藏，医生无法在预览中看到或修改，PCIE 以 `INVALID_TARGET_FIELD_IDS` 整次拒绝，不显示也不回写隐藏字段。
 7. `recordContext` 必须是严格 JSON 对象且至少含一项非空事实；`patient` 可选，只接受 `idPi / name / sdSexText / ageText`。相同 `requestId` 仅在 `visitId + templateId + templateName + 原始 templateHtml + 原始 templateDefinition + targetFieldIds 集合 + patient + recordContext` 全部相同时幂等恢复，否则返回 `REQUEST_ID_CONFLICT`。
 
 模板对 hash：
@@ -1334,7 +1337,7 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
 回传约束：
 
 1. `templateMetadata.fields` 只包含本次 `targetFieldIds` 范围内、与模板对 hash 绑定的字段映射快照，保留字段身份、定义章节 ID、业务章节 ID、渲染章节名、定义章节名、合法字典和固定映射；后台保存的完整解析快照可以包含模板中的其他非目标字段。最终事件不返回两份模板原文、提示词、原始 `recordContext` 或模型原文。
-2. `fieldValues` 必须逐一包含本次分析范围内全部模板字段。每个生效字典字段都必须由模型重新显式返回；漏 key 是模型输出协议错误，显式空字符串或模板外值保留为空让医生选择，禁止回退模板当前/默认选择。语音问诊续接场景中，标准结果页已确认的完整固定既往史槽位会按 PHIS 精确 `data-id` 投影，并用目标字段实际 `BINDINGDATA` 把绑定编码还原成显示文本；例如同一个阳性编码 `"1"` 在传染病史中显示“患有”，在高血压病史中显示“有”。明确的 `physicalExamVitalSigns` 同样按 `体温/脉搏/呼吸/收缩压/舒张压` 精确回填。没有结构化确认项时不得从普通正文或诊断推断确定性覆盖。医生确认时字典值必须唯一命中模板项，`dictionarySelections[id].text` 必须与 `fieldValues[id]` 一致。
+2. `fieldValues` 必须逐一包含本次分析范围内全部模板字段。非字典文本字段的模板当前值是模板预置草稿：模型没有相关事实时返回空，PCIE 保留草稿供医生在预览中核对或修改，最终值以医生确认为准；草稿/AI/结构化/医生的来源标注只在预览中显示，不进入回参。每个生效字典字段都必须由模型重新显式返回；漏 key 是模型输出协议错误，显式空字符串或模板外值保留为空让医生选择，禁止回退模板当前/默认选择。语音问诊续接场景中，标准结果页已确认的完整固定既往史槽位会按 PHIS 精确 `data-id` 投影，并用目标字段实际 `BINDINGDATA` 把绑定编码还原成显示文本；例如同一个阳性编码 `"1"` 在传染病史中显示“患有”，在高血压病史中显示“有”。明确的 `physicalExamVitalSigns` 同样按 `体温/脉搏/呼吸/收缩压/舒张压` 精确回填。没有结构化确认项时不得从普通正文或诊断推断确定性覆盖。医生确认时字典值必须唯一命中模板项，`dictionarySelections[id].text` 必须与 `fieldValues[id]` 一致。同一章节内“某某史标志”与对应“某某史补充/说明”（按去掉“标志/补充”后的同名前缀配对）必须一致：标志为肯定项（有、是、患有、阳性、可闻及等）时补充说明不得是否认/无类表述，标志为否定项时补充说明不得写入阳性事实；不一致时两个字段在预览中以红色标出“与同组标志矛盾”，并与字典待选一样阻止确认，直到医生修改任一字段，因此最终回参中不会出现“标志为有、补充为否认”这类自相矛盾的组合。
 3. `outpatientRecord` 只投影已映射标准字段；未映射字段仍通过 `fieldValues` 返回。同一章节的 `section-compose` 字段按模板顺序确定性归并。`fieldValues + dictionarySelections + outpatientRecord + writebackScope` 必须来自同一个医生最终值 Map，不得为不同结果重复调用模型。
 4. `writebackScope.includeDiagnosis=false`、`writebackScope.orderTypes=[]`、`orderList=[]`；本接口不处理诊断或医嘱。HIS 收到 `record-confirmed` 后自行按模板字段 ID 回填并通过 `/api/consultation/reference-feedback` 回执。
 5. SDK Promise 与业务订阅只消费 payload 自身身份和固定结构完整的确认/取消事件，不从事件 envelope 补字段。模板快照登记、模型分析或最终校验失败均不得产生部分 `record-confirmed`。
@@ -1347,7 +1350,7 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
 | `requestId` | 是 | 必须等于请求值；回填完成后原样用于回执 |
 | `resultType` | 是 | 固定为 `record-confirmed` |
 | `emrType` | 是 | 固定为 `outpatient-emr`，用于与普通问诊和住院病历结果区分 |
-| `templateMetadata` | 是 | 校验模板 ID、名称、hash，并读取每个字段的类型、字典和标准病历映射 |
+| `templateMetadata` | 是 | 校验模板 ID、名称、hash，并读取每个字段的类型、字典和标准病历映射。`fields[].mappingSource` 取值为 `definition-record-field / definition-article-record-field / canonical-id / deterministic-alias / deterministic-article / manual-override / unmapped`；`manual-override` 表示该模板版本的映射由 PCIE 后台人工维护，`projectionMode` 仍为 `direct` 或 `section-compose`，人工显式不映射的字段返回 `unmapped` |
 | `fieldValues` | 是 | 以模板字段 `data-id` 为 key 的最终显示文本；必须覆盖全部本次目标字段 |
 | `dictionarySelections` | 是 | 字典字段的最终 `{value,text}`；非字典字段不在此对象中 |
 | `emrFieldValues` | 是 | 可直接传给 `medEleDatabinds` 的扁平 `data-id → 绑定值`；文本字段为最终文本，字典字段为 `dictionarySelections[id].value`，语音合并时还包含医生已选标准病历字段的常用 data-id 和完整固定既往史槽位 |
@@ -1356,6 +1359,10 @@ HIS 每次调用都应传入当前完整模板对，不需要预先调用“模�
 | `orderList` | 是 | 当前接口固定为空数组；HIS 不得据此清空已有医嘱 |
 
 #### 6.3C.6 HIS 回填规则
+
+`fieldValues / emrFieldValues` 是以当前模板稳定字段 ID 为 key 的开放字段表，不限定模板业务字段名称。HIS 应使用一个通用适配器遍历目标字段、按 ID 匹配当前模板控件，再依据类型和字典绑定；不按患者、疾病或模板字段名编写分支。`outpatientRecord` 是可选标准投影，不限制模板字段范围。通用匹配示例见 [回写接口：按 ID 通用回填](docs/his-outpatient-emr-template-integration.md#field-binding)。
+
+HIS 渲染器负责联动及目标选择；当前 PCIE 不执行模板脚本、不自动扩充新显现字段。对源模板标为可写的行政字段，提示词约束不替代 HIS 的目标策略，也没有代码级自动剔除。接入方责任与处理流程分别见 [联动字段](docs/his-outpatient-emr-template-integration.md#linkages)和[系统字段](docs/his-outpatient-emr-template-integration.md#system-fields)。
 
 HIS 收到结果后必须按以下顺序处理：
 
@@ -2553,6 +2560,8 @@ HIS 接入完成后，至少验证以下场景：
 白云分支不调用萧山健康处方 `/v1/client/chronic-disease/examination-recommendations/query`，也不自动生成慢病检查/检验候选，因此不会新增该来源的 `record-confirmed.orderList` 项。通用检查/检验目录、医生明确医嘱和既有 batch 回写契约不变；医生选择的检查/检验仍携带 idSrv、执行科室、部位和 jsonField.idLisCategory，并使用同一 requestId。白云已移除检验检查互认决策流程：`orderList` 检查/检验项的 `mutualRecognitionCode` 固定为空字符串（不参与互认，不透传目录真实编码），不弹互认决策、不发送 `recognitionDecision`。宿主若仍返回互认 `pending` 回执，桌面端视为中间态：保持原回写等待态并继续关联原 requestId，以中立提示等待真实终态，不误作成功、不写成保存失败；同一 requestId 随后真实 success / failed / cancelled 只收尾一次，新请求（真实终态或会话切换后）开始后旧 requestId 才被隔离。
 
 住院病历回填重试关联：首次发送保留入口requestId；如果前一次已成功发送给HIS，医生在失败回执后重试或重新生成后再发送时使用新的requestId。HIS必须按本次record-confirmed的requestId回执，不得复用上一条回执标识。SDK生成Promise仍在首次匹配的record-confirmed时resolve，后续回填尝试沿用事件订阅。字段结构保持原契约。
+
+住院日志经签名 `POST /v1/client/user-logs/inpatient-emr/events` 上传，完整模板字段最多500项、单事件最多1MiB，字段顺序与正文保留原样。字段校验拒绝仍为 HTTP 400 / `BIZ-001`，消息追加有界的字段路径、校验类型和长度/项数诊断，不含原值；详细限制见[服务端住院日志契约](../pcie-server/API.md#住院病历日志)。待传事件只在服务端确认后删除，服务端修复后可用原事件补传。
 
 ## 分段 ASR 配置
 

@@ -42,4 +42,22 @@ describe('inpatient business log snapshots', () => {
     expect(first.generationId).not.toBe(second.generationId);
     expect(events[0].doctorName).toBeUndefined(); expect(events[0].fields).toEqual([]);
   });
+  it('keeps all 261 template fields and their order in waiting and frozen writeback snapshots', async () => {
+    const events: InpatientLogSnapshot[] = [];
+    const generated = result();
+    generated.template.fields = Array.from({ length: 261 }, (_, index) => ({
+      ...generated.template.fields[0], id: `field-${index}`, name: `字段${index}`,
+    }));
+    generated.initialFieldValues = Object.fromEntries(generated.template.fields.map(field => [field.id, `原稿${field.id}`]));
+    generated.fieldValues = { ...generated.initialFieldValues, 'field-260': '医生修改末字段' };
+    generated.request = { ...request, requestId: 'write-many-fields' };
+    const session = await createInpatientLogSession(request, async snapshot => { events.push(snapshot); });
+    await session.record('waiting', generated);
+    await session.record('writeback_requested', generated, undefined, generated.fieldValues);
+
+    expect(events[0].fields.map(field => field.id)).toEqual(Array.from({ length: 261 }, (_, index) => `field-${index}`));
+    expect(events[0].fields[260]).toMatchObject({ generatedValue: '原稿field-260', finalValue: null });
+    expect(events[1].fields).toHaveLength(261);
+    expect(events[1].fields[260]).toMatchObject({ generatedValue: '原稿field-260', finalValue: '医生修改末字段' });
+  });
 });

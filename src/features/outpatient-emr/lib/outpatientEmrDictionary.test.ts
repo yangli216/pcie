@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   findInvalidOutpatientEmrDictionaryValue,
-  resolveOutpatientEmrBaselineDictionaryItem,
   resolveOutpatientEmrDictionaryItem,
   validateOutpatientEmrDictionaryItems,
 } from './outpatientEmrDictionary';
@@ -27,19 +26,6 @@ describe('outpatient EMR dictionary resolution', () => {
       { value: '有', text: '否认' },
       { value: '1', text: '有' },
     ])).toContain('无法唯一匹配');
-  });
-
-  it('accepts the current selection only when VALUE and TEXT identify the same item', () => {
-    expect(resolveOutpatientEmrBaselineDictionaryItem({
-      dictionaryItems: items,
-      baselineDictionaryValue: '0',
-      baselineValue: '否认',
-    })).toEqual({ value: '0', text: '否认' });
-    expect(resolveOutpatientEmrBaselineDictionaryItem({
-      dictionaryItems: items,
-      baselineDictionaryValue: '0',
-      baselineValue: '有',
-    })).toBeNull();
   });
 
   it('reports a missing or invalid final selection for every returned dictionary field', () => {

@@ -29,6 +29,7 @@ const {
   template,
   targetFields,
   fieldValues,
+  fieldValueSources,
   analysisStatus,
   analysisErrorCode,
   analysisErrorMessage,
@@ -36,6 +37,7 @@ const {
   writebackMessage,
   pendingWritebackRequestId,
   dictionaryValidationMessage,
+  conflictFieldIds,
   canSubmit,
   canRetry,
   start,
@@ -162,6 +164,8 @@ async function handleCancel(): Promise<void> {
           :sanitized-html="template.sanitizedHtml"
           :fields="targetFields"
           :field-values="fieldValues"
+          :field-sources="fieldValueSources"
+          :conflict-field-ids="conflictFieldIds"
           :editable="previewEditable"
           @update-field="handleUpdateField"
         />

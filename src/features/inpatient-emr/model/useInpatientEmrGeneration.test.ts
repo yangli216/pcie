@@ -48,8 +48,36 @@ describe('inpatient log lifecycle',()=>{
   expect(model.result.value?.request.admissionId).toBe('new');expect(model.isGenerating.value).toBe(false);
   expect(model.applyReferenceFeedback({status:'success',consultationId:'old',requestId:'req-old'})).toBeNull();
  });
- it.each([['waiting','waiting'],['failed','fallback'],['used','generated']])('records %s distinctly',async(status,event)=>{
+ it.each([['waiting','waiting'],['used','generated']])('records %s distinctly',async(status,event)=>{
   mocks.generate.mockResolvedValue(generated(request(),status));const model=useInpatientEmrGeneration();await model.start(request());expect(mocks.sessions[0].record).toHaveBeenCalledWith(event,expect.anything());
+ });
+ it('keeps failed drafts available for doctor correction without reporting a completed generation',async()=>{
+  mocks.generate.mockImplementation(async(req,onProgress)=>{
+   for(const key of ['patient','orders','temperature','template','generate']) onProgress({key,status:'done'});
+   return generated(req,'failed');
+  });
+  const model=useInpatientEmrGeneration();await model.start(request());
+  expect(model.result.value?.fieldValues.f).toBe('AI');
+  expect(model.steps.value.find(step=>step.key==='generate')?.status).toBe('error');
+  expect(model.completedStepCount.value).toBe(4);
+  expect(model.errorMessage.value).toContain('未完整生成');
+  expect(mocks.sessions[0].record).toHaveBeenCalledWith('generation_failed',expect.anything(),'住院病历生成失败');
+  expect(mocks.sessions[0].record.mock.calls.some(call=>call[0]==='generated'||call[0]==='fallback')).toBe(false);
+  model.updateFieldValue('f','医生核对后的正文');
+  expect(await model.writeBack()).toBe(true);
+  expect(mocks.invoke).toHaveBeenCalledWith('complete_consultation',expect.objectContaining({result:expect.objectContaining({fieldValues:{f:'医生核对后的正文'}})}));
+ });
+ it('rejects late stream updates after failure so they cannot overwrite doctor edits or the failed step',async()=>{
+  let progress!:(value:{key:string;status:string})=>void;
+  let partial!:(value:InpatientEmrGenerationResult)=>void;
+  mocks.generate.mockImplementation(async(req,onProgress,onPartial)=>{
+   progress=onProgress;partial=onPartial;onProgress({key:'generate',status:'running'});onPartial(generated(req,'failed'));throw new Error('生成未完整完成');
+  });
+  const model=useInpatientEmrGeneration();await model.start(request());model.updateFieldValue('f','医生稿');
+  partial(generated(request()));progress({key:'generate',status:'done'});
+  expect(model.result.value?.fieldValues.f).toBe('医生稿');
+  expect(model.steps.value.find(step=>step.key==='generate')?.status).toBe('error');
+  expect(model.errorMessage.value).toBe('生成未完整完成');
  });
  it('records generation and dispatch failures without claiming success',async()=>{
   mocks.generate.mockRejectedValueOnce(new Error('upstream'));const model=useInpatientEmrGeneration();await model.start(request());expect(mocks.sessions[0].record).toHaveBeenCalledWith('generation_failed',null,'住院病历生成失败');

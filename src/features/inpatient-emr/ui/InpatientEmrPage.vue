@@ -91,7 +91,7 @@
       </aside>
 
       <section class="preview-pane">
-        <div v-if="errorMessage" class="error-banner">
+        <div v-if="errorMessage" class="error-banner" role="alert">
           <Icon icon="lucide:triangle-alert" :size="18" />
           <span>{{ errorMessage }}</span>
         </div>
@@ -681,6 +681,7 @@ watch(
         void loadOutpatientVisits({ warnWhenMissingPatient: false });
       }
       void start(request).then(() => {
+        if (props.request !== request) return;
         if (isAdmission) {
           void loadOutpatientVisits({ warnWhenMissingPatient: true });
         }
@@ -713,7 +714,7 @@ useConsultationReferenceFeedbackListener<InpatientEmrReferenceFeedbackPayload>({
 });
 
 watch(
-  [() => result.value?.generatedAt, isGenerating, writebackStatus],
+  [result, isGenerating, writebackStatus],
   () => {
     if (!result.value) {
       previewHtml.value = '';

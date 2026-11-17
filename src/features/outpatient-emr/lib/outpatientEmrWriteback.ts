@@ -5,6 +5,7 @@ import {
   resolveOutpatientEmrFinalDictionaryItem,
   validateOutpatientEmrDictionaryItems,
 } from './outpatientEmrDictionary';
+import { findOutpatientEmrFieldConflicts } from './outpatientEmrFieldConsistency';
 import { findConflictingOutpatientEmrRecordFieldMapping } from './outpatientEmrFieldMapping';
 import { OutpatientEmrError } from './outpatientEmrTemplate';
 import { isPreparedOutpatientEmrWritebackPayload } from './voiceOutpatientEmr';
@@ -64,14 +65,10 @@ export function normalizeOutpatientEmrModelValues(
       const dictionaryItem = resolveOutpatientEmrFinalDictionaryItem(field, candidate);
       return [field.id, dictionaryItem?.text || ''];
     }
-    if (typeof candidate !== 'string') {
-      return [field.id, field.baselineValue];
-    }
-    const normalized = candidate.replace(/\r\n?/g, '\n').trim();
-    if (!normalized) {
-      return [field.id, field.baselineValue];
-    }
-    return [field.id, normalized];
+    // Text fields: an empty or missing model value means "no case fact for this
+    // field"; the analysis session decides whether a template draft is kept.
+    if (typeof candidate !== 'string') return [field.id, ''];
+    return [field.id, candidate.replace(/\r\n?/g, '\n').trim()];
   }));
 }
 
@@ -172,6 +169,10 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     };
     return [field.id, dictionaryItem.text];
   }));
+  const fieldConflict = findOutpatientEmrFieldConflicts(activeFields, fieldValues)[0];
+  if (fieldConflict) {
+    throw new OutpatientEmrError('FIELD_VALUE_CONFLICT', fieldConflict.message);
+  }
   const mappedFields = new Map<OutpatientEmrRecordField, OutpatientEmrTemplateField[]>();
   activeFields.forEach((field) => {
     if (!field.recordField) return;

@@ -6,7 +6,10 @@ import {
   resolveOutpatientEmrTemplateSnapshot,
 } from '../api/outpatientEmrTemplateSnapshotService';
 import {
-  buildOutpatientEmrAnalysisDraftValues,
+  buildOutpatientEmrInitialDraft,
+  resolveOutpatientEmrModelDraft,
+} from '../lib/outpatientEmrDraftSource';
+import {
   OutpatientEmrError,
   parseOutpatientEmrTemplate,
   restoreOutpatientEmrTemplateFromSnapshot,
@@ -16,6 +19,7 @@ import {
   hashOutpatientEmrTemplate,
 } from '../lib/outpatientEmrWriteback';
 import { findInvalidOutpatientEmrDictionaryValue } from '../lib/outpatientEmrDictionary';
+import { findOutpatientEmrFieldConflicts } from '../lib/outpatientEmrFieldConsistency';
 import { isSameOutpatientEmrAnalysisRequestSnapshot } from '../lib/outpatientEmrRequestIdentity';
 import { resolveOutpatientEmrStructuredFieldValues } from '../lib/outpatientEmrStructuredProjection';
 import type {
@@ -23,6 +27,7 @@ import type {
   OutpatientEmrAnalysisStatus,
   OutpatientEmrCancelledPayload,
   OutpatientEmrErrorCode,
+  OutpatientEmrFieldValueSource,
   OutpatientEmrPreparedWritebackPayload,
   OutpatientEmrRecordConfirmedPayload,
   OutpatientEmrReferenceFeedbackPayload,
@@ -72,6 +77,7 @@ export function useOutpatientEmrAnalysis(
   const template = shallowRef<OutpatientEmrTemplateParseResult | null>(null);
   const templateHash = ref('');
   const fieldValues = ref<Record<string, string>>({});
+  const fieldValueSources = ref<Record<string, OutpatientEmrFieldValueSource>>({});
   const analysisStatus = ref<OutpatientEmrAnalysisStatus>('idle');
   const analysisErrorCode = ref<OutpatientEmrErrorCode | ''>('');
   const analysisErrorMessage = ref('');
@@ -98,15 +104,24 @@ export function useOutpatientEmrAnalysis(
   const dictionaryValidationIssue = computed(() => (
     findInvalidOutpatientEmrDictionaryValue(targetFields.value, fieldValues.value)
   ));
+  const fieldConflicts = computed(() => (
+    findOutpatientEmrFieldConflicts(targetFields.value, fieldValues.value)
+  ));
+  const conflictFieldIds = computed(() => new Set(fieldConflicts.value.flatMap((conflict) => [
+    conflict.flagFieldId,
+    conflict.detailFieldId,
+  ])));
   const dictionaryValidationMessage = computed(() => {
     const issue = dictionaryValidationIssue.value;
-    return issue
-      ? `字典字段“${issue.fieldName || issue.fieldId}”尚未确定，请医生选择模板已有项。`
-      : '';
+    if (issue) {
+      return `字典字段“${issue.fieldName || issue.fieldId}”尚未确定，请医生选择模板已有项。`;
+    }
+    return fieldConflicts.value[0]?.message || '';
   });
   const canSubmit = computed(() => (
     analysisStatus.value === 'ready'
     && !dictionaryValidationIssue.value
+    && fieldConflicts.value.length === 0
     && writebackStatus.value !== 'submitting'
     && writebackStatus.value !== 'pending'
     && writebackStatus.value !== 'success'
@@ -137,6 +152,7 @@ export function useOutpatientEmrAnalysis(
     template.value = null;
     templateHash.value = '';
     fieldValues.value = {};
+    fieldValueSources.value = {};
     analysisStatus.value = 'idle';
     clearErrors();
     writebackStatus.value = 'idle';
@@ -161,6 +177,7 @@ export function useOutpatientEmrAnalysis(
       template.value = null;
       templateHash.value = '';
       fieldValues.value = {};
+      fieldValueSources.value = {};
       editedFieldIds.clear();
     }
 
@@ -224,17 +241,21 @@ export function useOutpatientEmrAnalysis(
       if (token !== runToken || abortController.signal.aborted) return false;
 
       const previousValues = fieldValues.value;
+      const previousSources = fieldValueSources.value;
       template.value = parsedTemplate;
-      fieldValues.value = preserveDoctorEdits
-        ? Object.fromEntries(parsedTemplate.targetFields.map((field) => [
-            field.id,
-            Object.prototype.hasOwnProperty.call(previousValues, field.id)
-              ? previousValues[field.id]
-              : field.dictionaryItems.length > 0
-                ? ''
-                : field.baselineValue,
-          ]))
-        : buildOutpatientEmrAnalysisDraftValues(parsedTemplate.targetFields);
+      const initialDrafts = parsedTemplate.targetFields.map((field) => {
+        const keepPrevious = preserveDoctorEdits
+          && Object.prototype.hasOwnProperty.call(previousValues, field.id);
+        return [field.id, keepPrevious
+          ? { value: previousValues[field.id], source: previousSources[field.id] || 'empty' }
+          : buildOutpatientEmrInitialDraft(field)] as const;
+      });
+      fieldValues.value = Object.fromEntries(
+        initialDrafts.map(([fieldId, draft]) => [fieldId, draft.value]),
+      );
+      fieldValueSources.value = Object.fromEntries(
+        initialDrafts.map(([fieldId, draft]) => [fieldId, draft.source]),
+      );
 
       if (preserveDoctorEdits) {
         const nextTargetIds = new Set(parsedTemplate.targetFields.map((field) => field.id));
@@ -253,6 +274,7 @@ export function useOutpatientEmrAnalysis(
       if (token !== runToken || abortController.signal.aborted) return false;
 
       const mergedValues = { ...fieldValues.value };
+      const mergedSources = { ...fieldValueSources.value };
       parsedTemplate.targetFields.forEach((field) => {
         if (
           !Object.prototype.hasOwnProperty.call(generatedValues, field.id)
@@ -269,13 +291,18 @@ export function useOutpatientEmrAnalysis(
         fields: parsedTemplate.targetFields,
       });
       parsedTemplate.targetFields.forEach((field) => {
-        if (!editedFieldIds.has(field.id)) {
-          mergedValues[field.id] = Object.prototype.hasOwnProperty.call(structuredValues, field.id)
-            ? structuredValues[field.id]
-            : generatedValues[field.id];
+        if (editedFieldIds.has(field.id)) return;
+        if (Object.prototype.hasOwnProperty.call(structuredValues, field.id)) {
+          mergedValues[field.id] = structuredValues[field.id];
+          mergedSources[field.id] = 'structured';
+          return;
         }
+        const draft = resolveOutpatientEmrModelDraft(field, generatedValues[field.id]);
+        mergedValues[field.id] = draft.value;
+        mergedSources[field.id] = draft.source;
       });
       fieldValues.value = mergedValues;
+      fieldValueSources.value = mergedSources;
       analysisStatus.value = 'ready';
       return true;
     } catch (error) {
@@ -318,6 +345,10 @@ export function useOutpatientEmrAnalysis(
     fieldValues.value = {
       ...fieldValues.value,
       [fieldId]: value.replace(/\r\n?/g, '\n'),
+    };
+    fieldValueSources.value = {
+      ...fieldValueSources.value,
+      [fieldId]: 'doctor',
     };
   }
 
@@ -463,7 +494,10 @@ export function useOutpatientEmrAnalysis(
     targetFields,
     dictionaryValidationIssue,
     dictionaryValidationMessage,
+    fieldConflicts,
+    conflictFieldIds,
     fieldValues,
+    fieldValueSources,
     analysisStatus,
     analysisErrorCode,
     analysisErrorMessage,

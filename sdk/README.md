@@ -1,5 +1,7 @@
 # 全医慧助（PCIE）HIS JS SDK 使用文档
 
+门诊动态模板接入先看 [病历模板上传与最终回写接口](../docs/his-outpatient-emr-template-integration.md)：`startVoice` 的唯一患者参数中必须包含 `outpatientEmr` 模板六字段；通过 WebSocket 接收最终字段表，由 HIS 回填、保存后再调用 `sendFeedback`。该说明附完整上传、回写及回执 JSON；下文普通接诊快速示例不代表已上传模板。
+
 > PCIE — Primary Care Intelligent Expert。现有 SDK 继续使用 `MedHermes` / `MedHermesLoader` 全局对象和 `med-hermes-*` 文件名，以兼容已部署 HIS 页面。
 
 ## 文件说明
@@ -349,6 +351,8 @@ await mh.startConsultation({
 
 若 HIS 已在医生站中选中门急诊动态模板，可在患者对象中附加严格的 `outpatientEmr` 模板规格；此模式必须同时传 `idVis`。医生先完成语音问诊、诊断和治疗选择，再进入模板字段确认，最终只产生一条合并 `record-confirmed`：
 
+下例 `templateSnapshot` 由 HIS 当前编辑器导出，不是 SDK 自带对象。白云 HI-EMR 4.1.0 的实际组件路径、`getXmlContent()` / `getHtmlContent()` 用法和采集函数见 [模板获取说明](../docs/his-outpatient-emr-template-integration.md#hiemr41-capture)；不要把示意 getter 名当成该编辑器已有 API。
+
 ```js
 await mh.startVoice({
   idPi: 'P001',
@@ -357,11 +361,11 @@ await mh.startVoice({
   sdSexText: '男性',
   ageText: '45岁',
   outpatientEmr: {
-    templateId: 'OPD-TPL-001',
-    templateName: '门诊通用病历',
-    templateHtml: currentEditor.getRenderedHtml(),
-    templateDefinition: currentEditor.getTemplateDefinitionJson(),
-    targetFieldIds: currentEditor.getVisibleWritableFieldIds(),
+    templateId: templateSnapshot.templateId,
+    templateName: templateSnapshot.templateName,
+    templateHtml: templateSnapshot.templateHtml,
+    templateDefinition: templateSnapshot.templateDefinition,
+    targetFieldIds: templateSnapshot.targetFieldIds,
     requestId: 'outpatient-voice-550e8400-e29b-41d4-a716-446655440000'
   }
 });

@@ -6,6 +6,8 @@
 > 当前详细运行契约仍以 [api.md](./api.md) 与 `src-tauri/src/http_server.rs` 为准；本文档是标准接入口径，不替代底层真实契约。
 > 历史 `MedHermes` / `med-hermes` 名称仅作为 SDK、深链和 Header 等兼容技术标识保留。
 
+门诊动态模板接入请使用 [HIS 接入接口：病历模板上传与最终回写](docs/his-outpatient-emr-template-integration.md)：先看模板如何随 `start-voice` 或 `outpatient/emr/analyze` 上传，再看 WebSocket 最终回写、HIS 实际保存与 `reference-feedback` 回执；附完整请求、响应和回写 JSON。
+
 ## 1. 文档目的
 
 本文档回答 5 个问题：
@@ -33,7 +35,7 @@
 1. 医生本机必须先启动全医慧助（PCIE），否则本地接口不可访问。
 2. 当前服务只监听 `127.0.0.1`，默认只供本机 HIS / 联调页调用。
 3. `/api/consultation/events/ws` 是唯一结果回传通道；桌面端保留有限内存事件队列供断线重连补发，不提供 HTTP 长轮询。
-4. 当前 `consultationId` 默认直接使用 `idPi / patientId`，不是独立就诊流水号。
+4. 普通接诊的 `consultationId` 默认使用 `idPi / patientId`；动态门诊模板最终结果和回执使用本次就诊 ID（`consultationId = visitId`），详见上述专题接口说明。
 
 ### 2.3 标准接入建议
 

@@ -65,22 +65,22 @@ describe('outpatient EMR model output normalization', () => {
       .toThrowError(/必须是模板字段 JSON 对象/);
   });
 
-  it('drops unknown/non-string values and retains baselines for empty values', () => {
+  it('drops unknown/non-string values and leaves the template draft decision to the session', () => {
     expect(normalizeOutpatientEmrModelValues({
       personalHistory: '  已戒烟2年。  ',
       familyHistory: [],
       outside: '不得返回',
     }, fields)).toEqual({
       personalHistory: '已戒烟2年。',
-      familyHistory: '模板家族史',
+      familyHistory: '',
     });
 
     expect(normalizeOutpatientEmrModelValues({
       personalHistory: '   ',
       familyHistory: '',
     }, fields)).toEqual({
-      personalHistory: '模板个人史',
-      familyHistory: '模板家族史',
+      personalHistory: '',
+      familyHistory: '',
     });
   });
 

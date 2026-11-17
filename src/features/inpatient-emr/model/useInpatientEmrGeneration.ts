@@ -157,16 +157,20 @@ export function useInpatientEmrGeneration() {
       await session.record('started');
     } catch { reportInpatientLogFailure(); }
     if (token !== requestSequence) return;
+    let acceptGenerationUpdates = true;
     try {
       const generated = await generateInpatientEmrPreviewStream(request, progress => {
-        if (token === requestSequence) updateStep(progress);
+        if (acceptGenerationUpdates && token === requestSequence) updateStep(progress);
       }, partial => {
-        if (token === requestSequence) result.value = partial;
+        if (acceptGenerationUpdates && token === requestSequence) result.value = partial;
       }, generationTrace);
       if (token !== requestSequence) return;
       result.value = generated;
       const status = generated.evidenceSummary.aiGeneration.status;
-      void session?.record(status === 'waiting' ? 'waiting' : status === 'failed' ? 'fallback' : 'generated', generated);
+      if (status === 'failed') {
+        throw new Error(generated.evidenceSummary.aiGeneration.detail || 'AI 病历未完整生成，请核对已有草稿。');
+      }
+      void session?.record(status === 'waiting' ? 'waiting' : 'generated', generated);
       void recordInpatientEmrTraceLog(generated, 'generation');
     } catch (error) {
       if (token !== requestSequence) return;
@@ -177,6 +181,7 @@ export function useInpatientEmrGeneration() {
       void session?.record('generation_failed', result.value, '住院病历生成失败');
       void recordInpatientEmrFailureTraceLog(request, generationTrace, 'generation', errorMessage.value);
     } finally {
+      acceptGenerationUpdates = false;
       if (token === requestSequence) isGenerating.value = false;
     }
   }

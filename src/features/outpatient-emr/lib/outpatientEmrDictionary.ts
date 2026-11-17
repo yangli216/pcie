@@ -51,26 +51,6 @@ export function resolveOutpatientEmrDictionaryItem(
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function resolveOutpatientEmrBaselineDictionaryItem(
-  field: Pick<
-    OutpatientEmrTemplateField,
-    'dictionaryItems' | 'baselineDictionaryValue' | 'baselineValue'
-  >,
-): OutpatientEmrDictionaryItem | null {
-  if (field.dictionaryItems.length === 0) return null;
-
-  const byValue = resolveOutpatientEmrDictionaryItem(
-    field.dictionaryItems,
-    field.baselineDictionaryValue,
-  );
-  const byText = resolveOutpatientEmrDictionaryItem(
-    field.dictionaryItems,
-    field.baselineValue,
-  );
-  if (byValue && byText && byValue !== byText) return null;
-  return byValue || byText;
-}
-
 export function resolveOutpatientEmrFinalDictionaryItem(
   field: Pick<OutpatientEmrTemplateField, 'dictionaryItems'>,
   candidate: unknown,

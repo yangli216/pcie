@@ -1,17 +1,25 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import {
+  applyOutpatientEmrFieldSource,
   buildEditableOutpatientEmrPreviewHtml,
   readEditableOutpatientEmrField,
 } from '../lib/outpatientEmrTemplate';
-import type { OutpatientEmrTemplateField } from '../types';
+import type {
+  OutpatientEmrFieldValueSource,
+  OutpatientEmrTemplateField,
+} from '../types';
 
 const props = withDefaults(defineProps<{
   sanitizedHtml: string;
   fields: OutpatientEmrTemplateField[];
   fieldValues: Record<string, string>;
+  fieldSources?: Record<string, OutpatientEmrFieldValueSource>;
+  conflictFieldIds?: ReadonlySet<string>;
   editable?: boolean;
 }>(), {
+  fieldSources: () => ({}),
+  conflictFieldIds: () => new Set<string>(),
   editable: true,
 });
 
@@ -20,6 +28,9 @@ const emit = defineEmits<{
 }>();
 
 const previewRoot = ref<HTMLElement | null>(null);
+const hasTemplateDraft = computed(() => (
+  Object.values(props.fieldSources).some((source) => source === 'template' || source === 'template-matched')
+));
 
 function renderPreview(): void {
   if (!previewRoot.value) return;
@@ -28,6 +39,8 @@ function renderPreview(): void {
     props.fields,
     props.fieldValues,
     props.editable,
+    props.fieldSources,
+    props.conflictFieldIds,
   );
 }
 
@@ -36,6 +49,11 @@ function syncValuesToPreview(): void {
   if (!root) return;
   root.querySelectorAll<HTMLElement>('[data-outpatient-emr-field-id]').forEach((element) => {
     const fieldId = element.getAttribute('data-outpatient-emr-field-id') || '';
+    applyOutpatientEmrFieldSource(
+      element,
+      props.fieldSources[fieldId],
+      props.conflictFieldIds.has(fieldId),
+    );
     if (!Object.prototype.hasOwnProperty.call(props.fieldValues, fieldId)) return;
     if (element instanceof HTMLSelectElement) {
       if (element.value !== props.fieldValues[fieldId]) {
@@ -94,7 +112,7 @@ watch(
 );
 
 watch(
-  () => props.fieldValues,
+  () => [props.fieldValues, props.fieldSources, Array.from(props.conflictFieldIds).join('|')],
   () => void nextTick(syncValuesToPreview),
   { deep: true },
 );
@@ -105,6 +123,10 @@ watch(
     <div class="preview-hint">
       <span class="editable-dot"></span>
       <span>{{ editable ? '蓝色虚线区域可直接修改' : '当前参数已发送，等待 HIS 回执' }}</span>
+      <template v-if="editable && hasTemplateDraft">
+        <span class="template-dot"></span>
+        <span>橙色为模板预置内容（虚线未经本次病例核对，实线为模型判定一致），请核对</span>
+      </template>
     </div>
     <div
       ref="previewRoot"
@@ -129,6 +151,14 @@ watch(
   gap: 7px;
   color: #64748b;
   font-size: 12px;
+}
+
+.template-dot {
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 999px;
+  background: #d97706;
 }
 
 .editable-dot {
@@ -162,6 +192,27 @@ watch(
 .template-document :deep([data-outpatient-emr-field-id][contenteditable='true']:focus) {
   outline: 2px solid #2563eb;
   background: #fff;
+}
+
+.template-document :deep([data-outpatient-emr-source='template']) {
+  outline-color: #d97706;
+  background: #fffbeb;
+}
+
+.template-document :deep([data-outpatient-emr-source='template-matched']) {
+  outline-style: solid;
+  outline-color: #d97706;
+  background: #fff;
+}
+
+.template-document :deep([data-outpatient-emr-source='doctor']) {
+  outline-style: solid;
+  outline-color: #94a3b8;
+}
+
+.template-document :deep([data-outpatient-emr-issue='conflict']) {
+  outline: 2px solid #dc2626;
+  background: #fef2f2;
 }
 
 .template-document :deep(.outpatient-emr-dictionary-select) {

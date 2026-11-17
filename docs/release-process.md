@@ -20,12 +20,14 @@ yarn release:test 1.4.4
 
 该命令会临时把 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 设为候选版本，执行当前平台的 Tauri 构建，并在成功或失败后恢复全部原文件。它不会提交文件、创建 tag、GitHub Release、draft 或 `latest.json`。本机未配置 updater 私钥时，只生成可直接安装的测试包并临时关闭 updater artifact；GitHub `Test Build` 使用发布环境中的私钥生成带签名的候选包。
 
-需要 Windows 与 macOS 双平台测试包时，在 GitHub Actions 手动运行 `Test Build`：
+需要 Windows x64 MSI 测试包时，在 GitHub Actions 手动运行 `Test Build`；该工作流当前只构建 Windows：
 
 1. 在运行工作流时选择需要验收的分支或 commit。
-2. 输入候选稳定版本号，例如 `1.4.4`。
-3. 工作流先执行类型检查、单元测试、前端构建和 `cargo check --locked`，再分别生成签名的 Windows 与 macOS 测试包；普通桌面依赖由仓库内 `src-tauri/Cargo.lock` 固定，CI 不得重新解析或隐式刷新。上传前会检查目标目录中确实存在安装包，只有来源清单时必须失败。
+2. 输入候选稳定版本号，例如 `1.4.4`；可选填写 `regional_base_url`，设置本次候选包预置的 PCIE Server 地址。留空时沿用仓库变量 `VITE_REGIONAL_BASE_URL`；两者均未配置时使用客户端默认值 `http://127.0.0.1:8080`。
+3. 工作流先执行类型检查、单元测试、前端构建和 `cargo check --locked`，再生成签名的 Windows x64 MSI 测试包；普通桌面依赖由仓库内 `src-tauri/Cargo.lock` 固定，CI 不得重新解析或隐式刷新。上传前会检查目标目录中确实存在安装包，只有来源清单时必须失败。
 4. 从该次工作流的 Artifacts 下载测试包；这些文件不会出现在 GitHub Releases，也不会被客户端自动更新发现。
+
+`regional_base_url` 仅在本次工作流的前端质量检查与 Windows 打包步骤中，通过环境变量 `VITE_REGIONAL_BASE_URL` 注入，不修改仓库全局变量。包内地址是首次使用的默认值：客户端运行时优先读取本机 `localStorage.REGIONAL_BASE_URL`，仅在尚无已保存地址时初始化为构建默认值，覆盖安装不会替换用户已有配置。需要切换后台时，在设置的通用页保存新的 PCIE Server 地址。
 
 测试包采用候选正式版本号，因此安装过候选包的测试机器不会把后续同版本正式包识别成更高版本。正式 updater 冒烟应另用仍停留在历史正式版本的环境执行。
 

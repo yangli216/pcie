@@ -31,6 +31,7 @@ const MAPPING_SOURCES = new Set<OutpatientEmrFieldMappingSource>([
   'canonical-id',
   'deterministic-alias',
   'deterministic-article',
+  'manual-override',
   'unmapped',
 ]);
 const PROJECTION_MODES = new Set<OutpatientEmrProjectionMode>(['direct', 'section-compose']);
@@ -102,6 +103,11 @@ export interface PersistOutpatientEmrTemplateSnapshotInput {
 }
 
 function cloneField(field: OutpatientEmrTemplateField): OutpatientEmrTemplateField {
+  // The registered snapshot is the immutable automatic parse; manual mappings are
+  // server-side overlays and must never be written back into it.
+  if (field.mappingSource === 'manual-override') {
+    throw new Error(`模板字段 ${field.id} 的人工映射不能登记为自动解析快照。`);
+  }
   return {
     id: field.id,
     name: field.name,

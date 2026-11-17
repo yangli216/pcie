@@ -374,6 +374,7 @@
     'pastMedicalHistory',
     'personalHistory',
     'menstrualHistory',
+    'maritalReproductiveHistory',
     'familyHistory',
     'physicalExam',
     'precautions'
@@ -384,6 +385,7 @@
     'canonical-id',
     'deterministic-alias',
     'deterministic-article',
+    'manual-override',
     'unmapped'
   ];
   var OUTPATIENT_EMR_ORDER_TYPES = ['medicine', 'exam', 'lab_test', 'procedure'];

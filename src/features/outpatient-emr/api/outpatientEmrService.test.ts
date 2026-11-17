@@ -6,6 +6,7 @@ import {
   buildOutpatientEmrAnalysisMessages,
   validateOutpatientEmrRecordContext,
 } from './outpatientEmrService';
+import { OUTPATIENT_EMR_PROMPT_VERSION } from '../lib/outpatientEmrPromptGenerator';
 
 const request: OutpatientEmrAnalysisRequest = {
   visitId: 'VIS-001',
@@ -106,6 +107,33 @@ describe('buildOutpatientEmrAnalysisMessages', () => {
     expect(prompt).not.toContain('"baselineDictionaryValue":"0"');
   });
 
+  it('keeps patient identity and visit ids out of model messages', () => {
+    const messages = buildOutpatientEmrAnalysisMessages({
+      request: {
+        ...request,
+        patient: { idPi: 'PI-SECRET-01', name: '张三丰', sdSexText: '男', ageText: '45岁' },
+      },
+      fields,
+    });
+    const prompt = messages.map((message) => message.content).join('\n');
+
+    expect(prompt).not.toContain('PI-SECRET-01');
+    expect(prompt).not.toContain('张三丰');
+    expect(prompt).not.toContain('VIS-001');
+    expect(prompt).not.toContain('REQ-001');
+    expect(prompt).toContain('"patient":{"sdSexText":"男","ageText":"45岁"}');
+  });
+
+  it('offers text template presets as labelled drafts, not facts', () => {
+    const messages = buildOutpatientEmrAnalysisMessages({ request, fields });
+    const [system, user] = messages.map((message) => message.content);
+
+    expect(system).toContain(OUTPATIENT_EMR_PROMPT_VERSION);
+    expect(system).toContain('templateDraft 是模板预置草稿，不是本次病例事实');
+    expect(user).toContain('"templateDraft":"否认吸烟史。"');
+    expect(user).toContain('"modifiers":["template-draft"]');
+  });
+
   it('requires at least one non-empty clinical fact', () => {
     expect(() => validateOutpatientEmrRecordContext({
       recordText: '  ',
@@ -135,7 +163,7 @@ describe('analyzeOutpatientEmrFields', () => {
     expect(chat).toHaveBeenCalledTimes(1);
     expect(values).toEqual({
       personalHistory: '既往吸烟，已戒烟。',
-      familyHistory: '否认家族遗传病史。',
+      familyHistory: '',
     });
     expect(chat).toHaveBeenCalledWith(
       expect.any(Array),
@@ -146,6 +174,7 @@ describe('analyzeOutpatientEmrFields', () => {
         traceContext: expect.objectContaining({
           consultationId: 'VIS-001',
           sourceModule: 'outpatient-emr',
+          operationAction: `analyze-template-fields:${OUTPATIENT_EMR_PROMPT_VERSION}`,
         }),
       }),
     );

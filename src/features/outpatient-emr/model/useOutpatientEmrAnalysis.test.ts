@@ -371,6 +371,113 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     });
   });
 
+  it('keeps template presets the model could not verify and labels every draft source', async () => {
+    const analysis = useOutpatientEmrAnalysis({
+      analyzeFields: vi.fn().mockResolvedValue({
+        personalHistory: '',
+        familyHistory: '家族史基线',
+      }),
+      hashTemplate: vi.fn().mockResolvedValue('template-hash'),
+    });
+
+    await expect(analysis.start(createRequest())).resolves.toBe(true);
+    expect(analysis.fieldValues.value).toEqual({
+      personalHistory: '个人史基线',
+      familyHistory: '家族史基线',
+    });
+    expect(analysis.fieldValueSources.value).toEqual({
+      personalHistory: 'template',
+      familyHistory: 'template-matched',
+    });
+
+    analysis.updateFieldValue('personalHistory', '吸烟10年。');
+    expect(analysis.fieldValueSources.value.personalHistory).toBe('doctor');
+    expect(analysis.buildConfirmedPayload()?.fieldValues).toEqual({
+      personalHistory: '吸烟10年。',
+      familyHistory: '家族史基线',
+    });
+    expect(JSON.stringify(analysis.buildConfirmedPayload())).not.toContain('template-matched');
+  });
+
+  it('blocks confirmation while a presence flag contradicts its supplement', async () => {
+    const html = `
+      <section data-id="article-personal" data-article="个人史" data-name="个人史">
+        <span data-id="吸烟史标志" data-type="select" data-name="吸烟史标志" data-readonly="false">否认</span>
+        <span data-id="吸烟史补充" data-type="text" data-name="吸烟史补充" data-readonly="false">否认吸烟史。</span>
+      </section>`;
+    const definition = JSON.stringify([{
+      ID: 'article-personal',
+      NAME: '个人史',
+      ARTICLE: '个人史',
+      eles: [{
+        ID: '吸烟史标志',
+        NAME: '吸烟史标志',
+        TYPE: 'select',
+        READONLY: false,
+        VALUE: '0',
+        TEXT: '否认',
+        BINDINGDATA: [{ VALUE: '0', TEXT: '否认' }, { VALUE: '1', TEXT: '有' }],
+      }, {
+        ID: '吸烟史补充',
+        NAME: '吸烟史补充',
+        TYPE: 'text',
+        READONLY: false,
+        VALUE: '否认吸烟史。',
+        TEXT: '否认吸烟史。',
+      }],
+    }]);
+    const completeConsultation = vi.fn().mockResolvedValue(undefined);
+    const analysis = useOutpatientEmrAnalysis({
+      analyzeFields: vi.fn().mockResolvedValue({ 吸烟史标志: '有', 吸烟史补充: '否认吸烟史。' }),
+      hashTemplate: vi.fn().mockResolvedValue('template-hash'),
+      completeConsultation,
+    });
+
+    await expect(analysis.start(createRequest({
+      templateHtml: html,
+      templateDefinition: definition,
+      targetFieldIds: ['吸烟史标志', '吸烟史补充'],
+    }))).resolves.toBe(true);
+
+    expect(analysis.fieldValueSources.value['吸烟史补充']).toBe('template-matched');
+    expect(Array.from(analysis.conflictFieldIds.value)).toEqual(['吸烟史标志', '吸烟史补充']);
+    expect(analysis.dictionaryValidationMessage.value).toContain('吸烟史补充');
+    expect(analysis.canSubmit.value).toBe(false);
+    await expect(analysis.writeBack()).resolves.toBe(false);
+    expect(completeConsultation).not.toHaveBeenCalled();
+    // The shared builder fails closed as well, so no caller can bypass the preview gate.
+    expect(() => analysis.buildConfirmedPayload()).toThrow('吸烟史补充');
+
+    analysis.updateFieldValue('吸烟史补充', '吸烟20年，每日10支。');
+    expect(analysis.fieldConflicts.value).toEqual([]);
+    expect(analysis.canSubmit.value).toBe(true);
+    await expect(analysis.writeBack()).resolves.toBe(true);
+    expect(completeConsultation).toHaveBeenCalledOnce();
+  });
+
+  it('keeps doctor provenance across a retry while refreshing untouched AI drafts', async () => {
+    const analyzeFields = vi.fn()
+      .mockResolvedValueOnce({ personalHistory: '吸烟5年。', familyHistory: '' })
+      .mockResolvedValueOnce({ personalHistory: '吸烟6年。', familyHistory: '父亲高血压。' });
+    const analysis = useOutpatientEmrAnalysis({
+      analyzeFields,
+      hashTemplate: vi.fn().mockResolvedValue('template-hash'),
+    });
+
+    await analysis.start(createRequest());
+    analysis.updateFieldValue('personalHistory', '医生改写');
+    await expect(analysis.retry()).resolves.toBe(true);
+
+    expect(analysis.fieldValues.value).toEqual({
+      personalHistory: '医生改写',
+      familyHistory: '父亲高血压。',
+    });
+    expect(analysis.fieldValueSources.value).toEqual({
+      personalHistory: 'doctor',
+      familyHistory: 'ai',
+    });
+  });
+
   it('keeps the sanitized template baseline and blocks submission after analysis failure', async () => {
     const analysis = useOutpatientEmrAnalysis({
       analyzeFields: vi.fn().mockRejectedValue(new Error('JSON解析失败')),

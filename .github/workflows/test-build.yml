@@ -7,6 +7,10 @@ on:
         description: '候选版本号（稳定 X.Y.Z，例如 1.4.4）'
         required: true
         type: string
+      regional_base_url:
+        description: '本次候选包默认 PCIE Server 地址；留空沿用仓库 VITE_REGIONAL_BASE_URL'
+        required: false
+        type: string
 
 concurrency:
   group: test-build-${{ github.ref }}-${{ inputs.version }}
@@ -48,7 +52,7 @@ jobs:
 
       - name: Run frontend quality gates
         env:
-          VITE_REGIONAL_BASE_URL: ${{ vars.VITE_REGIONAL_BASE_URL }}
+          VITE_REGIONAL_BASE_URL: ${{ inputs.regional_base_url || vars.VITE_REGIONAL_BASE_URL }}
         run: |
           yarn type-check
           yarn test:unit
@@ -101,7 +105,7 @@ jobs:
           CANDIDATE_VERSION: ${{ inputs.version }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VITE_REGIONAL_BASE_URL: ${{ vars.VITE_REGIONAL_BASE_URL }}
+          VITE_REGIONAL_BASE_URL: ${{ inputs.regional_base_url || vars.VITE_REGIONAL_BASE_URL }}
         run: node scripts/test-release.mjs --version "$CANDIDATE_VERSION" -- ${{ matrix.build_args }}
 
       - name: Verify candidate bundle exists
