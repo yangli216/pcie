@@ -65,6 +65,7 @@ const LEGACY_DEFAULT_GENERATOR_INSTRUCTION = '请根据住院病历模板字段�
   + '提示词必须约束 AI 仅依据住院登记、诊断、医嘱、体温单等已提供资料生成，'
   + '不得编造未提供的症状、查体、检查结果或治疗效果。';
 const FIELD_BODY_OUTPUT_REQUIREMENT = '输出要求：只输出该字段应回填的正文，不输出字段名、JSON、解释、免责声明或无关内容。';
+const NUMBER_FIELD_OUTPUT_REQUIREMENT = '数值字段回填要求：该字段是数值输入槽位，单位由模板展示。只返回有可靠来源的单个数值字符串，不附加单位、字段名、范围或说明；缺少可靠数值时返回空字符串，不写“暂无记录”等文字，不编造数值，也不自行换算单位。';
 const LEGACY_BODY_LABELS = [
   '模板名称：', '记录类型：', '字段 data-id：', '字段名称：', '字段所属段落：',
   '字段含义：', '生成意图：', '依赖数据：', '生成约束：',
@@ -105,12 +106,17 @@ function effectiveCustomFieldPrompt(field: InpatientEmrTemplateField, prompt: st
   ].join('\n');
 }
 
+function withFieldValueFormat(field: InpatientEmrTemplateField, prompt: string): string {
+  if (field.type.trim().toLowerCase() !== 'number' || prompt.includes(NUMBER_FIELD_OUTPUT_REQUIREMENT)) return prompt;
+  return `${prompt}\n${NUMBER_FIELD_OUTPUT_REQUIREMENT}`;
+}
+
 export function buildInpatientEmrFieldPrompt(
   field: InpatientEmrTemplateField,
   context?: InpatientEmrContext,
 ): string {
   if (field.rule.prompt?.trim()) {
-    return effectiveCustomFieldPrompt(field, field.rule.prompt.trim());
+    return withFieldValueFormat(field, effectiveCustomFieldPrompt(field, field.rule.prompt.trim()));
   }
   const documentContext = context?.documentContext;
   const rawIntent = field.rule.promptIntent || 'inpatientRecordSection';
@@ -130,7 +136,7 @@ export function buildInpatientEmrFieldPrompt(
       ].filter(Boolean)
     : [];
 
-  return [
+  return withFieldValueFormat(field, [
     `模板名称：${documentContext?.templateName || '住院病历模板'}`,
     `记录类型：${documentContext?.recordType || '住院病程记录'}`,
     `目标书写时间：${documentContext?.recordTime || '当前业务时间'}`,
@@ -142,7 +148,7 @@ export function buildInpatientEmrFieldPrompt(
     `约束：${field.rule.constraints.join('；')}`,
     ...admissionFieldGuidance,
     `请为字段标识为“${field.id}”的项仅生成应回填的正文内容；字段值内不重复字段名、JSON 结构、说明或免责声明，整体响应格式遵循本次生成任务的 JSON 协议。`,
-  ].join('\n');
+  ].join('\n'));
 }
 
 export function buildInpatientEmrGeneratePrompt(
@@ -153,6 +159,7 @@ export function buildInpatientEmrGeneratePrompt(
   const fieldTasks = aiFields.map((field) => ({
     id: field.id,
     name: field.name,
+    type: field.type.trim().toLowerCase(),
     meaning: field.meaning,
     article: field.article || '',
     rule: { prompt: buildInpatientEmrFieldPrompt(field, context) },
@@ -168,7 +175,7 @@ export function buildInpatientEmrGeneratePrompt(
     'AI_FIELDS 是已经确定的生成范围，不得根据字段名称、旧分类或正文规则重新剔除其中的字段。',
     '必须为 AI_FIELDS 中的每一个 id 显式返回字符串值；不得省略、改用 name、返回 null、对象或数组，也不得新增字段。',
     '资料不足时显式返回空字符串，不编造事实，不返回“请输入/待补充”等模板或过程占位。空值只表示该字段尚无可靠正文，不表示整份病历已完整完成。',
-    '字段规则只约束对应字符串中的正文内容，不改变本次整体 JSON 对象输出协议。',
+    '字段规则只约束对应字符串中的正文内容，不改变本次整体 JSON 对象输出协议。数值字段的回填格式约束优先于叙述要求，只生成纯数值字符串；单位由模板展示，不能把“暂无记录”等说明写入数值槽位。',
     ...aiFields.map((field) => `必填响应键 ${JSON.stringify(field.id)}：必须显式返回字符串。`),
     `当前模板：${context.documentContext.templateName || '住院病历模板'}`,
     `当前记录类型：${context.documentContext.recordType || '日常病历记录'}`,
@@ -180,7 +187,7 @@ export function buildInpatientEmrGeneratePrompt(
     '3. 非 AI 字段由 HIS 或系统填充，不要输出。',
     '4. 输出为医生可审核草稿，不替代医生签署。',
     `5. 以 ${context.documentContext.recordDate} 作为“今日”和本次查房/记录日期；不得把体温单历史记录日期写成本次查房日期。`,
-    '6. 若体温单存在本次书写日期同日数据，可写“今日体温单显示”；若最新体温单早于书写日期，必须写“最近一次体温单记录（YYYY-MM-DD）显示”，或说明本日体温单暂无记录。',
+    '6. 叙述字段引用体温单时，若存在本次书写日期同日数据，可写“今日体温单显示”；若最新体温单早于书写日期，必须写“最近一次体温单记录（YYYY-MM-DD）显示”，或说明本日体温单暂无记录。数值字段只按该字段的数值回填格式作答。',
     '7. 优先使用 HIS_AI_CONTEXT 中的 summary、recentNotes、longStaySummary 等摘要；明细仅用于必要事实补充，避免把长住院全量历史逐条复述。',
     '8. 检验检查结果必须区分“异常结果/阳性结论/历史摘要”，没有提供结果时不要编造检查发现。',
     '9. 既往病程用于保持连续性，不要把前序记录的日期、体征或治疗效果误写成本次 recordDate 当天事实。',

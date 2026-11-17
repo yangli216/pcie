@@ -756,8 +756,13 @@ async fn start_consultation(
     HttpResponse::Ok().json(response_body)
 }
 
+fn parse_start_voice_patient(data: &[u8]) -> Result<Option<PatientInfo>, serde_json::Error> {
+    if data.is_empty() { return Ok(None); }
+    serde_json::from_slice::<PatientInfo>(data).map(Some)
+}
+
 async fn start_voice_consultation(
-    data: Option<web::Json<PatientInfo>>,
+    data: web::Bytes,
     app_handle: web::Data<tauri::AppHandle>,
     state: web::Data<SharedAppState>,
 ) -> impl Responder {
@@ -769,7 +774,12 @@ async fn start_voice_consultation(
 
     println!("Received voice consultation request");
 
-    let patient = data.map(|payload| payload.into_inner());
+    let patient = match parse_start_voice_patient(&data) {
+        Ok(patient) => patient,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error", "message": "语音接诊请求必须是有效患者 JSON 或空正文", "traceId": trace_id,
+        })),
+    };
     let request_summary = summarize_start_voice_for_his_log(patient.as_ref());
     let voice_outpatient_emr = match validate_voice_outpatient_emr_request(patient.as_ref()) {
         Ok(value) => value,
@@ -2818,6 +2828,24 @@ async fn serve_loader_js() -> impl Responder {
         .body(LOADER_JS)
 }
 
+// Two 1 MiB UTF-8 template sources expand to ~2.8 MiB in Base64.
+// Bound only these two transports; other Bridge routes retain their limits.
+const OUTPATIENT_TEMPLATE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+
+fn outpatient_template_resource(path: &str) -> actix_web::Resource {
+    web::resource(path)
+        .app_data(web::JsonConfig::default().limit(OUTPATIENT_TEMPLATE_REQUEST_BYTES))
+        .app_data(web::PayloadConfig::new(OUTPATIENT_TEMPLATE_REQUEST_BYTES))
+}
+
+fn configure_outpatient_template_routes(config: &mut web::ServiceConfig) {
+    config
+        .service(outpatient_template_resource("/api/outpatient/emr/analyze")
+            .route(web::post().to(start_outpatient_emr_analysis)))
+        .service(outpatient_template_resource("/api/consultation/start-voice")
+            .route(web::post().to(start_voice_consultation)));
+}
+
 pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
     std::thread::spawn(move || {
         let sys = actix_web::rt::System::new();
@@ -2854,14 +2882,7 @@ pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
                         "/api/inpatient/emr/generate",
                         web::post().to(start_inpatient_emr_generation),
                     )
-                    .route(
-                        "/api/outpatient/emr/analyze",
-                        web::post().to(start_outpatient_emr_analysis),
-                    )
-                    .route(
-                        "/api/consultation/start-voice",
-                        web::post().to(start_voice_consultation),
-                    )
+                    .configure(configure_outpatient_template_routes)
                     .route("/api/consultation/stop", web::post().to(stop_consultation))
                     .route(
                         "/api/consultation/reference-feedback",
@@ -2888,6 +2909,46 @@ pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_voice_invalid_json_cannot_discard_a_supplied_template() {
+        assert!(parse_start_voice_patient(b"").unwrap().is_none());
+        assert!(parse_start_voice_patient(b"{invalid").is_err());
+        assert!(parse_start_voice_patient(b"null").is_err());
+    }
+
+    #[actix_web::test]
+    async fn outpatient_template_transport_accepts_base64_expansion_and_rejects_oversize() {
+        let app = actix_web::test::init_service(App::new()
+            .service(outpatient_template_resource("/voice")
+                .route(web::post().to(|body: web::Bytes| async move {
+                    HttpResponse::Ok().body(body.len().to_string())
+                })))
+            .service(outpatient_template_resource("/analyze")
+                .route(web::post().to(|body: web::Json<serde_json::Value>| async move {
+                    HttpResponse::Ok().json(body.into_inner())
+                })))
+            .route("/ordinary", web::post().to(|_body: web::Json<serde_json::Value>| async {
+                HttpResponse::Ok().finish()
+            }))).await;
+        let encoded = format!("{}==", "A".repeat(4 * ((1024 * 1024 + 2) / 3) - 2));
+        let body = serde_json::to_string(&serde_json::json!({
+            "templateHtml": format!("data:text/html;charset=utf-8;base64,{encoded}"),
+            "templateDefinition": format!("data:application/json;charset=utf-8;base64,{encoded}"),
+        })).unwrap();
+        for path in ["/voice", "/analyze"] {
+            let req = actix_web::test::TestRequest::post().uri(path)
+                .insert_header(("Content-Type", "application/json")).set_payload(body.clone()).to_request();
+            assert_eq!(actix_web::test::call_service(&app, req).await.status(), 200);
+            let req = actix_web::test::TestRequest::post().uri(path)
+                .insert_header(("Content-Type", "application/json"))
+                .set_payload(" ".repeat(OUTPATIENT_TEMPLATE_REQUEST_BYTES + 1)).to_request();
+            assert_eq!(actix_web::test::call_service(&app, req).await.status(), 413);
+        }
+        let req = actix_web::test::TestRequest::post().uri("/ordinary")
+            .insert_header(("Content-Type", "application/json")).set_payload(body).to_request();
+        assert_eq!(actix_web::test::call_service(&app, req).await.status(), 413);
+    }
 
     #[test]
     fn normal_websocket_disconnect_detects_payload_eof() {

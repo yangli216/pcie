@@ -50,6 +50,7 @@
       <summary>
         <Icon icon="lucide:timer" :size="14" />
         <span>查看联调 trace</span>
+        <Icon icon="lucide:chevron-down" :size="14" class="trace-chevron" />
       </summary>
       <ol class="trace-list">
         <li
@@ -189,10 +190,9 @@ const processItems = computed<ProcessItem[]>(() => {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(107, 128, 137, 0.18);
-  box-shadow: 0 12px 28px rgba(23, 42, 49, 0.07);
+  border-radius: 12px;
+  background: var(--workspace-surface, #fff);
+  border: 1px solid var(--workspace-border, #e2e8f0);
 }
 
 .process-heading,
@@ -208,14 +208,15 @@ const processItems = computed<ProcessItem[]>(() => {
 .process-heading {
   gap: 8px;
   min-height: 24px;
-  font-size: 14px;
-  font-weight: 800;
-  color: #203940;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--workspace-text, #172033);
 }
 
 .process-heading strong {
   margin-left: auto;
-  color: #0e7d6d;
+  color: var(--workspace-primary, #2563eb);
+  font-size: 12px;
 }
 
 .process-list {
@@ -228,7 +229,7 @@ const processItems = computed<ProcessItem[]>(() => {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(119, 135, 143, 0.12);
+  border-bottom: 1px solid var(--workspace-border, #e2e8f0);
 }
 
 .process-item:last-child {
@@ -242,23 +243,23 @@ const processItems = computed<ProcessItem[]>(() => {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #eef3f4;
-  color: #7a8a90;
+  background: #f1f5f9;
+  color: var(--workspace-muted, #64748b);
 }
 
 .process-item.is-running .step-icon {
-  background: #e8f4ff;
-  color: #1976c9;
+  background: var(--workspace-primary-soft, #eff6ff);
+  color: var(--workspace-primary, #2563eb);
 }
 
 .process-item.is-done .step-icon {
-  background: #e5f7ef;
-  color: #0f8f5f;
+  background: #f0fdf4;
+  color: #15803d;
 }
 
 .process-item.is-error .step-icon {
-  background: #fff0ea;
-  color: #c05621;
+  background: #fef2f2;
+  color: var(--workspace-danger, #b91c1c);
 }
 
 .spinning {
@@ -279,14 +280,15 @@ const processItems = computed<ProcessItem[]>(() => {
 
 .step-title-row strong {
   min-width: 0;
-  color: #223740;
+  color: var(--workspace-text, #172033);
   font-size: 13px;
+  font-weight: 600;
 }
 
 .step-copy small {
-  color: #65777f;
-  font-size: 11px;
-  line-height: 1.35;
+  color: var(--workspace-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -296,12 +298,12 @@ const processItems = computed<ProcessItem[]>(() => {
   width: fit-content;
   max-width: 100%;
   padding: 5px 7px;
-  border-radius: 7px;
-  color: #41606a;
-  background: #f4f8f9;
-  border: 1px solid rgba(99, 120, 128, 0.12);
-  font-size: 11px;
-  line-height: 1.35;
+  border-radius: 6px;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid var(--workspace-border, #e2e8f0);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .evidence-line span {
@@ -313,21 +315,40 @@ const processItems = computed<ProcessItem[]>(() => {
   display: grid;
   gap: 8px;
   padding-top: 8px;
-  border-top: 1px solid rgba(119, 135, 143, 0.12);
+  border-top: 1px solid var(--workspace-border, #e2e8f0);
 }
 
 .trace-detail summary {
-  width: fit-content;
   gap: 6px;
-  color: #0f806e;
+  min-height: 32px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--workspace-primary, #2563eb);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
 }
 
 .trace-detail summary::-webkit-details-marker {
   display: none;
+}
+
+.trace-detail summary:hover {
+  background: var(--workspace-primary-soft, #eff6ff);
+}
+
+.trace-detail summary:focus-visible {
+  outline: 2px solid var(--workspace-primary, #2563eb);
+  outline-offset: 2px;
+}
+
+.trace-chevron {
+  margin-left: auto;
+}
+
+.trace-detail[open] .trace-chevron {
+  transform: rotate(180deg);
 }
 
 .trace-list {
@@ -342,8 +363,8 @@ const processItems = computed<ProcessItem[]>(() => {
   gap: 8px;
   min-width: 0;
   padding: 7px 8px;
-  border-radius: 7px;
-  background: rgba(243, 247, 248, 0.86);
+  border-radius: 6px;
+  background: #f8fafc;
 }
 
 .trace-dot {
@@ -351,23 +372,23 @@ const processItems = computed<ProcessItem[]>(() => {
   height: 8px;
   flex: 0 0 8px;
   border-radius: 50%;
-  background: #91a1a8;
+  background: #94a3b8;
 }
 
 .trace-item.is-success .trace-dot {
-  background: #0f8f5f;
+  background: #15803d;
 }
 
 .trace-item.is-running .trace-dot {
-  background: #1976c9;
+  background: var(--workspace-primary, #2563eb);
 }
 
 .trace-item.is-error .trace-dot {
-  background: #c05621;
+  background: var(--workspace-danger, #b91c1c);
 }
 
 .trace-item.is-skipped .trace-dot {
-  background: #9aa7ad;
+  background: #94a3b8;
 }
 
 .trace-copy {
@@ -377,33 +398,41 @@ const processItems = computed<ProcessItem[]>(() => {
 }
 
 .trace-copy strong {
-  color: #273f47;
+  color: var(--workspace-text, #172033);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .trace-copy small {
-  color: #687a82;
-  font-size: 11px;
+  color: var(--workspace-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .trace-duration {
   margin-left: auto;
   flex: 0 0 auto;
-  color: #45606a;
-  font-size: 11px;
-  font-weight: 800;
+  color: var(--workspace-muted, #64748b);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .trace-empty {
   padding: 8px;
-  color: #70828a;
+  color: var(--workspace-muted, #64748b);
   font-size: 12px;
 }
 
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
   }
 }
 </style>

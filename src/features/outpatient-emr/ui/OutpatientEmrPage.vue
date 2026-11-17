@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import Icon from '@shared/ui/Icon.vue';
+import '@shared/styles/workspace-page.css';
 import { useConsultationReferenceFeedbackListener } from '@features/consultation-result';
 import { useOutpatientEmrAnalysis } from '../model/useOutpatientEmrAnalysis';
 import { summarizeOutpatientEmrCombinedWriteback } from '../lib/voiceOutpatientEmr';
@@ -123,19 +124,19 @@ async function handleCancel(): Promise<void> {
 </script>
 
 <template>
-  <section class="outpatient-emr-page">
-    <header class="page-header">
-      <div class="title-group">
-        <span class="title-icon"><Icon icon="lucide:file-pen" :size="20" /></span>
+  <section class="outpatient-emr-page workspace-page">
+    <header class="page-header workspace-header">
+      <div class="title-group workspace-title-group">
+        <span class="title-icon workspace-title-icon"><Icon icon="lucide:file-pen" :size="20" /></span>
         <div>
-          <h1>{{ isCombinedWriteback ? '门诊模板映射确认' : '门诊病历模板分析' }}</h1>
-          <p>
+          <h1 class="workspace-title">{{ isCombinedWriteback ? '门诊模板映射确认' : '门诊病历模板分析' }}</h1>
+          <p class="workspace-subtitle">
             {{ pageSubtitle }}
             <span v-if="request && activeRequest?.visitId"> · 就诊 {{ activeRequest.visitId }}</span>
           </p>
         </div>
       </div>
-      <button class="icon-button" type="button" title="收起" @click="emit('close')">
+      <button class="icon-button workspace-button is-icon" type="button" title="收起" aria-label="收起" @click="emit('close')">
         <Icon icon="lucide:chevron-down" :size="18" />
       </button>
     </header>
@@ -181,16 +182,16 @@ async function handleCancel(): Promise<void> {
       </div>
     </main>
 
-    <footer v-if="request" class="page-footer">
+    <footer v-if="request" class="page-footer workspace-footer">
       <button
-        class="secondary-button danger-button"
+        class="secondary-button danger-button workspace-button is-danger"
         type="button"
         :disabled="cancelDisabled"
         @click="handleCancel"
       >
         放弃
       </button>
-      <div class="footer-actions">
+      <div class="footer-actions workspace-actions">
         <span
           v-if="dictionaryValidationMessage"
           class="dictionary-validation-message"
@@ -198,7 +199,7 @@ async function handleCancel(): Promise<void> {
         >{{ dictionaryValidationMessage }}</span>
         <button
           v-if="analysisStatus === 'error'"
-          class="secondary-button"
+          class="secondary-button workspace-button"
           type="button"
           :disabled="!canRetry"
           @click="handleRetry"
@@ -206,7 +207,7 @@ async function handleCancel(): Promise<void> {
           重新分析
         </button>
         <button
-          class="primary-button"
+          class="primary-button workspace-button is-primary"
           type="button"
           :disabled="!canSubmit"
           @click="handlePrimaryAction"
@@ -220,67 +221,24 @@ async function handleCancel(): Promise<void> {
 </template>
 
 <style scoped>
-.outpatient-emr-page {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  color: #172033;
-  background: #f5f7fb;
-}
-
-.page-header,
-.page-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
-  border-color: #e2e8f0;
-  background: #fff;
-}
-
-.page-header { border-bottom: 1px solid #e2e8f0; }
-.page-footer { border-top: 1px solid #e2e8f0; }
-
-.title-group,
 .footer-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
 }
 
 .dictionary-validation-message {
   max-width: 360px;
   color: #b45309;
   font-size: 12px;
+  line-height: 1.5;
   text-align: right;
-}
-
-.title-icon {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 10px;
-  color: #1d4ed8;
-  background: #dbeafe;
-}
-
-h1 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.title-group p {
-  margin: 3px 0 0;
-  color: #64748b;
-  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .page-content {
   display: grid;
+  flex: 1;
   min-height: 0;
+  align-content: start;
   gap: 14px;
   padding: 16px 20px;
   overflow: auto;
@@ -295,53 +253,22 @@ h1 {
   border: 1px dashed #cbd5e1;
   border-radius: 12px;
   color: #94a3b8;
-  background: #fff;
+  background: var(--workspace-surface);
 }
 
-button {
-  font: inherit;
-}
+@container workspace-page (max-width: 720px) {
+  .page-content {
+    padding: 14px;
+  }
 
-.icon-button,
-.secondary-button,
-.primary-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 36px;
-  border-radius: 9px;
-  cursor: pointer;
-}
+  .footer-actions {
+    flex: 1 1 auto;
+  }
 
-.icon-button {
-  width: 36px;
-  border: 0;
-  color: #64748b;
-  background: transparent;
-}
-
-.secondary-button,
-.primary-button {
-  padding: 0 16px;
-  border: 1px solid #cbd5e1;
-}
-
-.secondary-button {
-  color: #334155;
-  background: #fff;
-}
-
-.danger-button { color: #b91c1c; }
-
-.primary-button {
-  border-color: #2563eb;
-  color: #fff;
-  background: #2563eb;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: .5;
+  .dictionary-validation-message {
+    flex-basis: 100%;
+    max-width: none;
+    text-align: left;
+  }
 }
 </style>

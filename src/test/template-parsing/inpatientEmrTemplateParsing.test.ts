@@ -41,7 +41,6 @@ describe('住院病历模板解析评估（parseInpatientEmrTemplate）', () => 
     const header = parsed.fields[0];
     expect(header).toMatchObject({
       article: '日常病程记录',
-      presetStatus: 'exclude',
       aiSuitable: false,
       rule: { source: 'his_or_system' },
     });
@@ -49,7 +48,6 @@ describe('住院病历模板解析评估（parseInpatientEmrTemplate）', () => 
     const body = parsed.fields[1];
     expect(body).toMatchObject({
       article: '日常病程记录',
-      presetStatus: 'ai',
       aiSuitable: true,
       defaultValue: '原值',
     });
@@ -57,8 +55,9 @@ describe('住院病历模板解析评估（parseInpatientEmrTemplate）', () => 
     expect(body.rule.promptIntent).toBe('inpatientRecordSection');
 
     const signature = parsed.fields[2];
-    expect(signature).toMatchObject({ readonly: true, presetStatus: 'exclude' });
+    expect(signature).toMatchObject({ readonly: true, aiSuitable: false });
     expect(signature.rule.source).toBe('doctor_signature');
+    expect(parsed.fields.every((field) => !Object.prototype.hasOwnProperty.call(field, 'presetStatus'))).toBe(true);
 
     expect(isAdmissionTemplate('入院记录')).toBe(true);
     expect(isAdmissionTemplate('日常病程记录')).toBe(false);

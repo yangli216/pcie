@@ -1,409 +1,7 @@
-<template>
-  <section class="inpatient-emr-page">
-    <header class="emr-header" data-tauri-drag-region>
-      <div class="title-block" data-tauri-drag-region>
-        <span class="eyebrow">住院病历</span>
-        <h1>AI 住院病历生成</h1>
-      </div>
-      <div class="header-actions">
-        <button
-          class="danger-ghost-btn"
-          type="button"
-          :disabled="!request || isGenerating || isWritingBack || writebackStatus === 'pending'"
-          title="放弃本次生成"
-          @click="handleCancelClick"
-        >
-          <Icon icon="lucide:trash-2" :size="16" />
-          <span>放弃</span>
-        </button>
-        <button
-          class="ghost-btn"
-          type="button"
-          :disabled="!request || isGenerating || isWritingBack || writebackStatus === 'pending'"
-          title="补充要点并重新生成"
-          @click="openRegenerateDialog"
-        >
-          <Icon icon="lucide:refresh-cw" :size="16" />
-          <span>补充要点并重新生成</span>
-        </button>
-        <button
-          class="primary-btn"
-          type="button"
-          :disabled="!result || isGenerating || isWritingBack || writebackStatus === 'pending' || writebackStatus === 'success'"
-          title="一键回写"
-          @click="handleWritebackClick"
-        >
-          <Icon icon="lucide:send-horizontal" :size="16" />
-          <span>{{ isWritingBack ? '回写中' : '一键回写' }}</span>
-        </button>
-      </div>
-    </header>
-
-    <div v-if="inpatientLogUpload.error || inpatientLogUpload.pending" class="inpatient-log-notice" role="status">
-      <span>{{ inpatientLogUpload.error || `住院日志待补传 ${inpatientLogUpload.pending} 条` }}</span>
-      <button v-if="!inpatientLogUpload.unrecorded || inpatientLogUpload.pending" type="button" :disabled="inpatientLogUpload.uploading" @click="retryInpatientLogs">{{ inpatientLogUpload.uploading ? '补传中…' : '重试补传' }}</button>
-    </div>
-    <main class="emr-main">
-      <aside class="left-pane">
-        <InpatientEmrProcessPanel
-          :steps="steps"
-          :completed-step-count="completedStepCount"
-          :summary="result?.evidenceSummary"
-          :trace="result?.trace"
-        />
-
-        <section class="field-panel" v-if="result">
-          <div class="section-heading">
-            <Icon icon="lucide:braces" :size="17" />
-            <span>AI 生成字段</span>
-            <strong>{{ aiFields.length }}</strong>
-          </div>
-          <div class="field-list">
-            <article
-              v-for="field in aiFields"
-              :key="field.id"
-              class="field-prompt-card"
-            >
-              <div class="field-prompt-head">
-                <strong>{{ field.id }}</strong>
-                <span>{{ field.rule.promptIntent || 'AI 生成' }}</span>
-              </div>
-              <p>{{ field.meaning }}</p>
-              <details class="field-prompt-detail">
-                <summary>
-                  <Icon icon="lucide:file-search" :size="13" />
-                  <span>查看提示词</span>
-                </summary>
-                <pre>{{ getFieldPrompt(field) }}</pre>
-              </details>
-            </article>
-          </div>
-          <div v-if="aiFields.length === 0" class="no-ai-fields">
-            <Icon icon="lucide:circle-slash" :size="18" />
-            <span>当前模板没有识别到 AI 生成字段</span>
-          </div>
-        </section>
-
-        <section class="empty-panel" v-if="!request">
-          <Icon icon="lucide:file-plus-2" :size="26" />
-          <strong>等待住院病历生成请求</strong>
-        </section>
-      </aside>
-
-      <section class="preview-pane">
-        <div v-if="errorMessage" class="error-banner" role="alert">
-          <Icon icon="lucide:triangle-alert" :size="18" />
-          <span>{{ errorMessage }}</span>
-        </div>
-
-        <div v-if="isGenerating && !result" class="generating-state">
-          <Icon icon="lucide:sparkles" :size="30" class="pulse-icon" />
-          <strong>{{ activeStepLabel }}</strong>
-          <span>{{ activeStepDetail }}</span>
-        </div>
-
-        <template v-if="result">
-          <section class="html-preview-card">
-            <div class="section-heading">
-              <Icon icon="lucide:panel-top" :size="17" />
-              <span>病历预览</span>
-              <span
-                v-if="writebackMessage"
-                class="writeback-status"
-                :class="`is-${writebackStatus}`"
-              >
-                {{ writebackMessage }}
-              </span>
-            </div>
-            <div
-              class="html-preview"
-              :class="{ 'is-generating': isGenerating }"
-              v-html="previewHtml"
-              @input="handlePreviewInput"
-            ></div>
-          </section>
-        </template>
-      </section>
-    </main>
-
-    <div
-      v-if="showRegenerateDialog"
-      class="regenerate-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="补充病历要点"
-    >
-      <section class="regenerate-dialog">
-        <header class="regenerate-head">
-          <div>
-            <span>补充要点并重新生成</span>
-            <strong>补充病历要点</strong>
-          </div>
-          <button
-            class="icon-btn"
-            type="button"
-            title="关闭"
-            @click="closeRegenerateDialog"
-          >
-            <Icon icon="lucide:x" :size="18" />
-          </button>
-        </header>
-
-        <!-- 门诊历史引用区域 -->
-        <div v-if="isAdmission" class="outpatient-reference-section">
-          <div class="section-title-row">
-            <Icon icon="lucide:history" :size="15" />
-            <span>引用历史门诊病历（推荐选择一次门诊就诊作为入院记录基础）</span>
-            <span v-if="isLoadingVisits" class="loading-visits-text">
-              <Icon icon="lucide:loader-2" :size="12" class="spinning" />
-              加载中...
-            </span>
-          </div>
-          <div class="history-range-row" aria-label="门诊就诊时间范围">
-            <button
-              v-for="option in outpatientHistoryRangeOptions"
-              :key="option.key"
-              type="button"
-              class="range-option-btn"
-              :class="{ 'is-active': outpatientHistoryRangeKey === option.key }"
-              :disabled="isLoadingVisits"
-              @click="setOutpatientHistoryRange(option.key)"
-            >
-              {{ option.label }}
-            </button>
-            <span class="range-text">{{ outpatientHistoryRangeText }}</span>
-          </div>
-
-          <div class="visits-card-list" v-if="outpatientVisits.length > 0">
-            <div
-              v-for="visit in outpatientVisits"
-              :key="visit.visitId"
-              class="visit-ref-card"
-              :class="{ 'is-selected': selectedVisitId === visit.visitId }"
-            >
-              <div class="visit-card-main" @click="selectVisit(visit.visitId)">
-                <div class="visit-meta">
-                  <span class="dept-badge">{{ visit.deptName || '门诊' }}</span>
-                  <span class="visit-date">{{ visit.visitDate.split(' ')[0] }}</span>
-                </div>
-                <div class="visit-diagnoses" :title="visit.diagnoses?.join(', ')">
-                  主诊断：{{ visit.diagnoses?.join(', ') || '无明确诊断' }}
-                </div>
-                <div class="visit-record-meta">
-                  病历文书 {{ visit.medicalRecordDocumentCount || 1 }} 份
-                </div>
-              </div>
-              <div class="visit-card-actions">
-                <button
-                  type="button"
-                  class="action-btn view-btn"
-                  @click="viewOutpatientDetail(visit.visitId)"
-                >
-                  <Icon icon="lucide:eye" :size="13" />
-                  <span>查看</span>
-                </button>
-                <button
-                  type="button"
-                  class="action-btn select-btn"
-                  :class="{ 'is-active': selectedVisitId === visit.visitId }"
-                  @click="selectVisit(visit.visitId)"
-                >
-                  <Icon :icon="selectedVisitId === visit.visitId ? 'lucide:check-circle-2' : 'lucide:plus-circle'" :size="13" />
-                  <span>{{ selectedVisitId === visit.visitId ? '已引用' : '以此为基准' }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="no-visits-placeholder" v-else-if="!isLoadingVisits">
-            <Icon icon="lucide:info" :size="13" />
-            <span>{{ outpatientVisitEmptyText }}</span>
-          </div>
-        </div>
-
-        <div class="supplement-presets">
-          <button
-            v-for="preset in supplementPresets"
-            :key="preset"
-            type="button"
-            @click="appendSupplementPreset(preset)"
-          >
-            {{ preset }}
-          </button>
-        </div>
-
-        <textarea
-          v-model="supplementText"
-          class="supplement-input"
-          rows="8"
-          placeholder="例如：今日患者咳嗽较前减轻，无胸闷气促；查体双肺呼吸音稍粗，未闻及明显湿啰音；继续当前抗感染及雾化治疗，复查血常规。"
-        ></textarea>
-
-        <div class="voice-row">
-          <button
-            class="voice-btn"
-            type="button"
-            :class="{ 'is-recording': isRecordingSupplement }"
-            :disabled="isTranscribingSupplement || isGenerating"
-            @click="toggleSupplementRecording"
-          >
-            <Icon
-              :icon="isRecordingSupplement ? 'lucide:square' : 'lucide:mic'"
-              :size="16"
-            />
-            <span>{{ supplementVoiceButtonText }}</span>
-          </button>
-          <button
-            class="clear-supplement-btn"
-            type="button"
-            :disabled="!supplementText.trim() || isRecordingSupplement || isTranscribingSupplement"
-            @click="clearSupplementText"
-          >
-            清空补充
-          </button>
-          <span v-if="supplementVoiceStatus" class="voice-status">
-            {{ supplementVoiceStatus }}
-          </span>
-        </div>
-
-        <div
-          v-if="isRecordingSupplement || isTranscribingSupplement"
-          class="capture-visualizer"
-          :class="{ 'is-transcribing': isTranscribingSupplement }"
-        >
-          <div class="recording-dot"></div>
-          <div class="meter-bars" aria-hidden="true">
-            <span
-              v-for="(level, index) in supplementAudioLevels"
-              :key="index"
-              :style="{ height: `${level}px`, opacity: String(0.36 + (level / 34) * 0.64) }"
-            ></span>
-          </div>
-          <strong>{{ isRecordingSupplement ? formattedSupplementDuration : '识别中' }}</strong>
-        </div>
-
-        <div v-if="supplementError" class="supplement-error">
-          <Icon icon="lucide:triangle-alert" :size="15" />
-          <span>{{ supplementError }}</span>
-        </div>
-
-        <footer class="regenerate-footer">
-          <button
-            class="ghost-btn"
-            type="button"
-            :disabled="isRecordingSupplement || isTranscribingSupplement"
-            @click="closeRegenerateDialog"
-          >
-            取消
-          </button>
-          <button
-            class="primary-btn"
-            type="button"
-            :disabled="isRecordingSupplement || isTranscribingSupplement || isGenerating"
-            @click="confirmRegenerate"
-          >
-            <Icon icon="lucide:sparkles" :size="16" />
-            <span>{{ supplementText.trim() ? '带补充重新生成' : '直接重新生成' }}</span>
-          </button>
-        </footer>
-      </section>
-    </div>
-
-    <div
-      v-if="showCancelConfirm"
-      class="regenerate-overlay cancel-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="inpatient-emr-cancel-title"
-    >
-      <section class="cancel-dialog">
-        <div class="cancel-dialog-body">
-          <div class="cancel-icon">
-            <Icon icon="lucide:triangle-alert" :size="20" />
-          </div>
-          <div>
-            <strong id="inpatient-emr-cancel-title">确认放弃本次住院病历生成？</strong>
-            <p>放弃后将清空当前未回写的病历草稿、编辑内容和生成过程，窗口会退回小球状态。</p>
-          </div>
-        </div>
-        <footer class="cancel-dialog-actions">
-          <button class="ghost-btn" type="button" @click="closeCancelConfirm">继续编辑</button>
-          <button class="danger-btn" type="button" @click="confirmCancel">确认放弃</button>
-        </footer>
-      </section>
-    </div>
-
-    <!-- 门诊病历详情预览模态框 -->
-    <div
-      v-if="showOutpatientPreview"
-      class="outpatient-preview-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="门诊病历预览"
-    >
-      <section class="outpatient-preview-dialog">
-        <header class="preview-head">
-          <span>门诊病历详情预览</span>
-          <button
-            class="icon-btn"
-            type="button"
-            title="关闭"
-            @click="showOutpatientPreview = false"
-          >
-            <Icon icon="lucide:x" :size="18" />
-          </button>
-        </header>
-        <div class="preview-content">
-          <div v-if="isDetailLoading" class="preview-loading">
-            <Icon icon="lucide:loader-2" :size="24" class="spinning" />
-            <span>正在拉取门诊病历...</span>
-          </div>
-          <div
-            v-else-if="previewVisitRecord"
-            class="preview-html-container"
-            v-html="safePreviewVisitHtml"
-          ></div>
-          <div v-else class="preview-error">
-            <Icon icon="lucide:triangle-alert" :size="20" />
-            <span>拉取门诊病历失败</span>
-          </div>
-        </div>
-        <footer class="preview-footer">
-          <button
-            class="ghost-btn"
-            type="button"
-            @click="showOutpatientPreview = false"
-          >
-            关闭预览
-          </button>
-          <button
-            v-if="previewVisitRecord"
-            class="primary-btn"
-            type="button"
-            :disabled="selectedVisitId === previewVisitRecord.visitId"
-            @click="selectVisitAndClosePreview(previewVisitRecord.visitId)"
-          >
-            <Icon icon="lucide:check" :size="16" />
-            <span>引用此病历为基准</span>
-          </button>
-        </footer>
-      </section>
-    </div>
-
-    <InpatientEmrWritebackQualityDialog
-      v-if="showWritebackQualityDialog && pendingQualityIssues.length > 0"
-      :issues="pendingQualityIssues"
-      :is-writing-back="isWritingBack"
-      :writeback-status="writebackStatus"
-      :writeback-message="writebackMessage"
-      @cancel="showWritebackQualityDialog = false"
-      @confirm="confirmWritebackAfterQuality"
-    />
-  </section>
-</template>
-
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import Icon from '@shared/ui/Icon.vue';
+import '@shared/styles/workspace-page.css';
 import { audioRecorder, getMicrophoneErrorMessage } from '@/services/audioRecorder';
 import { transcribeSpeech } from '@/services/aliyunSpeech';
 import { useConsultationReferenceFeedbackListener } from '@features/consultation-result';
@@ -412,13 +10,13 @@ import {
   useInpatientEmrGeneration,
 } from '../model/useInpatientEmrGeneration';
 import {
-  buildEditableInpatientEmrPreviewHtml,
   isAdmissionTemplate,
 } from '../lib/inpatientEmrTemplate';
 import { buildInpatientEmrFieldPrompt } from '../lib/inpatientEmrPrompts';
 import { sanitizeExternalHtml } from '@shared/lib/safeHtml';
 // import { buildInpatientEmrQualityIssues } from '../lib/inpatientEmrQuality';
 import InpatientEmrProcessPanel from './InpatientEmrProcessPanel.vue';
+import InpatientEmrTemplatePreview from './InpatientEmrTemplatePreview.vue';
 import InpatientEmrWritebackQualityDialog from './InpatientEmrWritebackQualityDialog.vue';
 import type {
   InpatientEmrGenerationRequest,
@@ -459,7 +57,6 @@ const {
   reset,
 } = useInpatientEmrGeneration();
 
-const previewHtml = ref('');
 const showRegenerateDialog = ref(false);
 const showCancelConfirm = ref(false);
 const showWritebackQualityDialog = ref(false);
@@ -650,6 +247,28 @@ const activeStep = computed(() => steps.value.find((step) => step.key === active
 const activeStepLabel = computed(() => activeStep.value?.title || '准备生成');
 const activeStepDetail = computed(() => activeStep.value?.detail || '正在整理住院病历上下文');
 const aiFields = computed(() => result.value?.template.fields.filter((field) => field.aiSuitable) || []);
+const filledFieldCount = computed(() => aiFields.value.filter((field) => result.value?.fieldValues[field.id]?.trim()).length);
+const actionDisabled = computed(() => !props.request || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending');
+const previewEditable = computed(() => !actionDisabled.value && writebackStatus.value !== 'success');
+const primaryActionLabel = computed(() => {
+  if (isWritingBack.value) return '正在回写';
+  if (writebackStatus.value === 'pending') return '等待 HIS 回执';
+  if (writebackStatus.value === 'success') return '回写已完成';
+  if (writebackStatus.value === 'error') return '重新回写';
+  return '一键回写';
+});
+const generationPresentation = computed(() => {
+  if (isGenerating.value) return { icon: 'lucide:loader-circle', title: activeStepLabel.value, detail: activeStepDetail.value, tone: 'working' };
+  if (isWritingBack.value) return { icon: 'lucide:loader-circle', title: '正在发送病历', detail: '正在发送回写事件，请等待 HIS 保存并回执', tone: 'working' };
+  if (writebackStatus.value === 'pending') return { icon: 'lucide:clock', title: '已发送，等待 HIS 回执', detail: '回填结果以 HIS 回执为准，当前病历为只读', tone: 'working' };
+  if (writebackStatus.value === 'success') return { icon: 'lucide:circle-check', title: 'HIS 已完成病历回填', detail: '本次病历已完成回填', tone: 'ready' };
+  if (writebackStatus.value === 'error') return { icon: 'lucide:triangle-alert', title: '回写未完成，草稿已保留', detail: '可调整当前正文后重新回写', tone: 'error' };
+  if (errorMessage.value) return { icon: 'lucide:triangle-alert', title: '生成未完成，请核对已有草稿', detail: '可直接修改已有内容，或补充要点后重新生成', tone: 'error' };
+  if (result.value?.evidenceSummary.aiGeneration.status === 'waiting') return { icon: 'lucide:file-pen', title: '等待补充病历依据', detail: '可补充查房要点、引用门诊病历，或直接重新生成', tone: 'waiting' };
+  if (result.value) return { icon: 'lucide:circle-check', title: '病历草稿已生成，请核对', detail: '可直接修改正文，也可切换原始模板核对完整病历', tone: 'ready' };
+  return { icon: 'lucide:file-text', title: '准备生成病历', detail: '正在整理本次病历所需资料', tone: 'idle' };
+});
+
 const supplementVoiceButtonText = computed(() => {
   if (isTranscribingSupplement.value) return '识别中';
   return isRecordingSupplement.value ? '停止并识别' : '语音录入';
@@ -692,7 +311,6 @@ watch(
       });
     } else {
       reset();
-      previewHtml.value = '';
       showRegenerateDialog.value = false;
       showCancelConfirm.value = false;
       showWritebackQualityDialog.value = false;
@@ -712,22 +330,6 @@ useConsultationReferenceFeedbackListener<InpatientEmrReferenceFeedbackPayload>({
     }
   },
 });
-
-watch(
-  [result, isGenerating, writebackStatus],
-  () => {
-    if (!result.value) {
-      previewHtml.value = '';
-      return;
-    }
-    previewHtml.value = buildEditableInpatientEmrPreviewHtml(
-      result.value.request.htmlContent,
-      result.value.fieldValues,
-      result.value.template.fields,
-      !isGenerating.value && writebackStatus.value !== 'pending' && writebackStatus.value !== 'success',
-    );
-  },
-);
 
 function getCurrentGenerationRequest(): InpatientEmrGenerationRequest | null {
   return result.value?.request || props.request;
@@ -917,423 +519,435 @@ async function confirmWritebackAfterQuality(): Promise<void> {
   await submitWriteback();
 }
 
-function handlePreviewInput(event: Event): void {
-  const target = event.target as HTMLElement | null;
-  const editable = target?.closest?.('[data-inpatient-emr-field-id][contenteditable="true"]') as HTMLElement | null;
-  const fieldId = editable?.dataset.inpatientEmrFieldId;
-  if (!fieldId) return;
-  updateFieldValue(fieldId, editable.textContent || '');
-}
-
 onBeforeUnmount(() => {
   void discardSupplementRecording();
 });
 </script>
 
+<template>
+  <section class="inpatient-emr-page workspace-page">
+    <header class="emr-header workspace-header" data-tauri-drag-region>
+      <div class="title-block workspace-title-group" data-tauri-drag-region>
+        <span class="workspace-title-icon"><Icon icon="lucide:file-pen" :size="20" /></span>
+        <div>
+          <h1 class="workspace-title">AI 住院病历生成</h1>
+          <p class="workspace-subtitle">{{ request?.templateName || '等待 HIS 传入住院病历模板' }}<span v-if="request?.recordTime"> · {{ request.recordTime }}</span></p>
+        </div>
+      </div>
+      <button class="workspace-button is-icon" type="button" title="收起，保留当前病历" aria-label="收起，保留当前病历" @click="emit('close')">
+        <Icon icon="lucide:chevron-down" :size="18" />
+      </button>
+    </header>
+
+    <div v-if="inpatientLogUpload.error || inpatientLogUpload.pending" class="inpatient-log-notice" role="status">
+      <span>{{ inpatientLogUpload.error || `住院日志待补传 ${inpatientLogUpload.pending} 条` }}</span>
+      <button v-if="!inpatientLogUpload.unrecorded || inpatientLogUpload.pending" type="button" :disabled="inpatientLogUpload.uploading" @click="retryInpatientLogs">{{ inpatientLogUpload.uploading ? '补传中…' : '重试补传' }}</button>
+    </div>
+    <main class="emr-main">
+      <div v-if="errorMessage" class="error-banner" role="alert">
+        <Icon icon="lucide:triangle-alert" :size="18" />
+        <span>{{ errorMessage }}</span>
+      </div>
+
+      <template v-if="request">
+        <section class="generation-summary" :data-tone="generationPresentation.tone" role="status" aria-live="polite">
+          <span class="summary-icon"><Icon :icon="generationPresentation.icon" :size="20" :class="{ spinning: isGenerating || isWritingBack }" /></span>
+          <div class="summary-copy">
+            <strong>{{ generationPresentation.title }}</strong>
+            <span>{{ generationPresentation.detail }}</span>
+          </div>
+          <span v-if="isGenerating" class="step-count">第 {{ Math.min(completedStepCount + 1, steps.length) }}/{{ steps.length }} 步</span>
+          <span v-else-if="result" class="field-count">已填写 {{ filledFieldCount }}/{{ aiFields.length }} 项</span>
+        </section>
+
+        <details class="generation-details" :open="isGenerating">
+          <summary><Icon icon="lucide:workflow" :size="16" /><span>生成过程与依据</span><span class="details-hint">{{ completedStepCount }}/{{ steps.length }} 步</span></summary>
+          <InpatientEmrProcessPanel
+            :steps="steps"
+            :completed-step-count="completedStepCount"
+            :summary="result?.evidenceSummary"
+            :trace="result?.trace"
+          />
+          <details v-if="result" class="field-panel">
+            <summary>生成字段说明 · {{ aiFields.length }} 项</summary>
+            <div class="field-list">
+              <article v-for="field in aiFields" :key="field.id" class="field-prompt-card">
+                <strong>{{ field.name || field.id }}</strong>
+                <p>{{ field.meaning }}</p>
+                <details class="field-prompt-detail">
+                  <summary>查看字段 ID 与提示词</summary>
+                  <code>{{ field.id }}</code>
+                  <pre>{{ getFieldPrompt(field) }}</pre>
+                </details>
+              </article>
+            </div>
+            <p v-if="aiFields.length === 0" class="no-ai-fields">当前模板没有识别到 AI 生成字段</p>
+          </details>
+        </details>
+
+        <InpatientEmrTemplatePreview
+          v-if="result"
+          :key="request.requestId || request.admissionId"
+          :html-content="result.request.htmlContent"
+          :fields="result.template.fields"
+          :field-values="result.fieldValues"
+          :initial-field-values="result.initialFieldValues"
+          :editable="previewEditable"
+          :is-generating="isGenerating"
+          @update-field="updateFieldValue"
+        />
+        <div v-else class="generating-state">
+          <Icon :icon="errorMessage ? 'lucide:triangle-alert' : 'lucide:sparkles'" :size="30" />
+          <strong>{{ errorMessage ? '本次生成未完成' : activeStepLabel }}</strong>
+          <span>{{ errorMessage ? '可补充要点后重新生成' : activeStepDetail }}</span>
+        </div>
+      </template>
+      <section v-else class="empty-panel">
+        <Icon icon="lucide:file-plus-2" :size="28" />
+        <strong>等待住院病历生成请求</strong>
+        <span>请从 HIS 打开需要辅助书写的住院病历</span>
+      </section>
+    </main>
+
+    <footer v-if="request" class="emr-footer workspace-footer">
+      <button class="workspace-button is-danger" type="button" :disabled="actionDisabled" title="放弃本次生成" @click="handleCancelClick">
+        <Icon icon="lucide:trash-2" :size="16" /><span>放弃</span>
+      </button>
+      <div class="footer-actions workspace-actions">
+        <span v-if="writebackMessage" class="writeback-status" :class="`is-${writebackStatus}`" role="status" aria-live="polite">{{ writebackMessage }}</span>
+        <button class="workspace-button" type="button" :disabled="actionDisabled" title="补充要点并重新生成" @click="openRegenerateDialog">
+          <Icon icon="lucide:refresh-cw" :size="16" /><span>补充要点并重新生成</span>
+        </button>
+        <button class="workspace-button is-primary" type="button" :disabled="!result || actionDisabled || writebackStatus === 'success'" title="一键回写" @click="handleWritebackClick">
+          <Icon icon="lucide:send-horizontal" :size="16" /><span>{{ primaryActionLabel }}</span>
+        </button>
+      </div>
+    </footer>
+
+    <div
+      v-if="showRegenerateDialog"
+      class="regenerate-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="补充病历要点"
+    >
+      <section class="regenerate-dialog">
+        <header class="regenerate-head">
+          <div>
+            <span>补充要点并重新生成</span>
+            <strong>补充病历要点</strong>
+          </div>
+          <button
+            class="workspace-button is-icon"
+            type="button"
+            title="关闭"
+            aria-label="关闭"
+            @click="closeRegenerateDialog"
+          >
+            <Icon icon="lucide:x" :size="18" />
+          </button>
+        </header>
+
+        <!-- 门诊历史引用区域 -->
+        <div v-if="isAdmission" class="outpatient-reference-section">
+          <div class="section-title-row">
+            <Icon icon="lucide:history" :size="15" />
+            <span>引用历史门诊病历（推荐选择一次门诊就诊作为入院记录基础）</span>
+            <span v-if="isLoadingVisits" class="loading-visits-text">
+              <Icon icon="lucide:loader-2" :size="12" class="spinning" />
+              加载中…
+            </span>
+          </div>
+          <div class="history-range-row" aria-label="门诊就诊时间范围">
+            <button
+              v-for="option in outpatientHistoryRangeOptions"
+              :key="option.key"
+              type="button"
+              class="range-option-btn"
+              :class="{ 'is-active': outpatientHistoryRangeKey === option.key }"
+              :disabled="isLoadingVisits"
+              @click="setOutpatientHistoryRange(option.key)"
+            >
+              {{ option.label }}
+            </button>
+            <span class="range-text">{{ outpatientHistoryRangeText }}</span>
+          </div>
+
+          <div class="visits-card-list" v-if="outpatientVisits.length > 0">
+            <div
+              v-for="visit in outpatientVisits"
+              :key="visit.visitId"
+              class="visit-ref-card"
+              :class="{ 'is-selected': selectedVisitId === visit.visitId }"
+            >
+              <button type="button" class="visit-card-main" :aria-pressed="selectedVisitId === visit.visitId" @click="selectVisit(visit.visitId)">
+                <div class="visit-meta">
+                  <span class="dept-badge">{{ visit.deptName || '门诊' }}</span>
+                  <span class="visit-date">{{ visit.visitDate.split(' ')[0] }}</span>
+                </div>
+                <div class="visit-diagnoses" :title="visit.diagnoses?.join(', ')">
+                  主诊断：{{ visit.diagnoses?.join(', ') || '无明确诊断' }}
+                </div>
+                <div class="visit-record-meta">
+                  病历文书 {{ visit.medicalRecordDocumentCount || 1 }} 份
+                </div>
+              </button>
+              <div class="visit-card-actions">
+                <button
+                  type="button"
+                  class="action-btn view-btn"
+                  @click="viewOutpatientDetail(visit.visitId)"
+                >
+                  <Icon icon="lucide:eye" :size="13" />
+                  <span>查看</span>
+                </button>
+                <button
+                  type="button"
+                  class="action-btn select-btn"
+                  :class="{ 'is-active': selectedVisitId === visit.visitId }"
+                  @click="selectVisit(visit.visitId)"
+                >
+                  <Icon :icon="selectedVisitId === visit.visitId ? 'lucide:check-circle-2' : 'lucide:plus-circle'" :size="13" />
+                  <span>{{ selectedVisitId === visit.visitId ? '已引用' : '以此为基准' }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="no-visits-placeholder" v-else-if="!isLoadingVisits">
+            <Icon icon="lucide:info" :size="13" />
+            <span>{{ outpatientVisitEmptyText }}</span>
+          </div>
+        </div>
+
+        <div class="supplement-presets">
+          <button
+            v-for="preset in supplementPresets"
+            :key="preset"
+            type="button"
+            @click="appendSupplementPreset(preset)"
+          >
+            {{ preset }}
+          </button>
+        </div>
+
+        <textarea
+          v-model="supplementText"
+          class="supplement-input"
+          name="doctorSupplement"
+          aria-label="补充病历要点"
+          rows="8"
+          placeholder="例如：今日患者咳嗽较前减轻，无胸闷气促；查体双肺呼吸音稍粗，未闻及明显湿啰音；继续当前抗感染及雾化治疗，复查血常规。"
+        ></textarea>
+
+        <div class="voice-row">
+          <button
+            class="voice-btn"
+            type="button"
+            :class="{ 'is-recording': isRecordingSupplement }"
+            :disabled="isTranscribingSupplement || isGenerating"
+            @click="toggleSupplementRecording"
+          >
+            <Icon
+              :icon="isRecordingSupplement ? 'lucide:square' : 'lucide:mic'"
+              :size="16"
+            />
+            <span>{{ supplementVoiceButtonText }}</span>
+          </button>
+          <button
+            class="clear-supplement-btn"
+            type="button"
+            :disabled="!supplementText.trim() || isRecordingSupplement || isTranscribingSupplement"
+            @click="clearSupplementText"
+          >
+            清空补充
+          </button>
+          <span v-if="supplementVoiceStatus" class="voice-status">
+            {{ supplementVoiceStatus }}
+          </span>
+        </div>
+
+        <div
+          v-if="isRecordingSupplement || isTranscribingSupplement"
+          class="capture-visualizer"
+          :class="{ 'is-transcribing': isTranscribingSupplement }"
+        >
+          <div class="recording-dot"></div>
+          <div class="meter-bars" aria-hidden="true">
+            <span
+              v-for="(level, index) in supplementAudioLevels"
+              :key="index"
+              :style="{ height: `${level}px`, opacity: String(0.36 + (level / 34) * 0.64) }"
+            ></span>
+          </div>
+          <strong>{{ isRecordingSupplement ? formattedSupplementDuration : '识别中' }}</strong>
+        </div>
+
+        <div v-if="supplementError" class="supplement-error">
+          <Icon icon="lucide:triangle-alert" :size="15" />
+          <span>{{ supplementError }}</span>
+        </div>
+
+        <footer class="regenerate-footer">
+          <button
+            class="workspace-button"
+            type="button"
+            :disabled="isRecordingSupplement || isTranscribingSupplement"
+            @click="closeRegenerateDialog"
+          >
+            取消
+          </button>
+          <button
+            class="workspace-button is-primary"
+            type="button"
+            :disabled="isRecordingSupplement || isTranscribingSupplement || isGenerating"
+            @click="confirmRegenerate"
+          >
+            <Icon icon="lucide:sparkles" :size="16" />
+            <span>{{ supplementText.trim() ? '带补充重新生成' : '直接重新生成' }}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      v-if="showCancelConfirm"
+      class="regenerate-overlay cancel-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inpatient-emr-cancel-title"
+    >
+      <section class="cancel-dialog">
+        <div class="cancel-dialog-body">
+          <div class="cancel-icon">
+            <Icon icon="lucide:triangle-alert" :size="20" />
+          </div>
+          <div>
+            <strong id="inpatient-emr-cancel-title">确认放弃本次住院病历生成？</strong>
+            <p>放弃后将清空当前未回写的病历草稿、编辑内容和生成过程，窗口会退回小球状态。</p>
+          </div>
+        </div>
+        <footer class="cancel-dialog-actions">
+          <button class="workspace-button" type="button" @click="closeCancelConfirm">继续编辑</button>
+          <button class="workspace-button danger-btn" type="button" @click="confirmCancel">确认放弃</button>
+        </footer>
+      </section>
+    </div>
+
+    <!-- 门诊病历详情预览模态框 -->
+    <div
+      v-if="showOutpatientPreview"
+      class="outpatient-preview-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="门诊病历预览"
+    >
+      <section class="outpatient-preview-dialog">
+        <header class="preview-head">
+          <span>门诊病历详情预览</span>
+          <button
+            class="workspace-button is-icon"
+            type="button"
+            title="关闭"
+            aria-label="关闭"
+            @click="showOutpatientPreview = false"
+          >
+            <Icon icon="lucide:x" :size="18" />
+          </button>
+        </header>
+        <div class="preview-content">
+          <div v-if="isDetailLoading" class="preview-loading">
+            <Icon icon="lucide:loader-2" :size="24" class="spinning" />
+            <span>正在拉取门诊病历…</span>
+          </div>
+          <div
+            v-else-if="previewVisitRecord"
+            class="preview-html-container"
+            v-html="safePreviewVisitHtml"
+          ></div>
+          <div v-else class="preview-error">
+            <Icon icon="lucide:triangle-alert" :size="20" />
+            <span>拉取门诊病历失败</span>
+          </div>
+        </div>
+        <footer class="preview-footer">
+          <button
+            class="workspace-button"
+            type="button"
+            @click="showOutpatientPreview = false"
+          >
+            关闭预览
+          </button>
+          <button
+            v-if="previewVisitRecord"
+            class="workspace-button is-primary"
+            type="button"
+            :disabled="selectedVisitId === previewVisitRecord.visitId"
+            @click="selectVisitAndClosePreview(previewVisitRecord.visitId)"
+          >
+            <Icon icon="lucide:check" :size="16" />
+            <span>引用此病历为基准</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <InpatientEmrWritebackQualityDialog
+      v-if="showWritebackQualityDialog && pendingQualityIssues.length > 0"
+      :issues="pendingQualityIssues"
+      :is-writing-back="isWritingBack"
+      :writeback-status="writebackStatus"
+      :writeback-message="writebackMessage"
+      @cancel="showWritebackQualityDialog = false"
+      @confirm="confirmWritebackAfterQuality"
+    />
+  </section>
+</template>
+
+
+
 <style scoped>
-.inpatient-emr-page {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background:
-    linear-gradient(180deg, rgba(248, 251, 253, 0.98), rgba(238, 244, 246, 0.98)),
-    #f4f7f8;
-  color: #1d2b32;
-  overflow: hidden;
-}
-
-.emr-header {
-  min-height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 18px;
-  border-bottom: 1px solid rgba(116, 136, 145, 0.22);
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.title-block {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  gap: 9px;
-  min-width: 0;
-}
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  color: #0d8b77;
-  white-space: nowrap;
-}
-
-h1 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.15;
-  letter-spacing: 0;
-}
-
-.header-actions,
-.section-heading,
-.field-prompt-head,
-.no-ai-fields {
-  display: flex;
-  align-items: center;
-}
-
-.header-actions {
-  gap: 8px;
-}
-
-button {
-  border: 0;
-  font: inherit;
-}
-
-.ghost-btn,
-.danger-ghost-btn,
-.primary-btn {
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 11px;
-  border-radius: 7px;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-
-.ghost-btn {
-  background: #ffffff;
-  color: #27515c;
-  border: 1px solid rgba(99, 121, 129, 0.24);
-}
-
-.danger-ghost-btn {
-  color: #9f3428;
-  background: #fff7f5;
-  border: 1px solid rgba(180, 61, 46, 0.24);
-}
-
-.primary-btn {
-  background: #0f8f7b;
-  color: #ffffff;
-  box-shadow: 0 8px 18px rgba(15, 143, 123, 0.22);
-}
-
-.ghost-btn:disabled,
-.danger-ghost-btn:disabled,
-.primary-btn:disabled {
-  opacity: 1 !important;
-  cursor: not-allowed;
-  box-shadow: none !important;
-  transform: none !important;
-}
-
-.ghost-btn:disabled {
-  color: #334650 !important;
-  background: #e8eef0 !important;
-  border-color: rgba(72, 91, 99, 0.28) !important;
-}
-
-.danger-ghost-btn:disabled {
-  color: #5c4a45 !important;
-  background: #ece7e5 !important;
-  border-color: rgba(92, 74, 69, 0.22) !important;
-}
-
-.primary-btn:disabled {
-  color: #2d3f48 !important;
-  background: #d9e2e5 !important;
-  border: 1px solid rgba(72, 91, 99, 0.26) !important;
-}
-
-.ghost-btn:disabled span,
-.ghost-btn:disabled svg,
-.danger-ghost-btn:disabled span,
-.danger-ghost-btn:disabled svg,
-.primary-btn:disabled span,
-.primary-btn:disabled svg {
-  color: currentColor !important;
-  opacity: 1 !important;
-}
-
-.ghost-btn:not(:disabled):hover,
-.danger-ghost-btn:not(:disabled):hover,
-.primary-btn:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.emr-main {
-  min-height: 0;
-  flex: 1;
-  display: grid;
-  grid-template-columns: 330px minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
-}
-
-.left-pane,
-.preview-pane {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.left-pane {
-  overflow: auto;
-}
-
-.preview-pane {
-  overflow: hidden;
-}
-
-.field-panel,
-.html-preview-card,
-.empty-panel {
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(107, 128, 137, 0.18);
-  box-shadow: 0 12px 28px rgba(23, 42, 49, 0.07);
-}
-
-.field-panel,
-.empty-panel {
-  padding: 14px;
-}
-
-.section-heading {
-  gap: 8px;
-  min-height: 24px;
-  font-size: 14px;
-  font-weight: 800;
-  color: #203940;
-}
-
-.section-heading strong {
-  margin-left: auto;
-  color: #0e7d6d;
-}
-
-.field-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.field-prompt-card {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 7px;
-  background: #eef8f4;
-  border-color: rgba(15, 143, 123, 0.22);
-  border: 1px solid rgba(15, 143, 123, 0.22);
-}
-
-.field-prompt-head {
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.field-prompt-head strong {
-  min-width: 0;
-  color: #18343b;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.field-prompt-head span {
-  flex: 0 0 auto;
-  max-width: 132px;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #0f806e;
-  font-size: 11px;
-  font-weight: 800;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.field-prompt-card p {
-  margin: 0;
-  color: #40545b;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.field-prompt-detail {
-  display: grid;
-  gap: 7px;
-}
-
-.field-prompt-detail summary {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #0f806e;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-  user-select: none;
-}
-
-.field-prompt-detail summary::-webkit-details-marker {
-  display: none;
-}
-
-.field-prompt-detail pre {
-  margin: 0;
-  max-height: 132px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #294047;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(15, 143, 123, 0.16);
-  border-radius: 6px;
-  padding: 8px;
-  font-size: 11px;
-  line-height: 1.5;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-.no-ai-fields {
-  gap: 8px;
-  margin-top: 10px;
-  padding: 12px;
-  border-radius: 7px;
-  background: #f3f6f7;
-  color: #66777f;
-  font-size: 12px;
-}
-
-.empty-panel {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  color: #60727a;
-  padding: 34px 18px;
-}
-
-.error-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: #fff3ed;
-  color: #a94d22;
-  border: 1px solid rgba(217, 118, 67, 0.28);
-}
-
-.generating-state {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 10px;
-  color: #31505a;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(107, 128, 137, 0.16);
-  border-radius: 8px;
-}
-
-.generating-state strong {
-  font-size: 18px;
-}
-
-.generating-state span {
-  color: #64767d;
-}
-
-.html-preview-card {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 14px;
-}
-
-.html-preview-card {
-  flex: 1;
-}
-
-.html-preview {
-  min-height: 0;
-  flex: 1;
-  margin-top: 10px;
-  padding: 18px;
-  overflow: auto;
-  border-radius: 7px;
-  border: 1px solid rgba(105, 124, 132, 0.18);
-  background: #ffffff;
-  color: #16272e;
-  line-height: 1.72;
-}
-
-.html-preview :deep(.inpatient-emr-field--ai) {
-  display: inline;
-  min-width: 2em;
-  border-radius: 5px;
-  padding: 1px 4px;
-  background: #fff5d8;
-  color: #142b32;
-  box-shadow: 0 0 0 1px rgba(214, 151, 25, 0.34);
-  cursor: text;
-  outline: none;
-}
-
-.html-preview :deep(.inpatient-emr-field--ai:focus) {
-  background: #fff0bd;
-  box-shadow:
-    0 0 0 1px rgba(214, 151, 25, 0.7),
-    0 0 0 4px rgba(214, 151, 25, 0.13);
-}
-
-.html-preview :deep(.inpatient-emr-field--readonly) {
-  cursor: default;
-}
-
-.html-preview :deep(.tag-marker) {
-  opacity: 0.48;
-}
-
-.writeback-status {
-  margin-left: auto;
-  max-width: 420px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #5f6f76;
-  background: #edf2f3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.writeback-status.is-success {
-  color: #0b7d58;
-  background: #e5f7ee;
-}
-
-.writeback-status.is-error {
-  color: #b64e1d;
-  background: #fff1e9;
-}
-
-.writeback-status.is-pending {
-  color: #1265a8;
-  background: #e8f4ff;
-}
+.inpatient-emr-page { position: relative; font-size: 14px; }
+.footer-actions { justify-content: flex-end; }
+.inpatient-emr-page button { font: inherit; }
+.inpatient-emr-page button:focus-visible,
+.inpatient-emr-page summary:focus-visible { outline: 2px solid var(--workspace-primary); outline-offset: 3px; }
+.emr-main { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; gap: 14px; padding: 16px 20px; overflow: auto; overscroll-behavior: contain; }
+.generation-summary { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.generation-summary[data-tone='working'] { border-color: #bfdbfe; background: #eff6ff; }
+.generation-summary[data-tone='ready'] { border-color: #bbf7d0; background: #f0fdf4; }
+.generation-summary[data-tone='waiting'] { border-color: #fde68a; background: #fffbeb; }
+.generation-summary[data-tone='error'] { border-color: #fecaca; background: #fff7f7; }
+.summary-icon { display: grid; place-items: center; flex: 0 0 34px; height: 34px; border-radius: 9px; color: #2563eb; background: #dbeafe; }
+.generation-summary[data-tone='ready'] .summary-icon { color: #15803d; background: #dcfce7; }
+.generation-summary[data-tone='waiting'] .summary-icon { color: #b45309; background: #fef3c7; }
+.generation-summary[data-tone='error'] .summary-icon { color: #b91c1c; background: #fee2e2; }
+.summary-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.summary-copy strong { font-size: 14px; }
+.summary-copy > span { color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.step-count, .field-count { flex-shrink: 0; color: #64748b; font-size: 12px; line-height: 1.6; }
+.generation-details { border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; }
+.generation-details > summary { display: flex; align-items: center; gap: 8px; padding: 11px 14px; cursor: pointer; color: #475569; font-size: 13px; list-style: none; }
+.generation-details > summary::after { content: '展开'; margin-left: auto; color: #2563eb; font-size: 12px; }
+.generation-details[open] > summary::after { content: '收起'; }
+.details-hint { color: #94a3b8; font-size: 12px; }
+.generation-details :deep(.process-panel) { margin: 0 12px 12px; box-shadow: none; }
+.field-panel { margin: 0 14px 14px; color: #475569; font-size: 13px; }
+.field-panel summary { cursor: pointer; }
+.field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin-top: 12px; }
+.field-prompt-card { min-width: 0; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.field-prompt-card p { margin: 6px 0; font-size: 12px; line-height: 1.6; }
+.field-prompt-detail { color: #64748b; font-size: 12px; }
+.field-prompt-detail code { display: block; margin-top: 8px; overflow-wrap: anywhere; }
+.field-prompt-detail pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.no-ai-fields { color: #64748b; }
+.empty-panel, .generating-state { display: grid; flex: 1; min-height: 260px; gap: 10px; place-content: center; justify-items: center; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px; color: #64748b; background: #fff; text-align: center; }
+.generating-state strong { font-size: 16px; color: #334155; }
+.empty-panel span, .generating-state span { font-size: 13px; }
+.error-banner { display: flex; gap: 8px; align-items: flex-start; padding: 12px 14px; border: 1px solid #fecaca; border-radius: 8px; color: #b91c1c; background: #fef2f2; font-size: 13px; overflow-wrap: anywhere; }
+.writeback-status { max-width: 360px; color: #64748b; font-size: 12px; line-height: 1.6; text-align: right; overflow-wrap: anywhere; }
+.writeback-status.is-pending { color: #1d4ed8; }
+.writeback-status.is-success { color: #15803d; }
+.writeback-status.is-error { color: #b91c1c; }
 
 .regenerate-overlay {
   position: absolute;
@@ -1347,11 +961,15 @@ button {
 }
 
 .regenerate-dialog {
+  box-sizing: border-box;
   width: min(640px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: 14px;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(101, 125, 134, 0.22);
   box-shadow: 0 26px 70px rgba(12, 28, 34, 0.22);
@@ -1362,7 +980,10 @@ button {
 }
 
 .cancel-dialog {
+  box-sizing: border-box;
   width: min(420px, 100%);
+  max-height: 100%;
+  overflow: auto;
   display: grid;
   gap: 18px;
   border-radius: 8px;
@@ -1391,14 +1012,14 @@ button {
 
 .cancel-dialog-body strong {
   display: block;
-  color: #1c3138;
+  color: #172033;
   font-size: 16px;
   line-height: 1.4;
 }
 
 .cancel-dialog-body p {
   margin: 6px 0 0;
-  color: #52666e;
+  color: #64748b;
   font-size: 13px;
   line-height: 1.6;
 }
@@ -1409,23 +1030,8 @@ button {
   gap: 8px;
 }
 
-.danger-btn {
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 12px;
-  border-radius: 7px;
-  color: #ffffff;
-  background: #b43d2e;
-  cursor: pointer;
-  transition: transform 0.15s ease, background 0.15s ease;
-}
-
-.danger-btn:hover {
-  transform: translateY(-1px);
-  background: #9f3428;
-}
+.workspace-button.danger-btn { color: #fff; background: #b91c1c; border-color: #b91c1c; }
+.workspace-button.danger-btn:hover { background: #991b1b; border-color: #991b1b; }
 
 .regenerate-head,
 .voice-row,
@@ -1447,29 +1053,14 @@ button {
 }
 
 .regenerate-head span {
-  color: #0d8b77;
+  color: #2563eb;
   font-size: 12px;
   font-weight: 800;
 }
 
 .regenerate-head strong {
-  color: #1c3138;
+  color: #172033;
   font-size: 18px;
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  color: #52666e;
-  background: #f2f6f7;
-  cursor: pointer;
-}
-
-.icon-btn:hover {
-  background: #e8eef0;
 }
 
 .supplement-presets {
@@ -1482,16 +1073,16 @@ button {
   height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  color: #176f62;
-  background: #edf8f5;
-  border: 1px solid rgba(15, 143, 123, 0.18);
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid rgba(37, 99, 235, 0.18);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
 }
 
 .supplement-presets button:hover {
-  background: #e0f3ee;
+  background: #dbeafe;
 }
 
 .supplement-input {
@@ -1502,15 +1093,14 @@ button {
   border-radius: 8px;
   border: 1px solid rgba(102, 124, 133, 0.28);
   background: #fbfcfc;
-  color: #1d2b32;
+  color: #172033;
   font: inherit;
   line-height: 1.6;
-  outline: none;
 }
 
 .supplement-input:focus {
-  border-color: rgba(15, 143, 123, 0.62);
-  box-shadow: 0 0 0 4px rgba(15, 143, 123, 0.11);
+  border-color: rgba(37, 99, 235, 0.62);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.11);
 }
 
 .voice-row {
@@ -1527,7 +1117,7 @@ button {
   gap: 6px;
   padding: 0 11px;
   border-radius: 7px;
-  color: #27515c;
+  color: #334155;
   background: #ffffff;
   border: 1px solid rgba(99, 121, 129, 0.24);
   cursor: pointer;
@@ -1548,7 +1138,7 @@ button {
 }
 
 .clear-supplement-btn {
-  color: #52666e;
+  color: #64748b;
   background: #f5f8f9;
 }
 
@@ -1572,8 +1162,8 @@ button {
   min-height: 42px;
   padding: 9px 11px;
   border-radius: 8px;
-  background: #f3fbf8;
-  border: 1px solid rgba(15, 143, 123, 0.16);
+  background: #eff6ff;
+  border: 1px solid rgba(37, 99, 235, 0.16);
 }
 
 .recording-dot {
@@ -1603,7 +1193,7 @@ button {
   width: 4px;
   min-width: 4px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #16a084, #57c7b1);
+  background: linear-gradient(180deg, #2563eb, #93c5fd);
   transition: height 0.08s ease, opacity 0.08s ease;
 }
 
@@ -1622,7 +1212,7 @@ button {
 }
 
 .capture-visualizer strong {
-  color: #24454d;
+  color: #334155;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -1646,37 +1236,13 @@ button {
   animation: spin 1s linear infinite;
 }
 
-.pulse-icon {
-  color: #0f8f7b;
-  animation: pulse 1.7s ease-in-out infinite;
-}
-
-.html-preview.is-generating :deep(.inpatient-emr-field--ai) {
-  pointer-events: none;
-  user-select: none;
-  opacity: 0.88;
-  background: #fff8e5;
-  animation: pulseBg 1.5s infinite ease-in-out;
-}
-
-.html-preview :deep(.inpatient-emr-field--generating) {
-  cursor: wait !important;
-  border-bottom: 1px dashed rgba(214, 151, 25, 0.6);
-}
-
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 0.76; }
-  50% { transform: scale(1.08); opacity: 1; }
-}
 
-@keyframes pulseBg {
-  0%, 100% { background-color: #fff8e5; }
-  50% { background-color: #ffeebf; }
-}
+
+
 
 @keyframes recordPulse {
   0%, 100% {
@@ -1698,8 +1264,8 @@ button {
 .outpatient-reference-section {
   margin-bottom: 16px;
   padding: 14px;
-  background: rgba(240, 246, 246, 0.6);
-  border: 1px dashed rgba(15, 143, 123, 0.3);
+  background: #f8fafc;
+  border: 1px dashed rgba(37, 99, 235, 0.3);
   border-radius: 8px;
 }
 
@@ -1710,7 +1276,7 @@ button {
   margin-bottom: 12px;
   font-size: 13px;
   font-weight: 700;
-  color: #173b35;
+  color: #172033;
 }
 
 .loading-visits-text {
@@ -1719,7 +1285,7 @@ button {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: #0f8f7b;
+  color: #2563eb;
   font-weight: normal;
 }
 
@@ -1745,15 +1311,15 @@ button {
 }
 
 .range-option-btn:hover:not(:disabled) {
-  border-color: rgba(15, 143, 123, 0.44);
-  color: #0f7c6d;
-  background: #f3fbf8;
+  border-color: rgba(37, 99, 235, 0.44);
+  color: #1d4ed8;
+  background: #eff6ff;
 }
 
 .range-option-btn.is-active {
   color: #ffffff;
-  border-color: #0f8f7b;
-  background: #0f8f7b;
+  border-color: #2563eb;
+  background: #2563eb;
 }
 
 .range-option-btn:disabled {
@@ -1784,23 +1350,27 @@ button {
   border-radius: 7px;
   overflow: hidden;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
 }
 
 .visit-ref-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(15, 143, 123, 0.5);
-  box-shadow: 0 6px 14px rgba(15, 143, 123, 0.08);
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.08);
 }
 
 .visit-ref-card.is-selected {
-  border-color: #0f8f7b;
-  background: linear-gradient(145deg, #f0fdf9, #e6fcf5);
-  box-shadow: 0 8px 20px rgba(15, 143, 123, 0.12);
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
 }
 
 .visit-card-main {
+  border: 0;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
   flex: 1;
   padding: 10px 12px;
   display: flex;
@@ -1818,8 +1388,8 @@ button {
 .dept-badge {
   padding: 2px 6px;
   border-radius: 4px;
-  background: #e6f4f1;
-  color: #0d8b77;
+  background: #dbeafe;
+  color: #2563eb;
   font-size: 11px;
   font-weight: 700;
 }
@@ -1851,7 +1421,7 @@ button {
 }
 
 .visit-ref-card.is-selected .visit-card-actions {
-  background: rgba(15, 143, 123, 0.03);
+  background: rgba(37, 99, 235, 0.03);
 }
 
 .action-btn {
@@ -1886,15 +1456,15 @@ button {
 }
 
 .select-btn {
-  color: #0f8f7b;
+  color: #2563eb;
 }
 
 .select-btn:hover {
-  background: rgba(15, 143, 123, 0.06);
+  background: rgba(37, 99, 235, 0.06);
 }
 
 .select-btn.is-active {
-  background: #0f8f7b;
+  background: #2563eb;
   color: #ffffff;
   font-weight: bold;
 }
@@ -1923,9 +1493,10 @@ button {
 }
 
 .outpatient-preview-dialog {
-  width: min(920px, calc(100vw - 48px));
+  box-sizing: border-box;
+  width: min(920px, 100%);
   max-width: 920px;
-  max-height: 85vh;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   background: #ffffff;
@@ -1953,6 +1524,8 @@ button {
 
 .preview-content {
   flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 20px;
@@ -2033,4 +1606,20 @@ button {
 <style scoped>
 .inpatient-log-notice { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: #fff4dc; color: #725513; font-size: 12px; }
 .inpatient-log-notice button { flex-shrink: 0; padding: 4px 10px; border: 1px solid currentColor; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning, .recording-dot, .capture-visualizer .meter-bars span, .outpatient-preview-overlay, .outpatient-preview-dialog { animation: none; }
+  .visit-ref-card, .meter-bars span { transition: none; }
+}
+@container workspace-page (max-width: 720px) {
+  .emr-main { padding: 12px 14px; }
+  .footer-actions { flex: 1; }
+  .footer-actions .writeback-status { flex-basis: 100%; max-width: none; }
+  .generation-summary { flex-wrap: wrap; }
+  .step-count, .field-count { margin-left: 46px; }
+  .history-range-row, .section-title-row { flex-wrap: wrap; }
+  .history-range-row .range-text { width: 100%; margin-left: 0; white-space: normal; }
+  .visits-card-list { grid-template-columns: 1fr; }
+  .regenerate-overlay, .outpatient-preview-overlay { padding: 14px; }
+}
 </style>

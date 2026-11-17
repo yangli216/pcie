@@ -285,7 +285,6 @@ function normalizeTemplateField(
     ...local,
     meaning: typeof field.meaning === 'string' && field.meaning.trim() ? field.meaning : local.meaning,
     aiSuitable,
-    presetStatus: aiSuitable ? 'ai' : 'exclude',
     rule: {
       ...rule,
       source,
@@ -369,7 +368,9 @@ async function enrichUnknownFieldsWithLocalLLM(
   request: InpatientEmrGenerationRequest,
   registration?: HisInpatientRegistrationInfo | null,
 ): Promise<void> {
-  const unknownFields = template.fields.filter((field) => field.presetStatus === 'unknown');
+  const unknownFieldIds = new Set(template.unknownFieldIds || []);
+  delete template.unknownFieldIds;
+  const unknownFields = template.fields.filter((field) => unknownFieldIds.has(field.id));
   if (unknownFields.length === 0) return;
 
   console.log(`[InpatientEmr] 发现 ${unknownFields.length} 个未匹配预设字段，正在调用 LLM 进行智能特征分析...`);
@@ -381,13 +382,12 @@ async function enrichUnknownFieldsWithLocalLLM(
   const classifiedMap = new Map(classified.map((item) => [item.id, item]));
 
   template.fields = template.fields.map((field) => {
-    if (field.presetStatus === 'unknown' && classifiedMap.has(field.id)) {
+    if (unknownFieldIds.has(field.id) && classifiedMap.has(field.id)) {
       const aiInfo = classifiedMap.get(field.id)!;
       const aiSuitable = aiInfo.aiSuitable;
       return {
         ...field,
         aiSuitable,
-        presetStatus: aiSuitable ? 'ai' as const : 'exclude' as const,
         meaning: aiInfo.meaning || field.meaning,
         rule: {
           source: aiInfo.source,

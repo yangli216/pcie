@@ -58,55 +58,12 @@ function getTemplateArticle(node: Element): string {
   return '';
 }
 
-function inferFieldMeaning(id: string, name: string, defaultValue?: string): string {
-  const text = `${id} ${name} ${defaultValue || ''}`;
-  if (text.includes('医疗机构')) return '病历页眉中的医疗机构名称，通常由机构配置或 HIS 上下文带入';
-  if (text.includes('病历标题')) return '病历文书标题，通常跟随模板类型';
-  if (text.includes('姓名') && !text.includes('医师')) return '患者姓名，来自住院登记信息';
-  if (text.includes('科室')) return '患者当前住院科室或病区，来自住院登记信息';
-  if (text.includes('床')) return '患者住院床号，来自住院登记信息';
-  if (text.includes('住院号')) return '患者住院号，来自住院登记信息';
-  if (text.includes('操作时间') || text.includes('业务时间')) return '本次病程记录的记录时间，默认使用当前业务时间';
-  if (text.includes('操作人员') || text.includes('查房医师')) return '查房或书写医生姓名，来自登录医生或住院登记医生信息';
-  if (text.includes('操作名称') || text.includes('病程记录名称')) return '病程记录类型名称，通常跟随模板文书类型';
-  const narrativeKind = diagnosticNarrativeKind(id, name);
-  if (narrativeKind === 'basis') return '诊断依据正文，根据已提供的病史、症状、查体及检验检查资料说明诊断的支持证据，不编造缺失事实';
-  if (narrativeKind === 'differential') return '鉴别诊断正文，根据已提供的临床资料说明需鉴别方向及支持或反对依据，区分已有事实与待确认信息，不把待排方向写成确诊';
-  if (id === '病程记录文本' || text.includes('记录文本')) return '病程记录正文，适合结合住院登记、诊断、医嘱和体温单生成';
-  if (id.includes('查房') || text.includes('查房')) return '查房记录正文，适合结合住院登记、诊断、医嘱和体温单生成';
-  if (text.includes('医师签名')) return '医师签名字段，应由医生确认或电子签名流程完成';
-  return '模板字段，需结合模板上下文和 HIS 字段映射确认含义';
+interface InitialFieldSuggestion {
+  aiSuitable: boolean | null;
+  source: InpatientEmrFieldRule['source'];
+  meaning: string;
+  fixedValue?: string;
 }
-
-export interface InpatientEmrMatcherConfig {
-  excludeKeywords: string[];
-  aiSuitableKeywords: string[];
-}
-
-export const defaultMatcherConfig: InpatientEmrMatcherConfig = {
-  excludeKeywords: [
-    '页眉', '姓名', '科室', '床', '住院号', '日期', '时间', '天数',
-    '签名', '操作人员', '操作名称', '诊断', 'idadsn', 'patientid', 'inpatientno',
-    '出生地', '籍贯', '职业', '民族', '婚姻', '陈述', '供史', '可靠', '住址', '地址',
-    '身份证', '联系人', '电话', '手机', '入院', '业务', '工作',
-    'csd', 'jg', 'zy', 'mz', 'hy', 'csz', 'gsz', 'kg', 'zz', 'dz', 'sfz', 'lxr', 'dh', 'sj', 'ry', 'yw', 'gz'
-  ],
-  aiSuitableKeywords: [
-    // 中文标准字段名称
-    '病程记录文本', '记录正文', '入院情况', '诊疗经过', '出院情况',
-    '治疗结果', '出院医嘱', '病情分析', '诊疗计划', '处理意见', '病程记录', '病程正文',
-    '查房记录', '查房正文', '查房',
-    '主诉', '现病史', '既往史',
-    // 拼音缩写
-    'bcjl', 'bczw', 'ryqk', 'zlgj', 'cyqk', 'zljg', 'cyyz', 'bqfx', 'zljh', 'clyj',
-    'zs', 'xbs', 'jws', 'cf', 'cfjl',
-    // 常见英文/混合命名前缀后缀
-    'progress_note', 'course_record', 'chief_complaint', 'present_illness', 'past_history'
-  ]
-};
-
-let currentMatcherConfig = { ...defaultMatcherConfig };
-const documentTypeExcludeKeywords = new Set(['入院', 'ry']);
 
 function diagnosticNarrativeKind(id: string, name: string): 'basis' | 'differential' | null {
   const text = `${id} ${name}`.toLowerCase();
@@ -115,44 +72,45 @@ function diagnosticNarrativeKind(id: string, name: string): 'basis' | 'different
   return null;
 }
 
-export function getInpatientEmrMatcherConfig(): InpatientEmrMatcherConfig {
-  return currentMatcherConfig;
-}
+/** A local suggestion only. Persisted administrator policy wins after resolve. */
+function suggestInitialField(id: string, name: string): InitialFieldSuggestion {
+  const labels = [name, id].map((label) => normalizeText(label)
+    .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+    .replace(/(?:文本|字段|正文)$/u, '').replace(/[：:]$/u, ''));
+  const matches = (pattern: RegExp) => labels.some((label) => pattern.test(label));
+  const system = (meaning: string): InitialFieldSuggestion => ({ aiSuitable: false, source: 'his_or_system', meaning });
+  const narrative = (meaning: string): InitialFieldSuggestion => ({ aiSuitable: true, source: 'ai', meaning });
 
-export function setInpatientEmrMatcherConfig(config: Partial<InpatientEmrMatcherConfig>): void {
-  currentMatcherConfig = {
-    excludeKeywords: config.excludeKeywords ? [...config.excludeKeywords] : currentMatcherConfig.excludeKeywords,
-    aiSuitableKeywords: config.aiSuitableKeywords ? [...config.aiSuitableKeywords] : currentMatcherConfig.aiSuitableKeywords,
-  };
-}
-
-export function getPresetFieldStatus(id: string, name: string): 'exclude' | 'ai' | 'unknown' {
-  const text = `${id} ${name}`.toLowerCase();
-  const config = getInpatientEmrMatcherConfig();
-  const narrativeKind = diagnosticNarrativeKind(id, name);
-
-  if (config.excludeKeywords.some((keyword) => {
-    const normalizedKeyword = keyword.toLowerCase();
-    return !documentTypeExcludeKeywords.has(normalizedKeyword)
-      && !(normalizedKeyword === '诊断' && narrativeKind)
-      && text.includes(normalizedKeyword);
-  })) {
-    return 'exclude';
+  if (id === '病程记录操作名称文本') {
+    return { aiSuitable: false, source: 'fixed', meaning: '病程记录类型名称，通常跟随模板文书类型', fixedValue: '日常病程记录' };
+  }
+  if (matches(/(?:医师|医生)签(?:名|字)$/u)) {
+    return { aiSuitable: false, source: 'doctor_signature', meaning: '医师签名字段，应由医生确认或电子签名流程完成' };
+  }
+  if (matches(/^(?:页眉|页脚)/u)) return system('病历页眉或页脚信息，保留模板或 HIS 提供的原值');
+  if (matches(/(?:编码|代码|标识|编号|序号|日期|时间|天数|姓名|性别|年龄|床号|住院号|科室|医师|医生|名称|标题|操作人员|(?:签署|录入|填报|填写|审核|记录|操作|书写|创建|修改)(?:人|者)|签名|签字|手签)$/u)) return system('系统身份、标识、编码、时间或署名字段，按 HIS/系统事实填充');
+  if (matches(/(?:^|[_ -])(?:id|code|date|time|timestamp|name|title|signature|operator|author|at)$/iu)) return system('系统身份、编码、时间或署名属性，按 HIS/系统事实填充');
+  if (matches(/^(?:患者|病人)?(?:姓名|性别|年龄|年龄文字|出生地|籍贯|职业|民族|婚姻|婚姻状况|住址|地址|身份证号?|证件号码|联系人|联系电话|手机号(?:码)?|电话(?:号码)?|住院号|床号|床位号|病区|科室|供史者|陈述者|可靠程度|病史可靠程度)$/u)) {
+    return system('患者身份、住院登记或供史信息，来自 HIS 登记事实');
+  }
+  if (matches(/^(?:(?:查房|住院|上级|主治|主管|经治|记录|书写|审核)?(?:医师|医生)|操作人员|操作人|记录人|书写人|审核人)(?:姓名)?$/u)) {
+    return system('书写或查房医生信息，来自当前登录医生或 HIS 登记事实');
+  }
+  if (matches(/^(?:医疗机构(?:名称)?|病历标题|病程记录操作名称|病程记录名称)$/u)) return system('模板或系统提供的机构及文书信息');
+  if (matches(/^(?:(?:入院|出院|初步|主要|次要|门诊|术前|术后))?诊断(?:名称|列表|ICD(?:-?10)?)?$/iu)) return system('结构化诊断字段，来自 HIS 已有诊断');
+  if (matches(/^(?:patient[_-]?id|id[_-]?pi|idadsn|admission[_-]?id|inpatient[_-]?no|hospital[_-]?no|gender|sex|age|doctor[_-]?name|department)$/iu)) {
+    return system('系统身份或登记属性，来自 HIS/系统事实');
   }
 
-  if (narrativeKind || config.aiSuitableKeywords.some((keyword) => text.includes(keyword.toLowerCase()))) {
-    return 'ai';
+  const diagnosticKind = diagnosticNarrativeKind(id, name);
+  if (diagnosticKind === 'basis') return narrative('诊断依据正文，根据已提供的病史、症状、查体及检验检查资料说明诊断的支持证据，不编造缺失事实');
+  if (diagnosticKind === 'differential') return narrative('鉴别诊断正文，根据已提供的临床资料说明需鉴别方向及支持或反对依据，区分已有事实与待确认信息，不把待排方向写成确诊');
+  if (matches(/(?:主诉|现病史|既往史|临床表现|入院情况|入院原因|诊疗经过|治疗经过|出院情况|治疗结果|出院医嘱|病情分析|诊疗计划|处理意见|病程记录|病程正文|记录正文|查房记录|查房正文)/u)
+    || matches(/^(?:progress[_ -]?note|course[_ -]?record|chief[_ -]?complaint|present[_ -]?illness|past[_ -]?history)$/iu)
+    || matches(/查房(?:医师|医生)意见/u)) {
+    return narrative('住院病历临床正文，仅依据已提供临床资料按字段含义组织，不跨字段混写');
   }
-
-  if (config.excludeKeywords.some((keyword) => text.includes(keyword.toLowerCase()))) {
-    return 'exclude';
-  }
-
-  return 'unknown';
-}
-
-export function isAiSuitableField(id: string, name: string): boolean {
-  return getPresetFieldStatus(id, name) === 'ai';
+  return { aiSuitable: null, source: 'manual_or_his', meaning: '模板字段，需结合模板上下文和 HIS 字段映射确认含义' };
 }
 
 /** Whole-field entry hints are not generated clinical content. */
@@ -165,12 +123,9 @@ export function isInpatientEmrPlaceholderValue(value: string): boolean {
     || /^(?:待填写|待补充)[。.…]*$/u.test(text);
 }
 
-function buildFieldRule(field: Pick<InpatientEmrTemplateField, 'id' | 'name'>): InpatientEmrFieldRule {
-  const idLower = field.id.toLowerCase();
-  const nameLower = (field.name || '').toLowerCase();
-  const isAi = isAiSuitableField(field.id, field.name);
-  if (isAi) {
-    const isDischarge = idLower.includes('出院') || idLower.includes('cy') || nameLower.includes('出院') || nameLower.includes('cy');
+function buildFieldRule(field: Pick<InpatientEmrTemplateField, 'id' | 'name'>, suggestion: InitialFieldSuggestion): InpatientEmrFieldRule {
+  if (suggestion.aiSuitable === true) {
+    const isDischarge = /出院/u.test(`${field.id} ${field.name}`) || /^discharge[_ -]/iu.test(field.id);
     return {
       source: 'ai',
       dependencies: ['registration', 'registration.diagnoses', 'orders', 'temperatureChart'],
@@ -183,36 +138,16 @@ function buildFieldRule(field: Pick<InpatientEmrTemplateField, 'id' | 'name'>): 
       ],
     };
   }
-
-  if (field.id.startsWith('页眉') || field.id === '病程记录操作时间' || field.id === '病程记录操作人员') {
-    return {
-      source: 'his_or_system',
-      dependencies: ['registration', 'currentDoctor', 'currentTime'],
-      constraints: ['按 HIS/系统事实填充，不由 AI 自由改写'],
-    };
+  if (suggestion.source === 'fixed') {
+    return { source: 'fixed', value: suggestion.fixedValue, constraints: ['跟随模板文书类型或医生选择项'] };
   }
-
-  if (field.id === '病程记录操作名称文本') {
-    return {
-      source: 'fixed',
-      value: '日常病程记录',
-      constraints: ['跟随模板文书类型或医生选择项'],
-    };
+  if (suggestion.source === 'doctor_signature') {
+    return { source: 'doctor_signature', dependencies: ['currentDoctor', 'signatureWorkflow'], constraints: ['AI 不生成签名，由医生确认或电子签名系统写入'] };
   }
-
-  if (field.id === '医师签名') {
-    return {
-      source: 'doctor_signature',
-      dependencies: ['currentDoctor', 'signatureWorkflow'],
-      constraints: ['AI 不生成签名，由医生确认或电子签名系统写入'],
-    };
+  if (suggestion.source === 'his_or_system') {
+    return { source: 'his_or_system', dependencies: ['registration', 'currentDoctor', 'currentTime'], constraints: ['按 HIS/系统事实填充，不由 AI 自由改写'] };
   }
-
-  return {
-    source: 'manual_or_his',
-    dependencies: ['registration'],
-    constraints: ['未知字段先保守映射，必要时由医生确认'],
-  };
+  return { source: 'manual_or_his', dependencies: ['registration'], constraints: ['未知字段先保守映射，必要时由医生确认'] };
 }
 
 export function isAdmissionTemplate(templateName: string): boolean {
@@ -225,12 +160,16 @@ export function parseInpatientEmrTemplate(htmlContent: string): InpatientEmrTemp
   const cacheKey = hashText(safeHtml);
   const doc = new DOMParser().parseFromString(safeHtml, 'text/html');
   const seen = new Set<string>();
+  const unknownFieldIds = new Set<string>();
   const fields = Array.from(doc.querySelectorAll('[data-id][data-type]'))
-    .map((node): InpatientEmrTemplateField => {
+    .flatMap((node): InpatientEmrTemplateField[] => {
       const id = node.getAttribute('data-id') || '';
+      if (!id || seen.has(id)) return [];
+      seen.add(id);
       const name = node.getAttribute('data-name') || node.getAttribute('title') || id;
       const defaultValue = node.getAttribute('data-default') || normalizeText(node.textContent);
-      const presetStatus = getPresetFieldStatus(id, name);
+      const suggestion = suggestInitialField(id, name);
+      if (suggestion.aiSuitable === null) unknownFieldIds.add(id);
       const base = {
         id,
         name,
@@ -239,22 +178,16 @@ export function parseInpatientEmrTemplate(htmlContent: string): InpatientEmrTemp
         readonly: node.getAttribute('data-readonly') === 'true',
         key: node.getAttribute('data-key') === 'true',
         defaultValue,
-        meaning: inferFieldMeaning(id, name, defaultValue),
-        aiSuitable: presetStatus === 'ai',
-        presetStatus,
+        meaning: suggestion.meaning,
+        aiSuitable: suggestion.aiSuitable === true,
       };
-      return {
+      return [{
         ...base,
-        rule: buildFieldRule(base),
-      };
-    })
-    .filter((field) => {
-      if (!field.id || seen.has(field.id)) return false;
-      seen.add(field.id);
-      return true;
+        rule: buildFieldRule(base, suggestion),
+      }];
     });
 
-  return { cacheKey, cacheHit: false, fields };
+  return { cacheKey, cacheHit: false, fields, unknownFieldIds: fields.filter((field) => unknownFieldIds.has(field.id)).map((field) => field.id) };
 }
 
 export function formatInpatientEmrDateMinute(value: Date = new Date()): string {

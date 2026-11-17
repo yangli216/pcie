@@ -91,6 +91,13 @@ function previewField(id: string): HTMLElement {
   return root!.querySelector<HTMLElement>(`.html-preview [data-inpatient-emr-field-id="${id}"]`)!;
 }
 
+async function switchPreview(label: '病历阅读' | '原始模板') {
+  const button = Array.from(root!.querySelectorAll<HTMLButtonElement>('.view-switch button'))
+    .find((item) => item.textContent === label)!;
+  button.click();
+  await nextTick();
+}
+
 function writebackButton(): HTMLButtonElement {
   return root!.querySelector<HTMLButtonElement>('button[title="一键回写"]')!;
 }
@@ -141,7 +148,9 @@ it('keeps failed partial drafts editable and preserves the existing doctor write
   expect(root!.querySelector('.process-item.is-error')?.textContent).toContain('AI 生成');
   expect(previewField('病程记录文本').textContent).toBe('已有合成病程草稿');
   expect(previewField('病程记录文本').getAttribute('contenteditable')).toBe('true');
+  await switchPreview('原始模板');
   expect(previewField('住院号').getAttribute('contenteditable')).toBe('false');
+  await switchPreview('病历阅读');
   expect(writebackButton().disabled).toBe(false);
   expect(boundary.sessions[0].record.mock.calls.some(([type]) => type === 'generation_failed')).toBe(true);
   expect(boundary.sessions[0].record.mock.calls.some(([type]) => type === 'generated' || type === 'fallback')).toBe(false);
@@ -226,4 +235,55 @@ it('does not let an old admission request completion open a supplement dialog fo
   expect(root!.querySelector('[aria-label="补充病历要点"]')).toBeNull();
   expect(previewField('病程记录文本').textContent).toBe('新患者合成病程');
   expect(boundary.stream).toHaveBeenCalledTimes(1);
+});
+
+it('keeps one doctor draft across reading and template views and preserves it through HIS retry', async () => {
+  boundary.stream.mockImplementation(async (_messages, onChunk) => {
+    onChunk('{"病程记录文本":"合成病程原稿","病情分析":"合成分析原稿"}');
+  });
+  mountPage();
+  await vi.waitFor(() => expect(writebackButton()?.disabled).toBe(false));
+  expect(root!.querySelector('.generation-details')?.hasAttribute('open')).toBe(false);
+  expect(root!.querySelector('.html-preview.is-reading')).not.toBeNull();
+  const field = previewField('病程记录文本');
+  field.textContent = '医生修改的第一段\n医生修改的第二段';
+  field.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  await nextTick();
+  expect(previewField('病程记录文本')).toBe(field);
+  expect(root!.querySelector('[data-field-badge="病程记录文本"]')?.textContent).toBe('已编辑');
+  await switchPreview('原始模板');
+  expect(previewField('病程记录文本').textContent).toBe('医生修改的第一段\n医生修改的第二段');
+  expect(previewField('住院号').getAttribute('contenteditable')).toBe('false');
+  const analysis = previewField('病情分析');
+  analysis.textContent = '医生在原模板中修改的分析';
+  analysis.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  await nextTick();
+  await switchPreview('病历阅读');
+  expect(previewField('病情分析').textContent).toBe('医生在原模板中修改的分析');
+
+  writebackButton().click();
+  await vi.waitFor(() => expect(completeCalls()).toHaveLength(1));
+  await vi.waitFor(() => expect(writebackButton().textContent).toContain('等待 HIS 回执'));
+  expect(root!.querySelector('.generation-summary')?.textContent).toContain('当前病历为只读');
+  const first = completeCalls()[0][1].result;
+  expect(first.fieldValues).toEqual({
+    病程记录文本: '医生修改的第一段\n医生修改的第二段', 病情分析: '医生在原模板中修改的分析',
+  });
+  const collapse = root!.querySelector<HTMLButtonElement>('button[title="收起，保留当前病历"]')!;
+  expect(collapse.disabled).toBe(false);
+  feedback({ consultationId: first.consultationId, requestId: first.requestId, status: 'failed', message: '合成回填失败' });
+  await nextTick();
+  expect(writebackButton().textContent).toContain('重新回写');
+  expect(previewField('病情分析').getAttribute('contenteditable')).toBe('true');
+  expect(previewField('病程记录文本').textContent).toBe('医生修改的第一段\n医生修改的第二段');
+  writebackButton().click();
+  await vi.waitFor(() => expect(completeCalls()).toHaveLength(2));
+  const second = completeCalls()[1][1].result;
+  expect(second.requestId).not.toBe(first.requestId);
+  expect(second.fieldValues).toEqual(first.fieldValues);
+  feedback({ consultationId: second.consultationId, requestId: second.requestId, status: 'success' });
+  await nextTick();
+  expect(writebackButton().textContent).toContain('回写已完成');
+  expect(writebackButton().disabled).toBe(true);
+  expect(previewField('病情分析').getAttribute('contenteditable')).toBe('false');
 });

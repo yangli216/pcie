@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
 import VoiceConsultationNew from '@/components/VoiceConsultationNew.vue';
 import type { AppPatient } from '@/types/appState';
 import type { ClinicalResultChannel, ClinicalResultInput } from '@features/clinical-result';
@@ -13,7 +14,7 @@ const props = withDefaults(defineProps<{
   showPatientHeader?: boolean;
   secondaryFooterActionText?: string;
   secondaryFooterActionDisabled?: boolean;
-  deferredWritebackRequestId?: string;
+  voiceOutpatientEmrContext?: VoiceOutpatientEmrStartContext | null;
 }>(), {
   intentSource: null,
   channel: 'voice',
@@ -22,14 +23,13 @@ const props = withDefaults(defineProps<{
   showPatientHeader: true,
   secondaryFooterActionText: '',
   secondaryFooterActionDisabled: false,
-  deferredWritebackRequestId: '',
+  voiceOutpatientEmrContext: null,
 });
 
 const emit = defineEmits<{
   close: [];
   cancel: [];
   'secondary-footer-action': [];
-  'writeback-prepared': [payload: Record<string, unknown>];
 }>();
 </script>
 
@@ -44,11 +44,10 @@ const emit = defineEmits<{
     :show-patient-header="props.showPatientHeader"
     :secondary-footer-action-text="props.secondaryFooterActionText"
     :secondary-footer-action-disabled="props.secondaryFooterActionDisabled"
-    :deferred-writeback-request-id="props.deferredWritebackRequestId"
+    :voice-outpatient-emr-context="props.voiceOutpatientEmrContext"
     @close="emit('close')"
     @cancel="emit('cancel')"
     @secondary-footer-action="emit('secondary-footer-action')"
-    @writeback-prepared="emit('writeback-prepared', $event)"
   >
     <template #diagnosis-actions="slotProps">
       <slot name="diagnosis-actions" v-bind="slotProps" />

@@ -142,6 +142,68 @@
     'requestId'
   ];
 
+  // Keep the HIS Base64 bytes encoded until PCIE Server decodes the explicitly
+  // tagged pair. This synchronous adapter checks transport syntax and size only.
+  function wrapOutpatientEmrSource(value, field, prefix) {
+    var maxBytes = 1024 * 1024;
+    if (typeof value !== 'string' || !value || value.length > 4 * Math.ceil(maxBytes / 3)
+      || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+      throw new Error('prepareOutpatientEmrTemplate ' + field + ' 必须是有效 Base64，解码后最多 1 MiB');
+    }
+    var padding = value.slice(-2) === '==' ? 2 : value.slice(-1) === '=' ? 1 : 0;
+    var alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var finalSextet = alphabet.indexOf(value.charAt(value.length - padding - 1));
+    if ((padding === 2 && (finalSextet & 15) !== 0) || (padding === 1 && (finalSextet & 3) !== 0)) {
+      throw new Error('prepareOutpatientEmrTemplate ' + field + ' Base64 填充位无效');
+    }
+    var byteCount = value.length / 4 * 3 - padding;
+    if (byteCount > maxBytes) {
+      throw new Error('prepareOutpatientEmrTemplate ' + field + ' 解码后不能超过 1 MiB');
+    }
+    return prefix + value;
+  }
+
+  function prepareOutpatientEmrTemplateSource(source, options) {
+    if (!isStrictOutpatientEmrJsonObject(source)) {
+      throw new Error('prepareOutpatientEmrTemplate source 必须是模板响应或 data 对象');
+    }
+    var data = source;
+    if (Object.prototype.hasOwnProperty.call(source, 'data')
+      || Object.prototype.hasOwnProperty.call(source, 'code')) {
+      if (source.code !== 200 || !isStrictOutpatientEmrJsonObject(source.data)) {
+        throw new Error('prepareOutpatientEmrTemplate 模板响应 code 必须为 200 且 data 必须是对象');
+      }
+      data = source.data;
+    }
+    if (!isExactNonEmptyString(data.idTep) || !isExactNonEmptyString(data.tepName)) {
+      throw new Error('prepareOutpatientEmrTemplate idTep 和 tepName 必须是无首尾空白的非空字符串');
+    }
+    if (!isStrictOutpatientEmrJsonObject(options)
+      || Object.keys(options).length !== 2
+      || !Object.prototype.hasOwnProperty.call(options, 'targetFieldIds')
+      || !Object.prototype.hasOwnProperty.call(options, 'requestId')
+      || !isExactNonEmptyString(options.requestId)
+      || !Array.isArray(options.targetFieldIds) || options.targetFieldIds.length === 0) {
+      throw new Error('prepareOutpatientEmrTemplate options 必须提供 targetFieldIds 和 requestId');
+    }
+    for (var targetIndex = 0; targetIndex < options.targetFieldIds.length; targetIndex++) {
+      var targetId = options.targetFieldIds[targetIndex];
+      if (!isExactNonEmptyString(targetId) || options.targetFieldIds.indexOf(targetId) !== targetIndex) {
+        throw new Error('prepareOutpatientEmrTemplate targetFieldIds 必须无空白且不重复');
+      }
+    }
+    var html = wrapOutpatientEmrSource(data.htmlContent, 'htmlContent', 'data:text/html;charset=utf-8;base64,');
+    var definition = wrapOutpatientEmrSource(data.xmlContent, 'xmlContent', 'data:application/json;charset=utf-8;base64,');
+    return {
+      templateId: data.idTep,
+      templateName: data.tepName,
+      templateHtml: html,
+      templateDefinition: definition,
+      targetFieldIds: options.targetFieldIds.slice(),
+      requestId: options.requestId
+    };
+  }
+
   function prepareVoicePatientPayload(patient) {
     if (!patient || !Object.prototype.hasOwnProperty.call(patient, 'outpatientEmr')) {
       return patient;
@@ -1215,6 +1277,15 @@
       self._resumeEventChannelIfNeeded();
       return result;
     });
+  };
+
+  /**
+   * 将 HIS 模板查询响应中的 Base64 HTML/JSON 封装为严格六字段模板规格。
+   * 同步、无请求、不解码；PCIE Server 验证 UTF-8 和内容并解码。
+   * targetFieldIds 必须由 HIS 明确提供，不执行模板脚本。
+   */
+  MedHermes.prototype.prepareOutpatientEmrTemplate = function (source, options) {
+    return prepareOutpatientEmrTemplateSource(source, options);
   };
 
   /**
