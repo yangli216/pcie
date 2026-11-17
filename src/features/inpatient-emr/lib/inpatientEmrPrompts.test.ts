@@ -37,17 +37,17 @@ const oldBody = [
 describe('inpatient generation task contract', () => {
   it('uses final AI membership and includes only effective body rules once', () => {
     const custom = '真实自定义正文要求：仅列有依据的支持证据。';
-    const selected = field({
-      readonly: true, presetStatus: 'exclude', defaultValue: '请输入诊断依据',
+    const selected = Object.assign(field({
+      readonly: true, defaultValue: '请输入诊断依据',
       rule: Object.assign({ source: 'manual_or_his' as const, constraints: [], prompt: custom }, {
         promptGeneratorInstruction: '内部提示词生成指令', resolvedPrompt: '重复提示词',
       }),
-    });
+    }), { presetStatus: 'exclude' });
     const omitted = field({ id: 'system-diagnosis', aiSuitable: false });
     const prompt = buildInpatientEmrGeneratePrompt([selected, omitted], context);
     const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
     expect(tasks).toEqual([{
-      id: 'diagnostic-basis', name: '诊断依据', meaning: '诊断的支持证据', article: '首次病程记录',
+      id: 'diagnostic-basis', name: '诊断依据', type: 'text', meaning: '诊断的支持证据', article: '首次病程记录',
       rule: { prompt: custom },
     }]);
     expect(prompt.split(custom)).toHaveLength(2);
@@ -104,5 +104,46 @@ describe('inpatient generation task contract', () => {
     for (const prompt of prompts) {
       expect(buildInpatientEmrFieldPrompt(field({ rule: { source: 'ai', constraints: [], prompt } }), context)).toBe(prompt);
     }
+  });
+
+  it.each(['number', ' NUMBER '])('preserves %s value shape in the model task and its default field prompt', (type) => {
+    const numeric = field({ id: 'syn-scalar', name: '本次测量', type });
+    const prompt = buildInpatientEmrGeneratePrompt([numeric], context);
+    const [task] = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(task.type).toBe('number');
+    expect(task.rule.prompt).toContain('单位由模板展示');
+    expect(task.rule.prompt).toContain('单个数值字符串');
+    expect(task.rule.prompt).toContain('缺少可靠数值时返回空字符串');
+    expect(task.rule.prompt).toContain('不自行换算单位');
+    expect(prompt).toContain('数值字段的回填格式约束优先于叙述要求');
+  });
+
+  it('adds the numeric contract to maintained and exact legacy prompts without replacing their business rules', () => {
+    const custom = '只使用本次书写日期的体温单测量，排除历史值。';
+    for (const prompt of [custom, `${oldDefaultInstruction}\n\n${oldBody}`]) {
+      const effective = buildInpatientEmrFieldPrompt(field({
+        type: 'number', rule: { source: 'ai', constraints: [], prompt },
+      }), context);
+      expect(effective).toContain('单位由模板展示');
+      expect(effective).toContain('不附加单位、字段名、范围或说明');
+      expect(effective).not.toContain(oldDefaultInstruction);
+      if (prompt === custom) expect(effective).toContain(custom);
+    }
+  });
+
+  it('does not duplicate the same contract received from the server', () => {
+    const prompt = '按来源填写。\n数值字段回填要求：该字段是数值输入槽位，单位由模板展示。只返回有可靠来源的单个数值字符串，不附加单位、字段名、范围或说明；缺少可靠数值时返回空字符串，不写“暂无记录”等文字，不编造数值，也不自行换算单位。';
+    expect(buildInpatientEmrFieldPrompt(field({ type: 'number', rule: { source: 'ai', constraints: [], prompt } }), context)).toBe(prompt);
+  });
+
+  it('keeps units in narrative fields while constraining numeric fields in the same request', () => {
+    const custom = '按本次查体资料描述体温38.2℃及脉搏96次/分，保留单位和叙述。';
+    const prompt = buildInpatientEmrGeneratePrompt([
+      field({ id: 'syn-scalar', type: 'number' }),
+      field({ id: 'syn-narrative', type: 'text', rule: { source: 'ai', constraints: [], prompt: custom } }),
+    ], context);
+    const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(tasks[0].rule.prompt).toContain('数值字段回填要求');
+    expect(tasks[1].rule.prompt).toBe(custom);
   });
 });

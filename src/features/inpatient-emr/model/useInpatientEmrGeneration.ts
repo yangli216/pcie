@@ -194,7 +194,10 @@ export function useInpatientEmrGeneration() {
   }
 
   function updateFieldValue(fieldId: string, content: string): void {
-    if (!result.value) return;
+    if (!result.value || isGenerating.value || isWritingBack.value
+      || pendingWritebackRequestId.value || writebackStatus.value === 'pending'
+      || writebackStatus.value === 'success') return;
+    if (!result.value.template.fields.some((field) => field.id === fieldId && field.aiSuitable)) return;
     const fieldValues = {
       ...result.value.fieldValues,
       [fieldId]: content,
@@ -209,7 +212,8 @@ export function useInpatientEmrGeneration() {
   }
 
   async function writeBack(): Promise<boolean> {
-    if (!result.value || isGenerating.value || isWritingBack.value || pendingWritebackRequestId.value || logSession?.terminal) return false;
+    if (!result.value || isGenerating.value || isWritingBack.value || pendingWritebackRequestId.value
+      || writebackStatus.value === 'success' || logSession?.terminal) return false;
     const token = requestSequence;
     const session = logSession;
     const currentResult = result.value;

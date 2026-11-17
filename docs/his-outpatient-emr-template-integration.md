@@ -42,12 +42,24 @@ HIS 当前模板 ──接口一上传──> PCIE 接诊 / 分析 ──医生�
 | `naPi / sdSexText / ageText` | string | 患者姓名、性别文本、年龄文本，沿用患者协议 |
 | `outpatientEmr.templateId` | string | HIS 当前选中模板的稳定 ID |
 | `outpatientEmr.templateName` | string | 当前模板名称 |
-| `outpatientEmr.templateHtml` | string | 正式渲染器执行联动后的当前 HTML 原文 |
-| `outpatientEmr.templateDefinition` | string | 同一模板、同一时刻的 JSON 定义**字符串**，顶层为章节数组 |
+| `outpatientEmr.templateHtml` | string | 正式渲染器当前 HTML 原文，或下文明确的 Base64 传输封装 |
+| `outpatientEmr.templateDefinition` | string | 同一时刻的章节 JSON 定义字符串，或配套的 Base64 传输封装 |
 | `outpatientEmr.targetFieldIds` | string[] | 当前实际可见、可写、允许 AI 填写的字段白名单；至少一项，无重复、空值或首尾空白 |
 | `outpatientEmr.requestId` | string | HIS 为这次任务生成的唯一 ID；完整任务及回执沿用 |
 
-HIS 模板查询若返回 `{ code: 200, data: { idTep, tepName, htmlContent, xmlContent } }`，且两份内容为 Base64 UTF-8，由 HIS 模板采集逻辑先解码为 HTML 原文和章节 JSON 字符串，再组装上表六个字段。模板身份来自 `idTep/tepName`，目标字段仍由当前渲染器提供；不执行模板脚本，不使用 `teptContent` 替代任一内容，不推断目标字段，也不向 Bridge 直接传完整查询响应。
+HIS 模板查询若返回 `{ code: 200, data: { idTep, tepName, htmlContent, xmlContent } }`，其中两份内容是 Base64 UTF-8，可先调用：
+
+```js
+const outpatientEmr = mh.prepareOutpatientEmrTemplate(templateResponse, {
+  targetFieldIds: visibleWritableFieldIds, // HIS 当前渲染器明确提供
+  requestId: currentRequestId,
+});
+await mh.startVoice({ ...patient, idVis: currentVisitId, outpatientEmr });
+```
+
+该方法也接受 `data` 本身，仅将 HIS 原始 Base64 内容封装为 `templateHtml="data:text/html;charset=utf-8;base64,..."` 与 `templateDefinition="data:application/json;charset=utf-8;base64,..."`，使用 `idTep/tepName` 作为模板身份；SDK 和 HIS 均不解码、不推断字段。桌面端把这一明确的双编码源通过带设备令牌和 ECDSA P-256 签名的 `POST /v1/client/outpatient-emr/templates/decode` 转发 PCIE Server，由服务端严格 Base64/UTF-8 解码；失败立即停止，不以旧格式或本地解码兜底。成功后按解码原文计算既有模板对 hash、校验字段、展示和生成；快照登记仍发送编码源，服务端按相同规则解码后校验 hash 和保存。已在 HIS 正式渲染器获取到解码原文的既有六字段调用保持有效。编码只接受上述两个完整前缀且必须成对，禁止单侧封装或其他 data URI。
+
+Base64 是可逆编码，不是加密。桌面端必须取得解码后的模板才能显示；解码响应也需要传输。远端传输保密依赖 HTTPS，ECDSA 签名保证身份与完整性，不能替代 TLS。本功能不改变部署 TLS 配置，也不把 HTTP 上的 Base64 表述为安全传输。两份源解码后各最多 1 MiB；本地两类门诊入口按独立 4 MiB JSON 请求上限接收 Base64 膨胀后的载荷（仍受总正文限制），不扩大其他 Bridge 入口。语音事实就绪后，病历详情直接展示和生成该模板，医生在同页编辑并一键合并回写。
 
 `outpatientEmr` 必须且只能包含上表六个模板字段；身份字符串不得带首尾空白。两份模板原文各自最多 1 MiB（UTF-8）。不要把整个定义对象直接传入 `templateDefinition`，也不要把模板放在 `startVoice` 的第二个参数。
 
@@ -552,3 +564,5 @@ await mh.init({
 常见排错：未带模板看 1.1 的请求计数；`TEMPLATE_PAIR_MISMATCH` 查同一快照与当前值；`INVALID_TARGET_FIELD_IDS` 查目标范围与显隐；字典错误查当前合法项；`TEMPLATE_SNAPSHOT_FAILED` 查服务端模板通道；`INVALID_OUTPATIENT_EMR_RESULT` 拒绝回填并查协议。
 
 联调证据至少记录：上传请求 → HTTP 受理 → 最终事件 / payload → HIS 保存字段与流水 → 回执。只使用合成数据的工程验证与真实 HIS、真实 AI、语音采集和医学验收分别记录；文档与示例包本身不表示 HIS 已完成接入。
+
+语音入口允许无患者的空请求沿用当前上下文；非空非法 JSON 或超过该入口总正文上限的请求必须拒绝，不得被当作“无患者/无模板”继续启动。

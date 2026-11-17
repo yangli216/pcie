@@ -78,6 +78,9 @@ function assertSingleStreamingRequest() {
     sessionId: 'SYN-AI-SESSION',
   }), expect.any(Function));
   expect(boundary.post.mock.calls.map(([path]) => path)).toEqual(['/v1/client/inpatient-emr/templates/resolve']);
+  const templateRequest = boundary.post.mock.calls[0][1];
+  expect(templateRequest).not.toHaveProperty('unknownFieldIds');
+  expect(JSON.stringify(templateRequest.fields)).not.toMatch(/presetStatus|unknownFieldIds/);
   const messages = boundary.sse.mock.calls[0][1].messages as Array<{ role: string; content: string }>;
   expect(messages.map((message) => message.role)).toEqual(['system', 'user']);
   const prompt = messages[1].content;
@@ -103,8 +106,52 @@ describe('inpatient production service → real LLM client → regional network 
     });
     expect(result.htmlContent).not.toContain('请输入');
     expect(result.trace.stages.find((stage) => stage.key === 'aiGenerate')?.status).toBe('success');
+    expect(result.template).not.toHaveProperty('unknownFieldIds');
+    expect(JSON.stringify(result.template.fields)).not.toContain('presetStatus');
     expect(boundary.finishTrace).toHaveBeenCalledTimes(1);
     expect(boundary.failTrace).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit backend opt-out despite the local clinical suggestion and stale AI source', async () => {
+    boundary.post.mockImplementation(async (_path, payload) => ({
+      cacheHit: true,
+      fields: payload.fields.map((field: InpatientEmrTemplateField) => ({
+        ...field, aiSuitable: field.id === '鉴别诊断文本', presetStatus: 'ai',
+        rule: { source: 'ai', constraints: [] },
+      })),
+    }));
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"鉴别诊断文本":"合成鉴别依据"}'));
+    const result = await generateInpatientEmrPreviewStream(request);
+    expect(boundary.post.mock.calls[0][1].fields.find((field: InpatientEmrTemplateField) => field.id === '诊断依据文本').aiSuitable).toBe(true);
+    expect(result.template.fields.find((field) => field.id === '诊断依据文本')).toMatchObject({ aiSuitable: false, rule: { source: 'manual_or_his' } });
+    const prompt = boundary.sse.mock.calls[0][1].messages[1].content as string;
+    const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(tasks.map((field: { id: string }) => field.id)).toEqual(['鉴别诊断文本']);
+    expect(boundary.post).toHaveBeenCalledTimes(1);
+    expect(boundary.sse).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses an administrator opt-in for a locally undecided field without sending its local suggestion state', async () => {
+    boundary.post.mockImplementation(async (_path, payload) => ({
+      cacheHit: true,
+      fields: payload.fields.map((field: InpatientEmrTemplateField) => ({
+        ...field, aiSuitable: true, presetStatus: 'unknown',
+        rule: { source: 'manual_or_his', constraints: [] },
+      })),
+    }));
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"syn-unknown":"合成自定义正文"}'));
+    const result = await generateInpatientEmrPreviewStream({
+      ...request, htmlContent: '<span data-id="syn-unknown" data-name="合成自定义字段" data-type="text">请输入</span>',
+    });
+    const payload = boundary.post.mock.calls[0][1];
+    expect(payload.fields[0].aiSuitable).toBe(false);
+    expect(payload).not.toHaveProperty('unknownFieldIds');
+    expect(JSON.stringify(payload.fields)).not.toContain('presetStatus');
+    expect(result.template.fields[0]).toMatchObject({ aiSuitable: true, rule: { source: 'ai' } });
+    expect(result.template.fields[0]).not.toHaveProperty('presetStatus');
+    expect(result.fieldValues['syn-unknown']).toBe('合成自定义正文');
+    expect(boundary.post).toHaveBeenCalledTimes(1);
+    expect(boundary.sse).toHaveBeenCalledTimes(1);
   });
 
   it('retains decoded partial text after a retryable interruption without another stream or a non-streaming fallback', async () => {

@@ -370,19 +370,14 @@ const outpatientEmrBridge = useOutpatientEmrBridgeController({
 });
 const {
   activeRequest: outpatientEmrRequest,
-  handleStartAnalysis: startOutpatientEmrAnalysis,
   cancelAnalysis: cancelOutpatientEmrAnalysisRaw,
   completeAnalysis: completeOutpatientEmrAnalysisRaw,
 } = outpatientEmrBridge;
 
 const voiceOutpatientEmrWorkflow = useVoiceOutpatientEmrWorkflow({
   currentPatient,
-  startAnalysis: startOutpatientEmrAnalysis,
   notify: showToast,
 });
-const outpatientEmrBaseWritebackPayload = computed(() => (
-  voiceOutpatientEmrWorkflow.resolveBaseWritebackPayload(outpatientEmrRequest.value)
-));
 
 async function cancelOutpatientEmrAnalysis(): Promise<void> {
   voiceOutpatientEmrWorkflow.clear();
@@ -1104,10 +1099,9 @@ const handleExitApp = async (e: MouseEvent) => {
             :consultationRoundId="consultationRoundId"
             :processing="isProcessingVoice"
             :channel="intentResult?.channel"
-            :deferred-writeback-request-id="voiceOutpatientEmrWorkflow.deferredWritebackRequestId.value"
+            :voice-outpatient-emr-context="voiceOutpatientEmrWorkflow.startContext.value"
             @close="handleUserCollapse"
             @cancel="cancelVoiceResult"
-            @writeback-prepared="voiceOutpatientEmrWorkflow.handleWritebackPrepared"
           />
           <TreatmentPlanPage
             v-if="currentView === 'treatment-plan'"
@@ -1138,7 +1132,6 @@ const handleExitApp = async (e: MouseEvent) => {
           <OutpatientEmrPage
             v-show="currentView === 'outpatient-emr'"
             :request="outpatientEmrRequest"
-            :base-writeback-payload="outpatientEmrBaseWritebackPayload"
             @close="handleUserCollapse"
             @cancel="cancelOutpatientEmrAnalysis"
             @completed="completeOutpatientEmrAnalysis"

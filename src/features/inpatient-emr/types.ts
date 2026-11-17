@@ -62,13 +62,14 @@ export interface InpatientEmrTemplateField {
   meaning: string;
   aiSuitable: boolean;
   rule: InpatientEmrFieldRule;
-  presetStatus?: 'exclude' | 'ai' | 'unknown';
 }
 
 export interface InpatientEmrTemplateParseResult {
   cacheKey: string;
   cacheHit: boolean;
   fields: InpatientEmrTemplateField[];
+  /** Unresolved local suggestions; consumed only by the existing fallback classifier. */
+  unknownFieldIds?: string[];
 }
 
 export interface InpatientEmrDocumentContext {

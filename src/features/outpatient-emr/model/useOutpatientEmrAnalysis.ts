@@ -1,6 +1,7 @@
 import { computed, ref, shallowRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { analyzeOutpatientEmrFields } from '../api/outpatientEmrService';
+import { normalizeOutpatientEmrTemplateSource } from '../api/outpatientEmrTemplateDecodeService';
 import {
   persistOutpatientEmrTemplateSnapshot,
   resolveOutpatientEmrTemplateSnapshot,
@@ -41,6 +42,7 @@ export type OutpatientEmrCompleteConsultation = (
 
 export interface OutpatientEmrAnalysisDependencies {
   analyzeFields?: typeof analyzeOutpatientEmrFields;
+  normalizeTemplateSource?: typeof normalizeOutpatientEmrTemplateSource;
   resolveTemplateSnapshot?: typeof resolveOutpatientEmrTemplateSnapshot;
   persistTemplateSnapshot?: typeof persistOutpatientEmrTemplateSnapshot;
   parseTemplate?: typeof parseOutpatientEmrTemplate;
@@ -89,6 +91,7 @@ export function useOutpatientEmrAnalysis(
   let activeAbortController: AbortController | null = null;
 
   const analyzeFields = dependencies.analyzeFields || analyzeOutpatientEmrFields;
+  const normalizeTemplateSource = dependencies.normalizeTemplateSource || normalizeOutpatientEmrTemplateSource;
   const resolveTemplateSnapshot = dependencies.resolveTemplateSnapshot
     || resolveOutpatientEmrTemplateSnapshot;
   const persistTemplateSnapshot = dependencies.persistTemplateSnapshot
@@ -183,11 +186,14 @@ export function useOutpatientEmrAnalysis(
 
     try {
       analysisStatus.value = 'analyzing';
-      templateHash.value = await hashTemplate(
-        nextRequest.templateHtml,
-        nextRequest.templateDefinition,
+      const localRequest = await normalizeTemplateSource(nextRequest, abortController.signal);
+      if (token !== runToken || abortController.signal.aborted) return false;
+      const computedTemplateHash = await hashTemplate(
+        localRequest.templateHtml,
+        localRequest.templateDefinition,
       );
       if (token !== runToken || abortController.signal.aborted) return false;
+      templateHash.value = computedTemplateHash;
 
       let resolution: Awaited<ReturnType<typeof resolveTemplateSnapshot>>;
       try {
@@ -213,14 +219,14 @@ export function useOutpatientEmrAnalysis(
           );
         }
         parsedTemplate = restoreTemplateFromSnapshot(
-          nextRequest.templateHtml,
+          localRequest.templateHtml,
           resolution.parseResult.fields,
           nextRequest.targetFieldIds,
         );
       } else {
         parsedTemplate = parseTemplate(
-          nextRequest.templateHtml,
-          nextRequest.templateDefinition,
+          localRequest.templateHtml,
+          localRequest.templateDefinition,
           nextRequest.targetFieldIds,
         );
         if (token !== runToken || abortController.signal.aborted) return false;
@@ -267,7 +273,7 @@ export function useOutpatientEmrAnalysis(
       }
 
       const generatedValues = await analyzeFields({
-        request: nextRequest,
+        request: localRequest,
         fields: parsedTemplate.targetFields,
         signal: abortController.signal,
       });

@@ -50,7 +50,8 @@ describe('template → final field policy → prompt → stream → accepted pre
     expect(result.fieldValues).toMatchObject(values);
     expect(result.fieldValues.住院号).toBe('当前HIS值');
     expect(result.template.fields.find((field) => field.id === '住院号')).toMatchObject({ readonly: true, defaultValue: '当前HIS值' });
-    expect(result.template.fields.find((field) => field.id === '诊断依据文本')).toMatchObject({ aiSuitable: true, presetStatus: 'ai', rule: { source: 'ai' } });
+    expect(result.template.fields.find((field) => field.id === '诊断依据文本')).toMatchObject({ aiSuitable: true, rule: { source: 'ai' } });
+    expect(result.template.fields.every((field) => !Object.prototype.hasOwnProperty.call(field, 'presetStatus'))).toBe(true);
     const prompt = boundary.stream.mock.calls[0][0][1].content as string;
     expect(prompt).toContain('"id": "诊断依据文本"');
     expect(prompt).toContain('"id": "鉴别诊断文本"');
@@ -143,6 +144,26 @@ describe('template → final field policy → prompt → stream → accepted pre
     await expect(generateInpatientEmrPreviewStream({ ...request, htmlContent: '<span data-id="customNarrative" data-name="合成未知字段" data-type="text">请输入</span>' })).rejects.toThrow('没有开启 AI');
     expect(boundary.classify).toHaveBeenCalledTimes(1);
     expect(boundary.stream).not.toHaveBeenCalled();
+  });
+
+  it('uses and consumes only undecided local suggestions when the remote cache is unavailable', async () => {
+    boundary.resolve.mockRejectedValue(new Error('SYN unavailable'));
+    boundary.classify.mockResolvedValue('[{"id":"syn-custom","aiSuitable":true,"meaning":"合成正文","source":"ai"}]');
+    boundary.stream.mockImplementation(async (_messages, onChunk) => onChunk('{"syn-chief":"合成主诉","syn-custom":"合成自定义正文"}'));
+    const result = await generateInpatientEmrPreviewStream({
+      ...request,
+      htmlContent: '<span data-id="patientId" data-name="患者姓名" data-type="text">原值</span>'
+        + '<span data-id="syn-signature" data-name="医师签名" data-type="text">原值</span>'
+        + '<span data-id="syn-chief" data-name="主诉" data-type="text">请输入</span>'
+        + '<span data-id="syn-custom" data-name="自定义临床字段" data-type="text">请输入</span>',
+    });
+    const classificationPrompt = boundary.classify.mock.calls[0][0][1].content as string;
+    expect(classificationPrompt).toContain('"id": "syn-custom"');
+    for (const id of ['patientId', 'syn-signature', 'syn-chief']) expect(classificationPrompt).not.toContain(`"id": "${id}"`);
+    expect(boundary.classify).toHaveBeenCalledTimes(1);
+    expect(result.template).not.toHaveProperty('unknownFieldIds');
+    expect(JSON.stringify(result.template.fields)).not.toMatch(/presetStatus|unknownFieldIds/);
+    expect(result.fieldValues['syn-custom']).toBe('合成自定义正文');
   });
 });
 

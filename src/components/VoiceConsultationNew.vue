@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useVoiceOutpatientEmrRecord, VoiceOutpatientEmrRecord } from '@features/outpatient-emr';
+import { buildVoiceOutpatientEmrRecordContext } from '@features/outpatient-emr/lib/voiceOutpatientEmr';
+import type { VoiceOutpatientEmrStartContext, OutpatientEmrPreparedWritebackPayload } from '@features/outpatient-emr/types';
 import { useFemaleHistoryFields } from '@features/consultation-result/model/useFemaleHistoryFields';
 import { voiceTimingTracker, useVoiceTimingPresentation, restoreVoiceEditorSnapshot } from '@features/voice-consultation';
 import {
@@ -214,8 +217,7 @@ const props = withDefaults(defineProps<{
   processing?: boolean;
   secondaryFooterActionText?: string;
   secondaryFooterActionDisabled?: boolean;
-  /** 动态门诊模板续接任务的 HIS requestId；存在时先发出待合并快照，不直接调用 PHIS。 */
-  deferredWritebackRequestId?: string;
+  voiceOutpatientEmrContext?: VoiceOutpatientEmrStartContext | null;
 }>(), {
   channel: 'voice',
   showPatientHeader: true,
@@ -224,14 +226,13 @@ const props = withDefaults(defineProps<{
   processing: false,
   secondaryFooterActionText: '',
   secondaryFooterActionDisabled: false,
-  deferredWritebackRequestId: '',
+  voiceOutpatientEmrContext: null,
 });
 
 const emit = defineEmits<{
   close: [];
   cancel: [];
   'secondary-footer-action': [];
-  'writeback-prepared': [payload: Record<string, unknown>];
 }>();
 
 const showToast = inject<(msg: string, type?: string) => void>('showToast');
@@ -686,18 +687,57 @@ const {
   setExpanded: setChronicRefillReviewExpanded,
 } = chronicRefillReview;
 
+const voiceTemplateContext = computed(() => props.voiceOutpatientEmrContext || null);
+const voiceTemplateRecordContext = computed(() => {
+  if (!voiceTemplateContext.value || isResultUnavailable.value) return null;
+  const record = getCurrentRegenerationRecord();
+  if (!Object.values(record).some((value) => value?.trim())) return null;
+  const snapshot = buildRecordConfirmedPayload({
+    consultationId: voiceTemplateContext.value.visitId,
+    requestId: voiceTemplateContext.value.template.requestId,
+    ...record,
+    outpatientRecord: record,
+    patientGender: patientGender.value,
+    patientAgeText: patientAge.value,
+    diagList: [], orderList: [],
+    writebackScope: {
+      recordFields: Object.keys(record) as Array<keyof typeof record>,
+      includeDiagnosis: false, orderTypes: [],
+    },
+    extra: { referenceType: 'batch', action: 'batch', referenceStatus: 'pending' },
+  });
+  const context = buildVoiceOutpatientEmrRecordContext(snapshot as OutpatientEmrPreparedWritebackPayload);
+  return {
+    ...context,
+    structuredFacts: {
+      ...(context.structuredFacts as Record<string, unknown>),
+      diagnoses: selectedDiagnoses.value.map((item) => ({
+        name: item.name, code: item.code || '', primary: isPrimaryDiagnosis(item) ? '是' : '否',
+      })),
+      orders: selectedTreatments.value.map((item) => ({
+        name: item.name, type: item.type, dosage: item.dosage || '',
+        frequency: item.frequency || '', usage: item.usage || '',
+      })),
+    },
+  };
+});
+const voiceTemplateDraft = useVoiceOutpatientEmrRecord({
+  context: voiceTemplateContext,
+  patient: computed(() => props.initialPatientData),
+  recordContext: voiceTemplateRecordContext,
+  enabled: computed(() => !isResultUnavailable.value),
+});
+
 const writebackScopeController = useClinicalResultWritebackScope({
-  getRecord: () => ({
-    chiefComplaint: chiefComplaint.value,
-    historyOfPresentIllness: historyOfPresentIllness.value,
-    pastMedicalHistory: pastMedicalHistory.value,
-    personalHistory: personalHistory.value,
-    menstrualHistory: hasFemaleHistoryFields.value ? menstrualHistory.value : '',
-    maritalReproductiveHistory: hasFemaleHistoryFields.value ? maritalReproductiveHistory.value : '',
-    familyHistory: familyHistory.value,
-    physicalExam: physicalExam.value,
-    precautions: precautions.value,
-  }),
+  getRecord: () => {
+    const record = { ...getCurrentRegenerationRecord(), maritalReproductiveHistory: maritalReproductiveHistory.value || '' };
+    if (!voiceTemplateContext.value) return record;
+    const mapped = new Set(voiceTemplateDraft.targetFields.value.map((field) => field.recordField));
+    return Object.fromEntries(Object.keys(record).map((field) => [
+      field, mapped.has(field as keyof typeof record)
+        ? (voiceTemplateDraft.recordFieldValues.value[field as keyof typeof record] || '') : '',
+    ])) as typeof record;
+  },
   getSelectedDiagnosisCount: () => selectedDiagnoses.value.length,
   getSelectedTreatments: () => selectedTreatments.value,
   notify: showToast,
@@ -874,15 +914,19 @@ async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot, isCurrent: () 
   }
 }
 
+const hasUnmappedTemplateFields = computed(() => Boolean(voiceTemplateContext.value
+  && voiceTemplateDraft.targetFields.value.some((field) => !field.recordField)));
 const canSubmit = computed(() => (
   !isResultUnavailable.value
   && !diagnosisLoading.value
   && !treatmentLoading.value
   && !isWritebackBusy.value
-  && hasWritebackSelection.value
+  && (hasWritebackSelection.value || hasUnmappedTemplateFields.value)
+  && (!voiceTemplateContext.value || voiceTemplateDraft.canSubmit.value)
 ));
 
 async function handleCancelConfirmed(): Promise<void> {
+  voiceTemplateDraft.reset();
   clearVoiceFeedbackDraft();
   await submitVoiceAbandonedUserLog();
   emit('cancel');
@@ -1147,6 +1191,7 @@ const writebackFeedbackController = useWritebackFeedbackController({
     });
     persistEditorSnapshotImmediate();
     submitVoiceFinalUserLog();
+    voiceTemplateDraft.reset();
     completeVoiceConsultationFlow();
   },
 });
@@ -2106,6 +2151,12 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
   ) return;
 
   const previousRecord = getCurrentRegenerationRecord();
+  if (voiceTemplateContext.value && voiceTemplateDraft.canSubmit.value) {
+    const projected = voiceTemplateDraft.buildConfirmedPayload()?.outpatientRecord;
+    for (const field of Object.keys(previousRecord) as Array<keyof typeof previousRecord>) {
+      if (typeof projected?.[field] === 'string') previousRecord[field] = projected[field]!;
+    }
+  }
   const previousDiagnoses = aiDiagnoses.value.map((item) => ({ ...item }));
   const previousSelectedDiagnosisIdentity = getDiagnosisIdentity(selectedDiagnosis.value);
   const previousSelectedDiagnosisIdentities = new Set(
@@ -3209,12 +3260,18 @@ async function reconcileAutoSelectedMedicineInventory(
 
 async function handleBatchWriteBack(): Promise<void> {
   if (!canSubmit.value) return;
-  if (!ensureWritebackSelection()) return;
+  if (!hasUnmappedTemplateFields.value && !ensureWritebackSelection()) return;
+  const templateContextAtStart = voiceTemplateContext.value;
+  const patientAtStart = patientAnchorId.value;
   const selectedScope = {
     recordFields: [...writebackScope.value.recordFields],
     includeDiagnosis: writebackScope.value.includeDiagnosis,
     orderTypes: [...writebackScope.value.orderTypes],
   };
+  if (voiceTemplateContext.value) {
+    const mapped = new Set(voiceTemplateDraft.targetFields.value.map((field) => field.recordField));
+    selectedScope.recordFields = selectedScope.recordFields.filter((field) => mapped.has(field));
+  }
   if (selectedScope.recordFields.includes('precautions')) {
     syncPrecautionsToSelection();
   }
@@ -3232,6 +3289,8 @@ async function handleBatchWriteBack(): Promise<void> {
     if (!preflight.ready) {
       return;
     }
+    if (patientAnchorId.value !== patientAtStart
+      || voiceTemplateContext.value !== templateContextAtStart) return;
     const { selected } = preflight;
 
     const diagList = selectedScope.includeDiagnosis ? buildDiagList() : [];
@@ -3239,8 +3298,8 @@ async function handleBatchWriteBack(): Promise<void> {
 
     const treatmentPlan = buildTreatmentPlanSummary(selected);
 
-    const requestId = props.deferredWritebackRequestId || `record-confirmed-${Date.now()}`;
-    const result = buildRecordConfirmedPayload({
+    const requestId = voiceTemplateContext.value?.template.requestId || `record-confirmed-${Date.now()}`;
+    let result = buildRecordConfirmedPayload({
       consultationId: resolveConsultationId(),
       requestId,
       chiefComplaint: chiefComplaint.value,
@@ -3289,10 +3348,15 @@ async function handleBatchWriteBack(): Promise<void> {
       treatments: selected,
       context: buildPreferenceContext('writeback'),
     });
-    if (props.deferredWritebackRequestId) {
-      emit('writeback-prepared', result);
-      showToast?.('已确认诊疗内容，正在进入门诊模板映射。', 'info');
-      return;
+    if (voiceTemplateContext.value) {
+      const templateResult = voiceTemplateDraft.buildConfirmedPayload(
+        result as OutpatientEmrPreparedWritebackPayload,
+      );
+      if (!templateResult) {
+        showToast?.('当前诊疗内容已更新，正在重新生成模板病历，请稍候再回写。', 'info');
+        return;
+      }
+      result = templateResult;
     }
     markWritebackPending(requestId, '已选内容已发送至 HIS，等待处理结果回执。');
     await invoke('complete_consultation', { result });
@@ -3636,12 +3700,29 @@ useChronicRefillTimingPresentation(() => ({
             </button>
           </div>
 
-          <div v-if="hasPendingFactSuggestions" class="clinical-record-ai-notice" role="note">
+          <div v-if="!voiceTemplateContext && hasPendingFactSuggestions" class="clinical-record-ai-notice" role="note">
             <Icon icon="lucide:info" size="14" aria-hidden="true" />
             <span title="AI 标记为补充内容，红色为重点；会随所选字段回写，可点击调整或移除。">AI 标记为补充内容，红色为重点；会随所选字段回写，可点击调整或移除。</span>
           </div>
 
-          <div class="record-fields">
+          <VoiceOutpatientEmrRecord
+            v-if="voiceTemplateContext"
+            :template-name="voiceTemplateContext.template.templateName"
+            :template="voiceTemplateDraft.template.value"
+            :fields="voiceTemplateDraft.targetFields.value"
+            :values="voiceTemplateDraft.fieldValues.value"
+            :sources="voiceTemplateDraft.fieldValueSources.value"
+            :status="voiceTemplateDraft.analysisStatus.value"
+            :error-code="voiceTemplateDraft.analysisErrorCode.value"
+            :error-message="voiceTemplateDraft.analysisErrorMessage.value"
+            :validation-message="voiceTemplateDraft.dictionaryValidationMessage.value"
+            :conflict-field-ids="voiceTemplateDraft.conflictFieldIds.value"
+            :editable="!isWritebackBusy && !isResultUnavailable"
+            :can-retry="voiceTemplateDraft.canRetry.value && !isWritebackBusy"
+            @update-field="voiceTemplateDraft.updateFieldValue"
+            @retry="voiceTemplateDraft.retry"
+          />
+          <div v-else class="record-fields">
             <VoiceRecordFieldEditor
               v-model="chiefComplaint"
               title="主诉"

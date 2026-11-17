@@ -42,8 +42,32 @@ export interface PatientInfo {
 export interface VoiceOutpatientEmrTemplateInput {
   templateId: string;
   templateName: string;
+  /** HTML 原文，或 prepareOutpatientEmrTemplate 生成的显式 Base64 data URI */
   templateHtml: string;
+  /** 章节 JSON 原文，或 prepareOutpatientEmrTemplate 生成的显式 Base64 data URI；须与 HTML 成对 */
   templateDefinition: string;
+  targetFieldIds: string[];
+  requestId: string;
+}
+
+/** HIS 模板查询返回的 data；htmlContent/xmlContent 均为 Base64 UTF-8 */
+export interface OutpatientEmrTemplateSourceData {
+  idTep: string;
+  tepName: string;
+  htmlContent: string;
+  xmlContent: string;
+  [key: string]: unknown;
+}
+
+export interface OutpatientEmrTemplateSourceResponse {
+  /** 仅接受成功值 200，其余值在适配时抛错 */
+  code: number;
+  data: OutpatientEmrTemplateSourceData;
+  [key: string]: unknown;
+}
+
+/** 白名单和本次任务身份由 HIS 提供；不自动推断可填写范围 */
+export interface OutpatientEmrTemplateSourceOptions {
   targetFieldIds: string[];
   requestId: string;
 }
@@ -569,6 +593,12 @@ export declare class MedHermes {
   startVoice(): Promise<ApiResponse>;
   startVoice(patient: PatientInfo): Promise<ApiResponse>;
   startVoice(patient: VoiceOutpatientEmrPatientInfo): Promise<ApiResponse>;
+
+  /** 同步封装 HIS Base64 模板响应，不解码；PCIE Server 验证 UTF-8/内容并解码，桌面端验证完整字段配对 */
+  prepareOutpatientEmrTemplate(
+    source: OutpatientEmrTemplateSourceData | OutpatientEmrTemplateSourceResponse,
+    options: OutpatientEmrTemplateSourceOptions
+  ): VoiceOutpatientEmrTemplateInput;
 
   /** 触发报告解读 */
   interpretReport(request: ReportInterpretationRequest): Promise<ApiResponse>;

@@ -738,7 +738,9 @@ http://127.0.0.1:8081/api/consultation/start-voice
 4. 未诊毕且未放弃时，同一接诊上下文内再次调用会恢复上一张语音结果页；但桌面端当前接诊切换到其他患者后，上一患者的语音缓存会失效，之后再切回该患者也会重新开始语音问诊。
 5. 桌面端在接诊上下文校验通过并准备打开语音问诊页时，上报一次 `voice_consultation` 功能调用事件；同一就诊再次显式触发语音问诊入口按新调用计数，后续提交语音日志不再补记功能统计。
 6. 桌面端进入语音流程前会先复用接诊阶段已获取的当前就诊信息和本次门诊病历文本；当 `loadClinicMedicalRecord.applyList[].items[].sdApply === "3"` 表示存在已出报告时，再通过 HIS Adapter 调用 PHIS 报告结果服务 `api/phis.aiInpatientEmrContextService/buildOutpatientFollowUpReportResults`。若本次病历文本和至少一份已报告且有实际结果内容的检验/检查结果均存在，则进入统一报告工作台；医生可自行选择仅查看原始报告、触发 AI 解读，或直接升级到报告回诊后续方案。若已执行解读，后续方案优先使用其结构化处置结论；未执行时使用本次病历和结构化原始报告。诊断只作为可选参考，不再阻断取数或报告解读。否则继续原语音录音问诊。
-7. 携带 `outpatientEmr` 时，模板规格在本次语音会话开始前固定。医生在共享结果页点击“一键回写”后，桌面端先把已选病历、诊断和医嘱转换为当前模板分析上下文，再打开动态模板映射确认页；此时尚未向 PHIS 发送 `record-confirmed`。医生完成模板字段核对后才发送唯一一条合并结果，并等待一次回执。
+编码源传输（六字段结构不变）：`templateHtml` 可使用精确前缀 `data:text/html;charset=utf-8;base64,`，此时 `templateDefinition` 必须同时使用 `data:application/json;charset=utf-8;base64,`；不自动猜测无标记 Base64，不接受混合或其他 data URI。SDK 的 `prepareOutpatientEmrTemplate` 只封装不解码；桌面端调用 PCIE Server 的签名 `/v1/client/outpatient-emr/templates/decode`，服务端进行严格 Base64/UTF-8、1 MiB/份及 HTML/章节 JSON 数组校验。解码错误在快照/模型调用前停止。hash 始终以解码原文字节计算，快照登记可发送同一编码源由服务端解码校验。解码响应供桌面显示，远端保密依赖 HTTPS，编码与签名都不能替代 TLS。本地 `start-voice`、`outpatient/emr/analyze` 各接受最大 4 MiB JSON 正文，其他 Bridge 上限保持原有配置。独立门诊分析与语音共用这一入口规范。
+
+7. 携带 `outpatientEmr` 时，模板规格在本次语音会话开始前固定。语音事实生成完成后，共享结果页的病历详情直接按传入模板生成、展示和编辑；生成失败、字典待选或字段冲突时阻止回写。一键回写使用当前医生核对的模板字段与已选诊断、医嘱及标准病历范围合并，只发送唯一一条同 requestId 的结果，并在原页等待一次回执。映射字段随病历范围过滤，未映射模板字段保持显式 targetFieldIds 范围。
 
 #### 开发联调：传入模拟语音转写
 
@@ -1093,13 +1095,13 @@ HTTP Bridge 受理响应：
 1. 桌面端打开“住院病历生成”界面，医生可看到“获取住院上下文 / 整理诊疗摘要 / 整理病历依据 / 解析病历 / AI 生成”的步骤状态。PHIS 通过 `api/phis.aiInpatientEmrContextService/buildContext` 一次性返回上下文，桌面端调用该 PHIS RPC 时使用数组入参 `[requestMap]`，界面上仅拆分展示处理阶段。
 2. 若医生对生成结果不满意，可点击“重新生成”，在桌面端弹窗中手动输入或语音转写补充本次查房要点；桌面端会把补充内容作为 `doctorSupplement` 重新进入 AI 生成，不改变 HIS 原始上下文。若医生未补充要点且点击“直接重新生成”，桌面端会设置 `allowGenerateWithoutExternalBasis = true`，AI 继续基于住院聚合上下文生成，不再停留在“等待补充要点或门诊病历依据”状态。
 3. 入院记录场景下，医生可在“重新生成”弹窗里选择一次门诊就诊作为基础资料。门诊历史默认查询近 7 天，并提供近 1 月、近 3 月切换；PHIS `aiAdapterService/queryVisitHistory` 入参在 `params.dtBgn` 中传时间范围，例如 `[{"limit":-1,"params":{"idPi":"患者ID","dtBgn":["2026-06-08 00:00:00","2026-06-15 23:59:59"]}}]`。桌面端只展示同时有有效诊断和门诊病历文书的就诊记录，无诊断或无文书记录会被过滤。当前 PHIS Adapter 会先根据门诊 `idVis` 调用 `api/phis.aiAdapterService/getLookMedList`，入参为 `[{"idApp":"42","idTet":"租户ID","idHospital":"门诊idVis"}]`，并把返回的 `idMedrecdoc / naMed / titleTime / medType / fgCommit` 等映射为门诊病历文书列表；随后按 `idMedrecdoc` 调用 `api/phis.aiAdapterService/getMedContentLook`，入参为 `[{"idApp":"42","idTet":"租户ID","idMedrecdoc":"文书ID","courseShow":0}]`，读取 `body.data.htmlContent` 作为门诊病历正文。正文会用于门诊病历预览，并转换为纯文本作为 AI 参考上下文；若正文接口失败，桌面端才退回只展示文书列表和正文不可用提示。
-4. 医生在预览界面确认后点击“一键回写”。桌面端会先执行一轮本地轻量病历质控；无风险项时直接产生 `record-confirmed`，存在风险项时只弹出质控提醒，医生确认继续后再产生 `record-confirmed`。同时 `sdk.generateInpatientEmr(...)` 返回的 Promise 会 resolve 这份 payload。其中 `resultType` 固定为 `record-confirmed`，`referenceType/action` 固定为 `batch`，`emrType` 为 `inpatient-emr`。
+4. 医生可在默认“病历阅读”和“原始模板”之间切换、编辑同一份 AI 字段值，核对后点击“一键回写”。视图切换和字段来源标记不进入回写参数；非 AI 字段仍只读，生成及等待回执期间不可编辑。当前回写前质控暂不启用，医生确认后直接产生 `record-confirmed`。同时 `sdk.generateInpatientEmr(...)` 返回的 Promise 会 resolve 这份 payload。其中 `resultType` 固定为 `record-confirmed`，`referenceType/action` 固定为 `batch`，`emrType` 为 `inpatient-emr`。
 5. `record-confirmed.payload.fieldValues` 为 `{ [data-id]: value }` 的结构化字段取值；仅包含本次传入 `htmlContent` 中真实存在、且模板解析结果标记为适合 AI 生成的字段，若医生在预览中编辑过 AI 字段，以编辑后的文本为准。
 6. 住院病历回写事件不返回 `htmlContent`；HIS 侧按当前编辑器模板自行用 `data-id` 定位并回填文本。
 7. HIS 完成回填后，建议调用 `POST /api/consultation/reference-feedback`，带回相同 `consultationId` 与 `requestId`。回执时 `referenceType` 可传 `batch`，也可留空由 Bridge 按 `batch` 处理；桌面端收到成功回执后会从病历生成界面收起回小球状态。
 8. 病程正文生成时，`recordTime` 的日期是“今日 / 本次查房日期”的唯一依据；若体温单最新记录早于该日期，只能表述为“最近一次体温单记录（YYYY-MM-DD）”，不得写成“今日（历史日期）查房”。
 9. 历史病历中 `medType=2` 的病案首页不进入 AI 上下文；`medType=0` 入院记录建议提取 `chiefComplaint`、`presentIllness` 和 `structuredSections`，不要只传整篇 HTML 文本。
-10. 正文生成按当前模板字段 ID 和后台最终 AI 开关执行；初次自动分类不参与最终模型指令。模型只能返回一个完整 JSON 对象，全部 AI 字段必须显式返回字符串；资料不足可显式为空，但空值、占位、漏项、未知项、重复键或错误类型不得显示为完整生成。合法部分只作可编辑预览，失败不自动发出回写事件，不追加非流式请求或临床兜底文本；医生仍按既有流程核对、编辑并确认回写。Bridge 的成功响应只表示入口请求已接收，不表示模型字段或 HIS 回填完成。
+10. 正文生成按当前模板字段 ID 和后台最终 AI 开关执行；初次语义分类只是未配置字段的建议，不参与最终模型指令；字段不携带 `presetStatus`，解析结果中的临时未决字段集合不进入模板登记请求。后台最终 `aiSuitable` 是唯一生成开关，显式关闭优先，旧分类属性在兼容响应中被忽略。模型任务保留字段 `type`，其中 `number` 字段的默认及自定义提示词都附带纯数值字符串约束：单位由模板展示，不附单位、字段名、范围或说明；缺少可靠数值时返回空字符串，不自行换算单位。文本字段仍可按正文要求书写单位；`fieldValues` 继续使用字符串值，不做结果去单位或强转。模型只能返回一个完整 JSON 对象，全部 AI 字段必须显式返回字符串；资料不足可显式为空，但空值、占位、漏项、未知项、重复键或错误类型不得显示为完整生成。合法部分只作可编辑预览，失败不自动发出回写事件，不追加非流式请求或临床兜底文本；医生仍按既有流程核对、编辑并确认回写。Bridge 的成功响应只表示入口请求已接收，不表示模型字段或 HIS 回填完成。
 
 说明：
 
@@ -1133,7 +1135,7 @@ HIS 接入先看 [病历模板上传与最终回写接口](docs/his-outpatient-e
 - 诊断和诊疗选择属于普通问诊结果链，不会自动合并进本接口结果。
 - 当前请求和结果都没有 `recordId / idMedrecdoc` 字段。HIS 如需关联当前病历记录，必须在调用侧维护 `requestId -> recordId` 的关联，并在回填事务中使用该关联；不得把 `recordId` 塞入未文档化字段。
 
-一体化语音链路不再次调用本 HTTP 接口：桌面端在共享结果页确认后内部构造同结构的 `OutpatientEmrAnalysisRequest`。最终结果仍以 `emrType="outpatient-emr"` 标识模板回填，但会保留医生在共享结果页已选的 `writebackScope`、`diagList` 和 `orderList`；模板映射只能更新 scope 内已经选择的标准病历字段，不能自动开启诊断或扩大医嘱类型。PHIS 必须在同一事务中处理模板参数和标准回写内容，并以同一 `requestId` 只发送一次 `reference-feedback`。
+一体化语音链路不再次调用本 HTTP 接口：桌面端在语音事实就绪后内部构造同结构的 `OutpatientEmrAnalysisRequest`。最终结果仍以 `emrType="outpatient-emr"` 标识模板回填，但会保留医生在共享结果页已选的 `writebackScope`、`diagList` 和 `orderList`；模板映射只能更新 scope 内已经选择的标准病历字段，不能自动开启诊断或扩大医嘱类型。PHIS 必须在同一事务中处理模板参数和标准回写内容，并以同一 `requestId` 只发送一次 `reference-feedback`。
 
 #### 6.3C.2 完整调用链
 
@@ -1709,7 +1711,7 @@ ws://127.0.0.1:8081/api/consultation/events/ws
 
 #### 成功响应: 问诊一键确认回写（record-confirmed）
 
-`record-confirmed` 类型来自问诊最终确认提交。**症状问诊（`ConsultationPage` 完成问诊）、语音问诊（`VoiceConsultationNew` 提交病历）和独立诊疗方案推荐页（`treatment_plan` 聚合推荐后“一键回写”）共用此契约**，由 `src/features/clinical-result/recordConfirmedPayload.ts` 作为标准病例/诊断/医嘱构造点产出。共享结果页允许医生选择部分回写范围，但仍只产生一条 `record-confirmed + batch`；`writebackScope` 描述本次选择，未选门诊病历字段和诊断在 payload 中省略，PHIS 必须保持对应原值。为兼容 PHIS 既有遍历逻辑，`orderList` 始终为数组：没有选择任何药品、检查、检验或处置时返回 `[]`，并由 `writebackScope.orderTypes: []` 明确表示本次不处理医嘱，PHIS 不得据此清空既有医嘱。与 `reference-request` 不同，这仍是医生在结果页直接确认后的一次最终提交，不拆成逐项引用请求；PHIS 完成处理后仍必须调用 `POST /api/consultation/reference-feedback` 回执成功或失败。若 `startVoice` 同时携带动态门诊模板，标准构造结果先作为待合并快照进入模板确认，最终由 `outpatientEmrWriteback.ts` 附加 `emrType/templateMetadata/fieldValues/dictionarySelections` 后才发送；不会先发送一条普通问诊结果再发送一条模板结果。
+`record-confirmed` 类型来自问诊最终确认提交。**症状问诊（`ConsultationPage` 完成问诊）、语音问诊（`VoiceConsultationNew` 提交病历）和独立诊疗方案推荐页（`treatment_plan` 聚合推荐后“一键回写”）共用此契约**，由 `src/features/clinical-result/recordConfirmedPayload.ts` 作为标准病例/诊断/医嘱构造点产出。共享结果页允许医生选择部分回写范围，但仍只产生一条 `record-confirmed + batch`；`writebackScope` 描述本次选择，未选门诊病历字段和诊断在 payload 中省略，PHIS 必须保持对应原值。为兼容 PHIS 既有遍历逻辑，`orderList` 始终为数组：没有选择任何药品、检查、检验或处置时返回 `[]`，并由 `writebackScope.orderTypes: []` 明确表示本次不处理医嘱，PHIS 不得据此清空既有医嘱。与 `reference-request` 不同，这仍是医生在结果页直接确认后的一次最终提交，不拆成逐项引用请求；PHIS 完成处理后仍必须调用 `POST /api/consultation/reference-feedback` 回执成功或失败。若 `startVoice` 同时携带动态门诊模板，标准构造结果与原页已生成并核对的模板字段合并，最终由 `outpatientEmrWriteback.ts` 附加 `emrType/templateMetadata/fieldValues/dictionarySelections` 后才发送；不会先发送一条普通问诊结果再发送一条模板结果。
 
 ```json
 {
@@ -2572,3 +2574,5 @@ bootstrap `speech.transcriptionMode` 为 `batch` / `segmented`（省略按 `batc
 停止后的整段转写异常或非法结果必须显示未完成状态，保留当前完整 WAV 和分段草稿；失败时医生可强制编辑文字：改出非空且不同于失败时内容的文字后可直接确认，确认即视为医生核对后的文字；重试整段转写仍可用，成功后以转写结果覆盖当前停录段（含手动编辑），继续采集仍须重试成功；录音保存失败（无可用录音）时可编辑但不可确认。成功返回空文本则单独提示未识别到新增文字，清除当前未核验草稿、保留先前审核文字，允许重试、续采或手动补充；确认仍要求非空文字。重试只发送当前停录段，成功后与先前已审核文字拼接；重试中禁止重复请求与编辑，放弃仍可用。关闭、放弃、续采或卸载须使旧请求失效。录音保存失败时不得用空 Blob 假装可重试。
 
 重试复用带设备签名的 `/v1/ai/speech/transcribe`，保留 WAV MIME/容器和采样格式；上传文件名由统一音频 payload builder 按 MIME 生成，不把 WAV 标成 WebM 或 PCM。无新增服务端字段或配置。
+
+语音入口允许无患者的空请求沿用当前上下文；非空非法 JSON 或超过该入口总正文上限的请求必须拒绝，不得被当作“无患者/无模板”继续启动。

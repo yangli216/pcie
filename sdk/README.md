@@ -345,11 +345,15 @@ await mh.startConsultation({
 | `treatment_plan` | 诊疗方案聚合推荐 |
 | `reminder` | 智能提醒 |
 
+#### `prepareOutpatientEmrTemplate(source, options): VoiceOutpatientEmrTemplateInput`
+
+同步封装 HIS 模板查询响应中的原始 Base64 `htmlContent / xmlContent`，返回可放入 `startVoice` 的双 data URI 六字段模板规格；SDK 与 HIS 不解码，由桌面端签名转发 PCIE Server 解码。`source` 可为成功响应或其 `data` 对象；`options` 必须明确提供 `targetFieldIds / requestId`。方法不发请求、不执行模板脚本；Base64 结构、响应码或大小无效时直接抛错，UTF-8/HTML/JSON 内容由服务端校验。完整调用示例与来源要求见 [模板查询响应适配](../docs/his-outpatient-emr-template-integration.md#interface-upload)。
+
 #### `startVoice(patient?): Promise`
 
 启动语音问诊。`patient` 可选，不传则沿用桌面端当前上下文。
 
-若 HIS 已在医生站中选中门急诊动态模板，可在患者对象中附加严格的 `outpatientEmr` 模板规格；此模式必须同时传 `idVis`。医生先完成语音问诊、诊断和治疗选择，再进入模板字段确认，最终只产生一条合并 `record-confirmed`：
+若 HIS 已在医生站中选中门急诊动态模板，可在患者对象中附加严格的 `outpatientEmr` 模板规格；此模式必须同时传 `idVis`。语音事实就绪后在病历详情直接按模板生成和编辑，医生完成诊断、治疗与模板字段核对后，最终只产生一条合并 `record-confirmed`：
 
 下例 `templateSnapshot` 由 HIS 当前编辑器导出，不是 SDK 自带对象。白云 HI-EMR 4.1.0 的实际组件路径、`getXmlContent()` / `getHtmlContent()` 用法和采集函数见 [模板获取说明](../docs/his-outpatient-emr-template-integration.md#hiemr41-capture)；不要把示意 getter 名当成该编辑器已有 API。
 

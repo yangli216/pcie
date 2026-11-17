@@ -20,6 +20,47 @@ const MALICIOUS_TEMPLATE = `
 `;
 
 describe('inpatient EMR HTML boundary', () => {
+  it('uses clinical semantics consistently without single-character or abbreviation substring matches', () => {
+    const labels = ['临床诊断依据文本', '临床表现文本', '入院原因正文', '查房医师意见', '诊断依据编码', '诊断依据录入时间', '鉴别诊断医师签名', '病程记录操作人员', '首次病程记录医师', '诊断依据签署人', '首次病程记录名称', '首次病程记录标题', 'diagnostic_basis_created_at'];
+    const parsed = parseInpatientEmrTemplate(labels.map((name, index) => `<span data-id="syn-${index}" data-name="${name}" data-type="text">原值</span>`).join(''));
+    expect(parsed.fields.filter((field) => field.aiSuitable).map((field) => field.name)).toEqual(labels.slice(0, 4));
+    expect(parsed.fields[0].meaning).toContain('支持证据');
+    expect(parsed.fields[1].meaning).not.toContain('床号');
+    expect(parsed.fields[3].meaning).toContain('临床正文');
+    expect(parsed.fields.every((field) => !Object.prototype.hasOwnProperty.call(field, 'presetStatus'))).toBe(true);
+    expect(parsed.unknownFieldIds).toEqual([]);
+  });
+
+  it('does not use default clinical text as field classification evidence', () => {
+    const parsed = parseInpatientEmrTemplate('<span data-id="syn-chief" data-name="主诉" data-type="text">长期卧床，住址已变更。</span>');
+    expect(parsed.fields[0]).toMatchObject({ aiSuitable: true, rule: { source: 'ai' } });
+    expect(parsed.fields[0].meaning).toContain('临床正文');
+    expect(parsed.fields[0].meaning).not.toContain('床号');
+  });
+
+  it('keeps undecided IDs outside field objects and does not classify opaque IDs or short codes as clinical facts', () => {
+    const parsed = parseInpatientEmrTemplate([
+      '<span data-id="4f3bcf61" data-name="字段A" data-type="text">原值</span>',
+      '<span data-id="cf" data-type="text">原值</span>',
+      '<span data-id="syn-exposure" data-name="职业暴露史" data-type="text">原值</span>',
+      '<span data-id="patientId" data-type="text">原值</span>',
+      '<span data-id="idPi" data-type="text">原值</span>',
+      '<span data-id="admissionId" data-type="text">原值</span>',
+    ].join(''));
+    expect(parsed.unknownFieldIds).toEqual(['4f3bcf61', 'cf', 'syn-exposure']);
+    expect(parsed.fields.every((field) => !field.aiSuitable)).toBe(true);
+    expect(parsed.fields.slice(0, 3).every((field) => field.rule.source === 'manual_or_his')).toBe(true);
+    expect(parsed.fields.slice(3).every((field) => field.rule.source === 'his_or_system')).toBe(true);
+    expect(JSON.stringify(parsed.fields)).not.toMatch(/presetStatus|unknownFieldIds/);
+  });
+
+  it('keeps the first field identity when a duplicate has a different semantic suggestion', () => {
+    const parsed = parseInpatientEmrTemplate('<span data-id="same" data-name="主诉" data-type="text">原值</span><span data-id="same" data-name="未知" data-type="text">原值</span>');
+    expect(parsed.fields).toHaveLength(1);
+    expect(parsed.fields[0].aiSuitable).toBe(true);
+    expect(parsed.unknownFieldIds).toEqual([]);
+  });
+
   it('recognizes diagnostic narrative semantics while keeping objective diagnosis fields excluded', () => {
     const parsed = parseInpatientEmrTemplate(`
       <span data-id="syn-1" data-type="text" data-name="诊断依据">请输入诊断依据</span>

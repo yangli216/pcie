@@ -8,6 +8,7 @@ vi.mock('../api/inpatientEmrLog',()=>({createInpatientLogSession:vi.fn(async()=>
  const session={generationId:'round-'+mocks.sessions.length,terminal:false,record:vi.fn(async(type:string)=>{if(['abandoned','superseded','writeback_success'].includes(type))session.terminal=true})};mocks.sessions.push(session);return session;
 })}));
 import { useInpatientEmrGeneration } from './useInpatientEmrGeneration';
+import { createInpatientLogSession } from '../api/inpatientEmrLog';
 import type { InpatientEmrGenerationRequest, InpatientEmrGenerationResult } from '../types';
 const request=(admissionId='a1'):InpatientEmrGenerationRequest=>({admissionId,templateId:'t1',templateName:'日常病程',htmlContent:'<p/>',requestId:'req-'+admissionId});
 function generated(req=request(),status='used'):InpatientEmrGenerationResult{return {request:req,fieldValues:{f:'AI'},initialFieldValues:{f:'AI'},emrContent:'AI',htmlContent:'<p>AI</p>',context:{},template:{fields:[{id:'f',aiSuitable:true}]},trace:{traceId:'trace',startedAt:1,stages:[]},evidenceSummary:{aiGeneration:{status}},generatedAt:1} as unknown as InpatientEmrGenerationResult}
@@ -82,5 +83,82 @@ describe('inpatient log lifecycle',()=>{
  it('records generation and dispatch failures without claiming success',async()=>{
   mocks.generate.mockRejectedValueOnce(new Error('upstream'));const model=useInpatientEmrGeneration();await model.start(request());expect(mocks.sessions[0].record).toHaveBeenCalledWith('generation_failed',null,'住院病历生成失败');
   await model.start(request());mocks.invoke.mockRejectedValueOnce(new Error('dispatch'));expect(await model.writeBack()).toBe(false);expect(model.writebackStatus.value).toBe('error');
+ });
+});
+
+describe('inpatient field editing guards', () => {
+ it('accepts only current AI fields and preserves the AI original in the final payload', async () => {
+  const preview = generated();
+  preview.template.fields.push({ id: 'patientName', aiSuitable: false } as typeof preview.template.fields[number]);
+  preview.fieldValues.patientName = '合成患者';
+  preview.initialFieldValues.patientName = '合成患者';
+  mocks.generate.mockResolvedValue(preview);
+  const model = useInpatientEmrGeneration();
+  model.updateFieldValue('f', '未开始前的编辑');
+  expect(model.result.value).toBeNull();
+  await model.start(request());
+  model.updateFieldValue('unknown', '越界字段');
+  model.updateFieldValue('patientName', '不能修改系统字段');
+  model.updateFieldValue('f', '医生核对稿');
+  expect(model.result.value?.fieldValues).toEqual({ f: '医生核对稿', patientName: '合成患者' });
+  expect(model.result.value?.initialFieldValues).toEqual({ f: 'AI', patientName: '合成患者' });
+  expect(await model.writeBack()).toBe(true);
+  expect(mocks.invoke).toHaveBeenCalledWith('complete_consultation', expect.objectContaining({
+   result: expect.objectContaining({ fieldValues: { f: '医生核对稿' } }),
+  }));
+ });
+
+ it('keeps a streaming partial draft read only until generation finishes', async () => {
+  let finish!: (value: InpatientEmrGenerationResult) => void;
+  mocks.generate.mockImplementation((req, _onProgress, onPartial) => {
+   onPartial(generated(req));
+   return new Promise<InpatientEmrGenerationResult>((resolve) => { finish = resolve; });
+  });
+  const model = useInpatientEmrGeneration();
+  const running = model.start(request());
+  await vi.waitFor(() => expect(model.result.value?.fieldValues.f).toBe('AI'));
+  model.updateFieldValue('f', '生成时不得编辑');
+  expect(model.result.value?.fieldValues.f).toBe('AI');
+  finish(generated());
+  await running;
+  model.updateFieldValue('f', '生成完成后编辑');
+  expect(model.result.value?.fieldValues.f).toBe('生成完成后编辑');
+ });
+
+ it('locks sending and pending values, then allows edits after failed HIS feedback', async () => {
+  let finishDispatch!: () => void;
+  mocks.invoke.mockImplementation(() => new Promise<void>((resolve) => { finishDispatch = resolve; }));
+  const model = useInpatientEmrGeneration();
+  await model.start(request());
+  model.updateFieldValue('f', '发送前医生稿');
+  const dispatch = model.writeBack();
+  await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(1));
+  expect(model.isWritingBack.value).toBe(true);
+  model.updateFieldValue('f', '发送时不得编辑');
+  expect(model.result.value?.fieldValues.f).toBe('发送前医生稿');
+  finishDispatch();
+  await dispatch;
+  expect(model.isWritingBack.value).toBe(false);
+  model.updateFieldValue('f', '等待回执时不得编辑');
+  expect(model.result.value?.fieldValues.f).toBe('发送前医生稿');
+  expect(await model.writeBack()).toBe(false);
+  expect(model.applyReferenceFeedback({ consultationId: 'a1', requestId: 'req-a1', status: 'failed' })).toBe('failed');
+  model.updateFieldValue('f', '失败后调整');
+  expect(model.result.value?.fieldValues.f).toBe('失败后调整');
+  expect(model.result.value?.initialFieldValues.f).toBe('AI');
+ });
+
+ it('locks successful drafts and blocks duplicate dispatch even when logging is unavailable', async () => {
+  vi.mocked(createInpatientLogSession).mockRejectedValueOnce(new Error('合成日志初始化失败'));
+  const model = useInpatientEmrGeneration();
+  await model.start(request());
+  model.updateFieldValue('f', '已回填稿');
+  await model.writeBack();
+  expect(model.applyReferenceFeedback({ consultationId: 'a1', requestId: 'req-a1', status: 'success' })).toBe('success');
+  expect(model.pendingWritebackRequestId.value).toBe('');
+  model.updateFieldValue('f', '成功后不得编辑');
+  expect(model.result.value?.fieldValues.f).toBe('已回填稿');
+  expect(await model.writeBack()).toBe(false);
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
  });
 });

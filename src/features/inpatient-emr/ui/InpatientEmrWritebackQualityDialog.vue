@@ -12,9 +12,10 @@
           <strong>发现 {{ issues.length }} 项需确认的风险</strong>
         </div>
         <button
-          class="icon-btn"
+          class="workspace-button is-icon"
           type="button"
           title="关闭"
+          aria-label="关闭回写前病历质控"
           :disabled="isWritingBack"
           @click="$emit('cancel')"
         >
@@ -68,7 +69,7 @@
 
       <footer class="quality-footer">
         <button
-          class="ghost-btn"
+          class="workspace-button"
           type="button"
           :disabled="isWritingBack"
           @click="$emit('cancel')"
@@ -76,7 +77,7 @@
           返回预览修改
         </button>
         <button
-          class="primary-btn"
+          class="workspace-button is-primary"
           type="button"
           :disabled="isWritingBack"
           @click="$emit('confirm')"
@@ -118,8 +119,7 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
   display: grid;
   place-items: center;
   padding: 22px;
-  background: rgba(15, 31, 37, 0.3);
-  backdrop-filter: blur(7px);
+  background: rgba(15, 23, 42, 0.3);
 }
 
 .quality-dialog {
@@ -128,11 +128,11 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
-  border-radius: 8px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(101, 125, 134, 0.22);
-  box-shadow: 0 26px 70px rgba(12, 28, 34, 0.24);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--workspace-surface, #fff);
+  border: 1px solid var(--workspace-border, #e2e8f0);
+  box-shadow: 0 24px 64px rgb(15 23 42 / 18%);
 }
 
 .quality-head,
@@ -157,30 +157,15 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
 }
 
 .quality-head span {
-  color: #b64b22;
+  color: var(--workspace-muted, #64748b);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .quality-head strong {
-  color: #1d2b32;
-  font-size: 18px;
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background: transparent;
-  color: #31505a;
-  cursor: pointer;
-}
-
-.icon-btn:disabled {
-  color: #8a989e;
-  cursor: not-allowed;
+  color: var(--workspace-text, #172033);
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 .quality-body {
@@ -192,7 +177,7 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
 
 .quality-intro {
   margin: 0;
-  color: #52666d;
+  color: var(--workspace-muted, #64748b);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -206,21 +191,21 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
   align-items: center;
   min-height: 26px;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: 6px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .summary-pill.is-high {
-  color: #9e2f18;
-  background: #fff0ec;
-  border: 1px solid #f5c6ba;
+  color: var(--workspace-danger, #b91c1c);
+  background: #fef2f2;
+  border: 1px solid #fecaca;
 }
 
 .summary-pill.is-medium {
-  color: #8a5b0a;
-  background: #fff7df;
-  border: 1px solid #ead18b;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
 }
 
 .issue-list {
@@ -235,19 +220,19 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
   align-items: flex-start;
   gap: 10px;
   padding: 10px;
-  border-radius: 7px;
-  border: 1px solid rgba(100, 121, 129, 0.16);
-  background: #f7fafb;
+  border-radius: 9px;
+  border: 1px solid var(--workspace-border, #e2e8f0);
+  background: #f8fafc;
 }
 
 .issue-item.is-high {
-  border-color: #f0b8aa;
-  background: #fff6f3;
+  border-color: #fecaca;
+  background: #fef2f2;
 }
 
 .issue-item.is-medium {
-  border-color: #e8d49a;
-  background: #fffaf0;
+  border-color: #fde68a;
+  background: #fffbeb;
 }
 
 .issue-icon {
@@ -255,9 +240,14 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
   height: 26px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  color: #a04a20;
-  background: rgba(255, 255, 255, 0.72);
+  flex: 0 0 26px;
+  border-radius: 6px;
+  color: #b45309;
+  background: var(--workspace-surface, #fff);
+}
+
+.issue-item.is-high .issue-icon {
+  color: var(--workspace-danger, #b91c1c);
 }
 
 .issue-copy {
@@ -268,91 +258,70 @@ const mediumRiskCount = computed(() => props.issues.filter((issue) => issue.seve
 
 .issue-title-row {
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .issue-title-row strong {
   min-width: 0;
-  color: #203940;
-  font-size: 14px;
+  color: var(--workspace-text, #172033);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .issue-title-row small {
   flex: none;
-  color: #7d8a8f;
+  color: var(--workspace-muted, #64748b);
   font-size: 12px;
 }
 
 .issue-copy p {
   margin: 0;
-  color: #52666d;
+  color: #475569;
   font-size: 13px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .quality-status {
   gap: 7px;
   padding: 9px 10px;
-  border-radius: 7px;
-  font-size: 13px;
-  color: #31505a;
-  background: #f1f6f7;
-  border: 1px solid rgba(101, 125, 134, 0.18);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--workspace-muted, #64748b);
+  background: #f8fafc;
+  border: 1px solid var(--workspace-border, #e2e8f0);
+}
+
+.quality-status span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .quality-status.is-success {
-  color: #0d7566;
-  background: #ecfbf6;
-  border-color: #bfe7dc;
+  color: #15803d;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
 }
 
 .quality-status.is-error {
-  color: #9e2f18;
-  background: #fff0ec;
-  border-color: #f0b8aa;
+  color: var(--workspace-danger, #b91c1c);
+  background: #fef2f2;
+  border-color: #fecaca;
 }
 
 .quality-status.is-pending {
-  color: #1f6682;
-  background: #eef8fc;
-  border-color: #b9ddea;
+  color: var(--workspace-primary, #2563eb);
+  background: var(--workspace-primary-soft, #eff6ff);
+  border-color: #bfdbfe;
 }
 
 .quality-footer {
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
-}
-
-.ghost-btn,
-.primary-btn {
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border-radius: 7px;
-  padding: 0 13px;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.ghost-btn {
-  color: #31505a;
-  background: #f5f8f9;
-  border: 1px solid rgba(99, 119, 126, 0.18);
-}
-
-.primary-btn {
-  color: white;
-  background: #12806f;
-  border: 1px solid rgba(16, 115, 100, 0.22);
-  box-shadow: 0 8px 20px rgba(18, 128, 111, 0.2);
-}
-
-.ghost-btn:disabled,
-.primary-btn:disabled {
-  opacity: 0.58;
-  cursor: not-allowed;
+  padding-top: 14px;
+  border-top: 1px solid var(--workspace-border, #e2e8f0);
 }
 
 @media (max-width: 680px) {
