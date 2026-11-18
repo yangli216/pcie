@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { analyzeOutpatientEmrFields } from '../api/outpatientEmrService';
-import { normalizeOutpatientEmrTemplateSource } from '../api/outpatientEmrTemplateDecodeService';
+import { normalizeOutpatientEmrTemplateSource, type OutpatientEmrTemplateSource } from '../api/outpatientEmrTemplateDecodeService';
 import {
   persistOutpatientEmrTemplateSnapshot,
   resolveOutpatientEmrTemplateSnapshot,
@@ -18,8 +18,12 @@ import {
 import {
   buildOutpatientEmrRecordConfirmedPayload,
   hashOutpatientEmrTemplate,
+  normalizeOutpatientEmrModelValues,
 } from '../lib/outpatientEmrWriteback';
+import { prepareOutpatientEmrTemplate, type PreparedOutpatientEmrTemplate } from '../lib/prepareOutpatientEmrTemplate';
+import { matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
 import { findInvalidOutpatientEmrDictionaryValue } from '../lib/outpatientEmrDictionary';
+import { isAdministrativeTemplateSlot } from '../lib/outpatientEmrPromptGenerator';
 import { findOutpatientEmrFieldConflicts } from '../lib/outpatientEmrFieldConsistency';
 import { isSameOutpatientEmrAnalysisRequestSnapshot } from '../lib/outpatientEmrRequestIdentity';
 import { resolveOutpatientEmrStructuredFieldValues } from '../lib/outpatientEmrStructuredProjection';
@@ -30,10 +34,13 @@ import type {
   OutpatientEmrErrorCode,
   OutpatientEmrFieldValueSource,
   OutpatientEmrPreparedWritebackPayload,
+  OutpatientEmrRecordField,
   OutpatientEmrRecordConfirmedPayload,
   OutpatientEmrReferenceFeedbackPayload,
+  OutpatientEmrTemplateField,
   OutpatientEmrTemplateParseResult,
   OutpatientEmrWritebackStatus,
+  VoiceOutpatientEmrInitialDraft,
 } from '../types';
 
 export type OutpatientEmrCompleteConsultation = (
@@ -42,14 +49,34 @@ export type OutpatientEmrCompleteConsultation = (
 
 export interface OutpatientEmrAnalysisDependencies {
   analyzeFields?: typeof analyzeOutpatientEmrFields;
-  normalizeTemplateSource?: typeof normalizeOutpatientEmrTemplateSource;
+  normalizeTemplateSource?: (source: OutpatientEmrTemplateSource, signal?: AbortSignal) => Promise<OutpatientEmrTemplateSource>;
   resolveTemplateSnapshot?: typeof resolveOutpatientEmrTemplateSnapshot;
   persistTemplateSnapshot?: typeof persistOutpatientEmrTemplateSnapshot;
   parseTemplate?: typeof parseOutpatientEmrTemplate;
   restoreTemplateFromSnapshot?: typeof restoreOutpatientEmrTemplateFromSnapshot;
   hashTemplate?: typeof hashOutpatientEmrTemplate;
+  getPreparedVoiceTemplate?: (request: OutpatientEmrAnalysisRequest) => PreparedOutpatientEmrTemplate | undefined;
   completeConsultation?: OutpatientEmrCompleteConsultation;
   now?: () => number;
+}
+
+export function withOutpatientEmrDoctorEdits(
+  request: OutpatientEmrAnalysisRequest,
+  edits: Array<Pick<OutpatientEmrTemplateField, 'id' | 'name' | 'recordField' | 'articleName'> & {
+    value: string; source: OutpatientEmrFieldValueSource;
+  }>,
+): OutpatientEmrAnalysisRequest {
+  if (!edits.length) return request;
+  const previous = request.recordContext.doctorTemplateEdits;
+  if (Array.isArray(previous) && JSON.stringify(previous) === JSON.stringify(edits)) return request;
+  return {
+    ...request,
+    recordContext: {
+      ...request.recordContext,
+      ...(previous !== undefined ? { previousDoctorTemplateEdits: previous } : {}),
+      doctorTemplateEdits: edits,
+    },
+  };
 }
 
 function resolveError(error: unknown): { code: OutpatientEmrErrorCode; message: string } {
@@ -87,6 +114,7 @@ export function useOutpatientEmrAnalysis(
   const writebackMessage = ref('');
   const pendingWritebackRequestId = ref('');
   const editedFieldIds = new Set<string>();
+  const revisedDuringGeneration = new Set<string>();
   let runToken = 0;
   let activeAbortController: AbortController | null = null;
 
@@ -117,24 +145,21 @@ export function useOutpatientEmrAnalysis(
   const dictionaryValidationMessage = computed(() => {
     const issue = dictionaryValidationIssue.value;
     if (issue) {
-      return `字典字段“${issue.fieldName || issue.fieldId}”尚未确定，请医生选择模板已有项。`;
+      return `字典字段“${issue.fieldName || issue.fieldId}”的值与模板选项不匹配，请重新选择或清空。`;
     }
     return fieldConflicts.value[0]?.message || '';
   });
+  const writebackLocked = computed(() => (
+    writebackStatus.value === 'submitting' || writebackStatus.value === 'pending' || writebackStatus.value === 'success'
+  ));
   const canSubmit = computed(() => (
-    analysisStatus.value === 'ready'
+    Boolean(template.value && templateHash.value)
     && !dictionaryValidationIssue.value
     && fieldConflicts.value.length === 0
-    && writebackStatus.value !== 'submitting'
-    && writebackStatus.value !== 'pending'
-    && writebackStatus.value !== 'success'
+    && !writebackLocked.value
   ));
   const canRetry = computed(() => (
-    Boolean(request.value)
-    && analysisStatus.value !== 'analyzing'
-    && writebackStatus.value !== 'submitting'
-    && writebackStatus.value !== 'pending'
-    && writebackStatus.value !== 'success'
+    Boolean(request.value) && analysisStatus.value !== 'analyzing' && !writebackLocked.value
   ));
 
   function invalidateActiveRun(): number {
@@ -167,10 +192,12 @@ export function useOutpatientEmrAnalysis(
   async function runAnalysis(
     nextRequest: OutpatientEmrAnalysisRequest,
     preserveDoctorEdits: boolean,
+    initialDraft?: VoiceOutpatientEmrInitialDraft,
   ): Promise<boolean> {
     const token = invalidateActiveRun();
     const abortController = new AbortController();
     activeAbortController = abortController;
+    revisedDuringGeneration.clear();
     request.value = nextRequest;
     clearErrors();
     writebackStatus.value = 'idle';
@@ -186,70 +213,37 @@ export function useOutpatientEmrAnalysis(
 
     try {
       analysisStatus.value = 'analyzing';
-      const localRequest = await normalizeTemplateSource(nextRequest, abortController.signal);
-      if (token !== runToken || abortController.signal.aborted) return false;
-      const computedTemplateHash = await hashTemplate(
-        localRequest.templateHtml,
-        localRequest.templateDefinition,
-      );
-      if (token !== runToken || abortController.signal.aborted) return false;
-      templateHash.value = computedTemplateHash;
-
-      let resolution: Awaited<ReturnType<typeof resolveTemplateSnapshot>>;
-      try {
-        resolution = await resolveTemplateSnapshot({
-          templateId: nextRequest.templateId,
-          templateHash: templateHash.value,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new OutpatientEmrError(
-          'TEMPLATE_SNAPSHOT_FAILED',
-          `历史模板解析查询失败，尚未启动模型分析：${message}`,
-        );
-      }
-      if (token !== runToken || abortController.signal.aborted) return false;
-
-      let parsedTemplate: OutpatientEmrTemplateParseResult;
-      if (resolution.cacheHit) {
-        if (!resolution.parseResult) {
-          throw new OutpatientEmrError(
-            'TEMPLATE_SNAPSHOT_FAILED',
-            '历史模板解析命中但缺少完整字段快照，尚未启动模型分析。',
-          );
+      const isCurrent = () => token === runToken && !abortController.signal.aborted;
+      function acceptHash(hash: string): void {
+        if (initialDraft && (initialDraft.templateHash !== hash ||
+          !matchesVoiceOutpatientRecognitionTemplate(initialDraft, { visitId: nextRequest.visitId, template: nextRequest }))) {
+          throw new OutpatientEmrError('REQUEST_ID_CONFLICT', '本次语音生成的字段与当前就诊或模板版本不一致，请重新核对。');
         }
-        parsedTemplate = restoreTemplateFromSnapshot(
-          localRequest.templateHtml,
-          resolution.parseResult.fields,
-          nextRequest.targetFieldIds,
-        );
+        templateHash.value = hash;
+      }
+      let prepared = dependencies.getPreparedVoiceTemplate?.(nextRequest);
+      if (prepared) {
+        acceptHash(prepared.templateHash);
       } else {
-        parsedTemplate = parseTemplate(
-          localRequest.templateHtml,
-          localRequest.templateDefinition,
-          nextRequest.targetFieldIds,
-        );
-        if (token !== runToken || abortController.signal.aborted) return false;
-        try {
-          await persistTemplateSnapshot({
-            request: nextRequest,
-            template: parsedTemplate,
-            templateHash: templateHash.value,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new OutpatientEmrError(
-            'TEMPLATE_SNAPSHOT_FAILED',
-            `新模板解析登记失败，尚未启动模型分析：${message}`,
-          );
-        }
+        const source = await normalizeTemplateSource(nextRequest, abortController.signal);
+        if (!isCurrent()) return false;
+        prepared = await prepareOutpatientEmrTemplate(nextRequest, source, {
+          hashTemplate, resolveTemplateSnapshot, restoreTemplateFromSnapshot, parseTemplate, persistTemplateSnapshot,
+        }, isCurrent, acceptHash);
       }
-      if (token !== runToken || abortController.signal.aborted) return false;
-
+      if (!isCurrent() || !prepared) return false;
+      const parsedTemplate = prepared.template;
+      const localRequest = { ...nextRequest, ...prepared.source };
       const previousValues = fieldValues.value;
       const previousSources = fieldValueSources.value;
-      template.value = parsedTemplate;
+      const structuredValues = resolveOutpatientEmrStructuredFieldValues({
+        recordContext: nextRequest.recordContext,
+        fields: parsedTemplate.targetFields,
+      });
       const initialDrafts = parsedTemplate.targetFields.map((field) => {
+        if (!editedFieldIds.has(field.id) && Object.prototype.hasOwnProperty.call(structuredValues, field.id)) {
+          return [field.id, { value: structuredValues[field.id], source: 'structured' }] as const;
+        }
         const keepPrevious = preserveDoctorEdits
           && Object.prototype.hasOwnProperty.call(previousValues, field.id);
         return [field.id, keepPrevious
@@ -259,6 +253,7 @@ export function useOutpatientEmrAnalysis(
       fieldValues.value = Object.fromEntries(
         initialDrafts.map(([fieldId, draft]) => [fieldId, draft.value]),
       );
+      template.value = parsedTemplate;
       fieldValueSources.value = Object.fromEntries(
         initialDrafts.map(([fieldId, draft]) => [fieldId, draft.source]),
       );
@@ -272,38 +267,30 @@ export function useOutpatientEmrAnalysis(
         editedFieldIds.clear();
       }
 
-      const generatedValues = await analyzeFields({
-        request: localRequest,
-        fields: parsedTemplate.targetFields,
-        signal: abortController.signal,
-      });
+      const doctorTemplateEdits = parsedTemplate.targetFields
+        .filter(field => editedFieldIds.has(field.id) && !isAdministrativeTemplateSlot(field.id, field.name, [
+          field.articleId, field.articleTemplateId, field.articleDefinitionName, field.articleName,
+        ]))
+        .map(({ id, name, recordField, articleName }) => ({
+          id, name, recordField, articleName, value: fieldValues.value[id], source: 'doctor' as const,
+        }));
+      const generatedValues = initialDraft
+        ? normalizeOutpatientEmrModelValues(initialDraft.fieldValues, parsedTemplate.targetFields)
+        : await analyzeFields({
+          request: withOutpatientEmrDoctorEdits(localRequest, doctorTemplateEdits),
+          fields: parsedTemplate.targetFields,
+          ...(parsedTemplate.templateSourceNotes?.length ? { templateSourceNotes: parsedTemplate.templateSourceNotes } : {}),
+          signal: abortController.signal,
+        });
       if (token !== runToken || abortController.signal.aborted) return false;
 
       const mergedValues = { ...fieldValues.value };
       const mergedSources = { ...fieldValueSources.value };
       parsedTemplate.targetFields.forEach((field) => {
-        if (
-          !Object.prototype.hasOwnProperty.call(generatedValues, field.id)
-          || typeof generatedValues[field.id] !== 'string'
-        ) {
-          throw new OutpatientEmrError(
-            'ANALYSIS_FAILED',
-            `模型分析结果缺少模板字段 ${field.name || field.id}。`,
-          );
-        }
-      });
-      const structuredValues = resolveOutpatientEmrStructuredFieldValues({
-        recordContext: nextRequest.recordContext,
-        fields: parsedTemplate.targetFields,
-      });
-      parsedTemplate.targetFields.forEach((field) => {
-        if (editedFieldIds.has(field.id)) return;
-        if (Object.prototype.hasOwnProperty.call(structuredValues, field.id)) {
-          mergedValues[field.id] = structuredValues[field.id];
-          mergedSources[field.id] = 'structured';
-          return;
-        }
-        const draft = resolveOutpatientEmrModelDraft(field, generatedValues[field.id]);
+        if (editedFieldIds.has(field.id) || revisedDuringGeneration.has(field.id)) return;
+        if (Object.prototype.hasOwnProperty.call(structuredValues, field.id)) return;
+        const value = Object.prototype.hasOwnProperty.call(generatedValues, field.id) ? generatedValues[field.id] : undefined;
+        const draft = resolveOutpatientEmrModelDraft(field, value === undefined ? '' : value);
         mergedValues[field.id] = draft.value;
         mergedSources[field.id] = draft.source;
       });
@@ -327,7 +314,7 @@ export function useOutpatientEmrAnalysis(
     }
   }
 
-  async function start(nextRequest: OutpatientEmrAnalysisRequest): Promise<boolean> {
+  async function start(nextRequest: OutpatientEmrAnalysisRequest, initialDraft?: VoiceOutpatientEmrInitialDraft): Promise<boolean> {
     const current = request.value;
     if (current?.requestId === nextRequest.requestId) {
       if (isSameOutpatientEmrAnalysisRequestSnapshot(current, nextRequest)) {
@@ -337,7 +324,7 @@ export function useOutpatientEmrAnalysis(
       analysisErrorMessage.value = '同一 requestId 不能用于不同就诊或模板。';
       return false;
     }
-    return runAnalysis(nextRequest, false);
+    return runAnalysis(nextRequest, false, initialDraft);
   }
 
   async function retry(): Promise<boolean> {
@@ -346,7 +333,7 @@ export function useOutpatientEmrAnalysis(
   }
 
   function updateFieldValue(fieldId: string, value: string): void {
-    if (!template.value?.targetFields.some((field) => field.id === fieldId)) return;
+    if (writebackLocked.value || !template.value?.targetFields.some((field) => field.id === fieldId)) return;
     editedFieldIds.add(fieldId);
     fieldValues.value = {
       ...fieldValues.value,
@@ -358,14 +345,34 @@ export function useOutpatientEmrAnalysis(
     };
   }
 
+  function replaceReviewedSectionValues(fields: OutpatientEmrTemplateField[], result: Record<string, string | null>, sectionClear = false): void {
+    const normalized = normalizeOutpatientEmrModelValues(result, fields);
+    const values = { ...fieldValues.value };
+    const sources = { ...fieldValueSources.value };
+    for (const field of fields) {
+      if (sectionClear) editedFieldIds.delete(field.id);
+      else if (editedFieldIds.has(field.id)) continue;
+      revisedDuringGeneration.add(field.id);
+      const value = normalized[field.id];
+      const draft = value ? resolveOutpatientEmrModelDraft(field, value)
+        : { value: '', source: sectionClear ? 'doctor' as const : 'empty' as const };
+      values[field.id] = draft.value;
+      sources[field.id] = draft.source;
+    }
+    fieldValues.value = values;
+    fieldValueSources.value = sources;
+  }
+
   function buildConfirmedPayload(
     baseWritebackPayload: OutpatientEmrPreparedWritebackPayload | null = null,
+    voiceRecordValues?: Readonly<Partial<Record<OutpatientEmrRecordField, string>>>,
+    reviewedRecord?: Readonly<Partial<Record<OutpatientEmrRecordField, string>>>,
+    selectedFields?: { ids: ReadonlySet<string>; directText: Readonly<Record<string, string>> },
   ): OutpatientEmrRecordConfirmedPayload | null {
     if (
       !request.value
       || !template.value
       || !templateHash.value
-      || analysisStatus.value !== 'ready'
     ) {
       return null;
     }
@@ -373,11 +380,25 @@ export function useOutpatientEmrAnalysis(
     return buildOutpatientEmrRecordConfirmedPayload({
       request: request.value,
       templateHash: templateHash.value,
-      fields: template.value.targetFields,
+      fields: selectedFields ? template.value.targetFields.filter(field => selectedFields.ids.has(field.id)) : template.value.targetFields,
       fieldValues: fieldValues.value,
+      documentDirectText: selectedFields?.directText,
+      templateFieldIds: selectedFields && [
+        ...template.value.fields.map(field => field.id),
+        ...(template.value.templateSourceNotes ?? []).map(note => note.fieldId),
+      ],
+      fieldValueSources: fieldValueSources.value,
+      voiceRecordValues, reviewedRecord,
       timestamp: now(),
       baseWritebackPayload,
     });
+  }
+
+  // An early confirmation fixes the displayed draft even if HIS later asks for a retry.
+  function stopGenerationForWriteback(): void {
+    if (analysisStatus.value !== 'analyzing' || !template.value) return;
+    invalidateActiveRun();
+    analysisStatus.value = 'draft';
   }
 
   async function writeBack(
@@ -390,6 +411,7 @@ export function useOutpatientEmrAnalysis(
     const currentRequest = request.value;
     const payload = buildConfirmedPayload(baseWritebackPayload);
     if (!payload) return false;
+    stopGenerationForWriteback();
 
     writebackStatus.value = 'submitting';
     writebackMessage.value = baseWritebackPayload
@@ -515,7 +537,10 @@ export function useOutpatientEmrAnalysis(
     start,
     retry,
     updateFieldValue,
+    isIndividuallyEdited: (id: string) => editedFieldIds.has(id),
+    replaceReviewedSectionValues,
     buildConfirmedPayload,
+    stopGenerationForWriteback,
     writeBack,
     cancel,
     applyReferenceFeedback,

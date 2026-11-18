@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppPatient } from '@/types/appState';
 import {
   getVoiceConsultationEditorSnapshot,
+  getVoiceConsultationCacheKey, getVoiceConsultationCacheScope,
   persistVoiceConsultationCacheEntry,
   updateVoiceConsultationCache,
   type VoiceConsultationCacheEntry,
@@ -13,6 +14,8 @@ const patient: AppPatient = {
   demographics: { patientName: 'test' }, clinical: {},
   patientId: 'patient-1', patientName: 'test', visitId: 'visit-1',
 };
+const his = vi.hoisted(() => ({ orgCode: '合成机构', tenantId: '合成租户' }));
+vi.mock('@/services/his', () => ({ getHisAdapter: () => ({ getContextScope: () => his }) }));
 const base: VoiceConsultationCacheEntry = {
   consultationId: 'visit-1', transcribedText: 'test', savedAt: 0,
   intentResult: {
@@ -25,9 +28,10 @@ const base: VoiceConsultationCacheEntry = {
 describe('voice editor snapshot cache scope', () => {
   beforeEach(() => {
     localStorage.clear();
+    his.orgCode = '合成机构';
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 22, 10));
-    persistVoiceConsultationCacheEntry({ ...base, savedAt: Date.now() });
+    persistVoiceConsultationCacheEntry({ ...base, ownerScope: getVoiceConsultationCacheScope(patient), savedAt: Date.now() });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -49,6 +53,26 @@ describe('voice editor snapshot cache scope', () => {
       ...patient, patientId: 'patient-2', visitId: 'visit-3',
       identity: { patientId: 'patient-2', visitId: 'visit-3' },
     })).toBeNull();
+  });
+
+  it('isolates a reused visit across patients and institutions and can still restore the original owner', () => {
+    updateVoiceConsultationCache(patient, { chiefComplaint: '合成医生修订' });
+    expect(getVoiceConsultationEditorSnapshot({ ...patient, patientId: '另一患者' })).toBeNull();
+    his.orgCode = '另一机构';
+    expect(getVoiceConsultationEditorSnapshot(patient)).toBeNull();
+    his.orgCode = '合成机构';
+    expect(getVoiceConsultationEditorSnapshot(patient)?.chiefComplaint).toBe('合成医生修订');
+  });
+
+  it('restores an older storage key only with verifiable ownership, leaving unidentified records in storage', () => {
+    localStorage.clear();
+    const key = getVoiceConsultationCacheKey('visit-1');
+    const record = { ...base, savedAt: Date.now(), editorSnapshot: { chiefComplaint: '旧草稿' } };
+    localStorage.setItem(key, JSON.stringify(record));
+    expect(getVoiceConsultationEditorSnapshot(patient)).toBeNull();
+    expect(localStorage.getItem(key)).toBeTruthy();
+    localStorage.setItem(key, JSON.stringify({ ...record, ownerScope: getVoiceConsultationCacheScope(patient) }));
+    expect(getVoiceConsultationEditorSnapshot(patient)?.chiefComplaint).toBe('旧草稿');
   });
 
   it('expires the editor snapshot across local calendar days', () => {

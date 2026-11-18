@@ -5,7 +5,7 @@
 // expectedHash 用 calculateTemplateHash 对发起时两份原文计算；当前模板 hash / 编辑器版本
 // 还须由 HIS 在事务内核对。本模块不操作 DOM、不保存病历、不发回执，
 // 不替代 writebackScope 内标准病历、诊断、医嘱的既有 HIS 事务适配。
-import { assertStandaloneResult } from './integration.example.mjs';
+import { assertStandaloneResult, getConfirmedFieldIds } from './integration.example.mjs';
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
@@ -56,13 +56,14 @@ export function buildTemplateWritebackPlan({ mode, request, expectedHash, result
       && Object.values(result.emrFieldValues).every((value) => typeof value === 'string'),
     '缺少开放字段表或绑定值类型错误'
   );
-  sameIds(Object.keys(result.fieldValues), template.targetFieldIds, '显示字段');
-  sameIds(metadata.fields.map((field) => field.id), template.targetFieldIds, '字段元数据');
+  const confirmed = getConfirmedFieldIds(template, metadata, result.fieldValues);
   if (mode === 'standalone') assertStandaloneResult(request, expectedHash, result);
+  else sameIds(Object.keys(result.emrFieldValues).filter(id => template.targetFieldIds.includes(id)),
+    confirmed, '本次目标的绑定值');
 
   requireValue(Array.isArray(rendererFields), '缺少当前编辑器字段表');
   const currentById = new Map();
-  for (const field of rendererFields) {
+  for (const field of rendererFields.filter(field => confirmed.includes(field?.id))) {
     requireValue(
       isObject(field) && typeof field.id === 'string' && field.id.length > 0
         && field.id === field.id.trim() && !currentById.has(field.id),
@@ -72,7 +73,7 @@ export function buildTemplateWritebackPlan({ mode, request, expectedHash, result
   }
   const metadataById = new Map(metadata.fields.map((field) => [field.id, field]));
   const dictionaryIds = [];
-  const plan = template.targetFieldIds.map((id) => {
+  const plan = confirmed.map((id) => {
     const current = currentById.get(id);
     const field = metadataById.get(id);
     requireValue(

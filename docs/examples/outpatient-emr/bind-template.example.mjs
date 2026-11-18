@@ -11,7 +11,8 @@ export function buildTemplateBindingPlan({ request, expectedHash, result, render
   requireValue(Array.isArray(rendererFields), '当前编辑器字段表必须是数组');
 
   const currentById = new Map();
-  for (const field of rendererFields) {
+  const confirmed = result.templateMetadata.fields.map(field => field.id);
+  for (const field of rendererFields.filter(field => confirmed.includes(field?.id))) {
     requireValue(
       field && typeof field.id === 'string' && field.id.length > 0
         && field.id === field.id.trim(),
@@ -23,7 +24,7 @@ export function buildTemplateBindingPlan({ request, expectedHash, result, render
   const metadataById = new Map(result.templateMetadata.fields.map((field) => [field.id, field]));
 
   // 完整生成计划后调用方才开始写入，避免发现后续字段错误时已经写入前面字段。
-  return request.targetFieldIds.map((id) => {
+  return confirmed.map((id) => {
     const current = currentById.get(id);
     const metadata = metadataById.get(id);
     requireValue(current, `当前编辑器找不到目标字段：${id}`);

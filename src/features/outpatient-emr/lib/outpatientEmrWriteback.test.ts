@@ -125,9 +125,9 @@ describe('outpatient EMR model output normalization', () => {
       projectionMode: 'section-compose',
     }];
 
-    expect(() => normalizeOutpatientEmrModelValues({
-      肝炎史标志: '模型自造值',
-    }, constrainedFields)).toThrowError(/缺少字典字段 月经规则标志/);
+    expect(normalizeOutpatientEmrModelValues({
+      肝炎史标志: '1',
+    }, constrainedFields)).toEqual({ 肝炎史标志: '患有', 月经规则标志: '' });
     expect(normalizeOutpatientEmrModelValues({
       肝炎史标志: '模型自造值',
       月经规则标志: '',
@@ -426,9 +426,26 @@ describe('outpatient EMR writeback payload', () => {
       肝炎史标志: '0',
       高血压病史补充: '高血压 5 年，规律服药',
     });
+    const visible = '主病历保留的既往史原文。';
+    const withEmptySlots = buildOutpatientEmrRecordConfirmedPayload({
+      request, templateHash: 'hash', fields: sectionFields, fieldValues: {}, timestamp: 123,
+      reviewedRecord: { pastMedicalHistory: visible },
+      baseWritebackPayload: {
+        consultationId: request.visitId, requestId: request.requestId, timestamp: 122,
+        resultType: 'record-confirmed', referenceType: 'batch', action: 'batch', referenceStatus: 'pending', referenceMessage: '',
+        outpatientRecord: { schemaVersion: 'outpatient-record.v1', pastMedicalHistory: '旧病历' },
+        writebackScope: { recordFields: ['pastMedicalHistory'], includeDiagnosis: false, orderTypes: [] },
+        emrFieldValues: { 既往史文本: '旧病历' }, orderList: [],
+      },
+    });
+    expect(withEmptySlots.fieldValues).toEqual({});
+    expect(withEmptySlots.dictionarySelections).toEqual({});
+    expect(withEmptySlots.outpatientRecord?.pastMedicalHistory).toBe(visible);
+    expect(withEmptySlots.pastMedicalHistory).toBe(visible);
+    expect(withEmptySlots.emrFieldValues).toEqual({ 既往史文本: visible });
   });
 
-  it('rejects an empty or out-of-dictionary final value instead of returning an invalid parameter', () => {
+  it('omits unanswered dictionary fields and rejects an invalid nonempty selection', () => {
     const dictionaryField: OutpatientEmrTemplateField = {
       id: '婚育状况',
       name: '婚育状况',
@@ -451,21 +468,28 @@ describe('outpatient EMR writeback payload', () => {
       projectionMode: null,
     };
 
-    expect(() => buildOutpatientEmrRecordConfirmedPayload({
+    const payload = buildOutpatientEmrRecordConfirmedPayload({
       request,
       templateHash: 'hash',
       fields: [dictionaryField],
       fieldValues: { 婚育状况: '' },
       timestamp: 123,
-    })).toThrowError(/必须选择一个已有字典项/);
+    });
+    expect(payload.templateMetadata.fields).toEqual([]);
+    expect(payload.fieldValues).toEqual({});
+    expect(payload.dictionarySelections).toEqual({});
+    expect(payload.emrFieldValues).toEqual({});
+    expect(payload.writebackScope.recordFields).toEqual([]);
+    expect(payload).not.toHaveProperty('outpatientRecord');
 
-    expect(() => buildOutpatientEmrRecordConfirmedPayload({
+    const missing = buildOutpatientEmrRecordConfirmedPayload({
       request,
       templateHash: 'hash',
       fields: [dictionaryField],
-      fieldValues: { 婚育状况: '模型自造值' },
+      fieldValues: {},
       timestamp: 123,
-    })).toThrowError(/必须选择一个已有字典项/);
+    });
+    expect(missing.fieldValues).toEqual({});
 
     expect(() => buildOutpatientEmrRecordConfirmedPayload({
       request,
@@ -475,9 +499,31 @@ describe('outpatient EMR writeback payload', () => {
         baselineValue: '未婚未育',
         baselineDictionaryValue: '1',
       }],
-      fieldValues: {},
+      fieldValues: { 婚育状况: '模板外的选项' },
       timestamp: 123,
-    })).toThrowError(/医生最终值缺少模板字段/);
+    })).toThrowError(/必须选择一个已有字典项/);
+  });
+
+  it('writes a doctor-cleared text while omitting an untouched blank and its overlapping voice binding', () => {
+    const payload = buildOutpatientEmrRecordConfirmedPayload({
+      request,
+      templateHash: 'hash',
+      fields,
+      fieldValues: { personalHistory: '', familyHistory: '' },
+      fieldValueSources: { personalHistory: 'doctor', familyHistory: 'empty' },
+      baseWritebackPayload: {
+        consultationId: request.visitId, requestId: request.requestId, timestamp: 99,
+        resultType: 'record-confirmed', referenceType: 'batch', action: 'batch', referenceStatus: 'pending',
+        referenceMessage: '等待回执',
+        orderList: [], writebackScope: { recordFields: ['personalHistory'], includeDiagnosis: false, orderTypes: [] },
+        emrFieldValues: { familyHistory: '早先的内容' },
+      },
+      timestamp: 123,
+    });
+    expect(payload.templateMetadata.fields.map(field => field.id)).toEqual(['personalHistory']);
+    expect(payload.emrFieldValues).toEqual({ personalHistory: '' });
+    expect(payload.fieldValues).toEqual({ personalHistory: '' });
+    expect(payload.outpatientRecord).toEqual({ schemaVersion: 'outpatient-record.v1', personalHistory: '' });
   });
 
   it('honors the renderer target list without reinterpreting patient gender', () => {

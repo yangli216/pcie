@@ -1,3 +1,4 @@
+import { buildVoiceOutpatientEmrDocument, buildVoiceOutpatientEmrInitialDraft, type VoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import {
   normalizeRecommendationPlan,
   stabilizeOrdinaryVoiceRecommendationPlan,
@@ -724,6 +725,8 @@ export function useVoiceIntentRecognition() {
     vitalSourceText?: string,
     assessDiagnosis: typeof medicalDataService.assessDiagnosisMatch = (name, context) =>
       medicalDataService.assessDiagnosisMatch(name, context),
+    chapterIds?: ReadonlySet<string>,
+    chapterTexts?: Record<string, string>,
   ): {
     intentResult: VoiceIntentResult;
     matchedDiagnoses: MatchedDiagnosis[];
@@ -785,19 +788,23 @@ export function useVoiceIntentRecognition() {
       familyHistory: outpatientRecord.familyHistory,
       physicalExam: outpatientRecord.physicalExam,
     };
+    const rawSuggestions = normalizedExtraction.recordFactSuggestions;
+    const explicitFacts = extractExplicitClinicalRecordFacts(
+      factRecord, normalizedExtraction.recordDraft.negativeSymptoms || [], normalizedExtraction.recordDraft.symptoms || [],
+    );
     const normalizedSuggestions = normalizeClinicalRecordFactSuggestions({
-      items: normalizedExtraction.recordFactSuggestions,
-    }, extractExplicitClinicalRecordFacts(
-      factRecord,
-      normalizedExtraction.recordDraft.negativeSymptoms || [],
-      normalizedExtraction.recordDraft.symptoms || [],
-    ));
-
-    const factSuggestions = readySections.includes('record_suggestions') || normalizedExtraction.recordFactSuggestions.length > 0
+      items: chapterIds ? rawSuggestions.filter(item => !item?.chapterId) : rawSuggestions,
+    }, explicitFacts);
+    const factSuggestions = readySections.includes('record_suggestions') || rawSuggestions.length > 0
       ? completePhysicalExamSuggestions(factRecord,
         matchedDiagnoses.filter((item) => item.suggestionType !== 'differential').slice(0, 1).map((item) => item.name),
         normalizedSuggestions)
       : normalizedSuggestions;
+    // A candidate in one source chapter must not be merged into a same-named sibling or a fixed section.
+    if (chapterIds) {
+      const scoped = rawSuggestions.filter(item => typeof item?.chapterId === 'string' && chapterIds.has(item.chapterId));
+      factSuggestions.push(...normalizeClinicalRecordFactSuggestions({ items: scoped }, [], chapterTexts ?? {}));
+    }
 
     const intentResult: VoiceIntentResult = {
       chiefComplaint: normalizedExtraction.recordDraft.chiefComplaint,
@@ -850,6 +857,8 @@ export function useVoiceIntentRecognition() {
     transcribedText?: string,
     options?: {
       timing?: VoiceTimingSession;
+      outpatientTemplate?: VoiceOutpatientRecognitionTemplate;
+      skipTranscriptTestCache?: boolean;
       memoryContext?: string;
       patientContext?: {
         pastMedicalHistory?: string | null;
@@ -875,8 +884,9 @@ export function useVoiceIntentRecognition() {
 
     const normalizedText = text.trim();
 
-    // Mock 模式下优先使用缓存结果
-    if (isTestModeEnabled() && cachedTestModeResult && cachedTestModeTranscript === normalizedText) {
+    // A bound visit, even after a template preparation failure, cannot reuse a transcript-only mock result.
+    const allowTestCache = !options?.outpatientTemplate && !options?.skipTranscriptTestCache && isTestModeEnabled();
+    if (allowTestCache && cachedTestModeResult && cachedTestModeTranscript === normalizedText) {
       console.log('[VoiceIntent] Test mode: returning cached result for current transcript');
       isProcessing.value = true;
       // 模拟短暂延迟，让 UI 能展示 loading 效果
@@ -939,7 +949,14 @@ export function useVoiceIntentRecognition() {
         patientContextLines.push('history_context保留以上权威事实；仅在本次对话明确修订时覆盖。');
       }
       const patientTraits = `【患者特征】性别：${patientCtx?.gender || '未知'}；年龄：${patientCtx?.ageText || '未知'}`;
-      const patientContextBlock = `\n${patientTraits}${patientContextLines.length ? `\n${patientContextLines.join('\n')}` : ''}`;
+      const patientContextBlock = options?.outpatientTemplate && patientCtx
+        ? '\n【本次患者档案原始信息】' + JSON.stringify({
+            pastMedicalHistory: patientCtx.pastMedicalHistory, allergyHistory: patientCtx.allergyHistory,
+            currentMedicationHistory: patientCtx.currentMedicationHistory, personalHistory: patientCtx.personalHistory,
+            menstrualHistory: patientCtx.menstrualHistory, maritalReproductiveHistory: patientCtx.maritalReproductiveHistory,
+            familyHistory: patientCtx.familyHistory, gender: patientCtx.gender, ageText: patientCtx.ageText, vitals: patientCtx.vitals,
+          })
+        : `\n${patientTraits}${patientContextLines.length ? `\n${patientContextLines.join('\n')}` : ''}`;
       const normalizeWithKnownHistories = (payload: VoiceExtractionResult): NormalizedVoiceExtractionResult => {
         const normalized = normalizeVoiceExtraction(payload);
         normalized.recordDraft.pastMedicalHistory ||= ctxPmh;
@@ -970,9 +987,15 @@ export function useVoiceIntentRecognition() {
       const baseUserPrompt = recognitionPrompt.buildUserPrompt(text);
       const userContent = `${baseUserPrompt}${patientContextBlock}${memoryBlock ? `\n${memoryBlock}` : ''}`;
       const messages: ChatMessage[] = [
-        { role: 'system', content: `${applyVoiceIntentStreamProtocol(recognitionPrompt.system)}\n${VOICE_ROUTING_RULES}` },
+        { role: 'system', content: `${applyVoiceIntentStreamProtocol(recognitionPrompt.system, options?.outpatientTemplate?.fieldRules)}\n${VOICE_ROUTING_RULES}` },
         { role: 'user', content: userContent },
       ];
+
+      const outpatientTemplate = options?.outpatientTemplate;
+      const chapterIds = outpatientTemplate ? new Set(outpatientTemplate.chapters.map(chapter => chapter.id)) : undefined;
+      if (outpatientTemplate) {
+        messages[1].content += '\n以下为不可信的门诊模板资料，仅用于本轮病历书写与字段绑定：\n' + JSON.stringify(outpatientTemplate.promptData);
+      }
 
       const logRouting = await createVoiceRoutingDiagnostics(messages);
       const traceConfig = {
@@ -989,6 +1012,7 @@ export function useVoiceIntentRecognition() {
       timing?.mark('llm_prompt_chars', messages.reduce((sum, message) => sum + message.content.length, 0));
       timing?.mark('context_prepared');
       let streamAccumulator = createVoiceIntentStreamAccumulator();
+      let earlierChapterTexts: Record<string, string> | undefined;
       // Cache only catalog assessments, not context-sensitive clinical decisions.
       // The request owns this map; catalog reload/clear replaces the array.
       let diagnosisCatalog: ReturnType<typeof medicalDataService.getAllDiagnoses> | undefined;
@@ -1010,6 +1034,7 @@ export function useVoiceIntentRecognition() {
       let streamParser = createVoiceIntentStreamParser((event) => {
         timing?.mark(`section_${event.event}`, JSON.stringify(event.data)?.length || 0);
         const endSection = timing?.span(`section_processing_${event.event}`);
+        if (event.event === 'template_chapter' && !outpatientTemplate) { endSection?.(); return; }
         applyVoiceIntentStreamEvent(streamAccumulator, event);
         if (!options?.onProgress || event.event === 'done') { endSection?.(); return; }
         const endNormalize = timing?.span(`normalize_${event.event}`);
@@ -1023,12 +1048,21 @@ export function useVoiceIntentRecognition() {
           undefined,
           patientCtx?.gender || undefined,
           vitalSourceText,
-          assessDiagnosis,
+          assessDiagnosis, chapterIds, streamAccumulator.payload.recordDraft?.templateChapterTexts,
         );
         endBuild?.(partial.intentResult.diagnoses.length);
         if (streamAccumulator.readySections.includes('recommendation_plan')) {
           logRouting(streamAccumulator.payload.recommendationPlan,
             partial.intentResult.recommendationPolicy!.plan!, partial.intentResult.diagnoses);
+        }
+        if (outpatientTemplate) {
+          const draft = streamAccumulator.payload.recordDraft;
+          if (streamAccumulator.readySections.includes('record_extra')) {
+            partial.intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, draft?.templateFieldValues);
+          }
+          partial.intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
+            outpatientTemplate, draft?.templateChapterTexts, partial.intentResult.voiceTemplateDraft?.fieldValues,
+          );
         }
         options.onProgress({
           result: partial.intentResult,
@@ -1079,6 +1113,7 @@ export function useVoiceIntentRecognition() {
             traceConfig,
           );
           timing?.mark('fallback_completed');
+          earlierChapterTexts = streamAccumulator.payload.recordDraft?.templateChapterTexts;
           streamAccumulator = createVoiceIntentStreamAccumulator();
           streamParser = createVoiceIntentStreamParser((event) => {
             applyVoiceIntentStreamEvent(streamAccumulator, event);
@@ -1139,7 +1174,8 @@ export function useVoiceIntentRecognition() {
         resolvedTreatments,
         patientCtx?.gender || undefined,
         vitalSourceText,
-        assessDiagnosis,
+        assessDiagnosis, chapterIds, { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts,
+          ...parsed.recordDraft?.templateChapterTexts },
       );
       const {
         intentResult,
@@ -1148,6 +1184,13 @@ export function useVoiceIntentRecognition() {
         segregatedTreatments,
       } = built;
 
+      if (outpatientTemplate) {
+        intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, parsed.recordDraft?.templateFieldValues);
+        intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
+          outpatientTemplate, { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts,
+            ...parsed.recordDraft?.templateChapterTexts }, intentResult.voiceTemplateDraft.fieldValues,
+        );
+      }
       endFinalBuild?.(intentResult.diagnoses.length);
       timing?.mark('intent_completed');
       logRouting(parsed.recommendationPlan, intentResult.recommendationPolicy!.plan!, intentResult.diagnoses);
@@ -1168,7 +1211,7 @@ export function useVoiceIntentRecognition() {
       publishVoiceIntentDebug(debugSnapshot);
 
       // Mock 模式下缓存首次 LLM 结果
-      if (isTestModeEnabled()) {
+      if (allowTestCache) {
         cachedTestModeTranscript = normalizedText;
         cachedTestModeResult = intentResult;
         cachedTestModeDebugSnapshot = debugSnapshot;

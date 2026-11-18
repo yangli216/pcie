@@ -10,10 +10,13 @@ import {
 
 const props = defineProps<{
   modelValue: string;
+  readonly?: boolean;
   title: string;
   placeholder: string;
+  emptyText?: string;
   facts: ClinicalRecordExplicitFact[];
   suggestions: ClinicalRecordFactSuggestion[];
+  commitOnBlur?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +27,7 @@ const emit = defineEmits<{
 const annotationRootRef = ref<HTMLElement | null>(null);
 const editableContentRef = ref<HTMLElement | null>(null);
 const editing = ref(false);
+let draftEdited = false;
 const editingSuggestionId = ref('');
 const activeAnnotationKey = ref('');
 const copiedText = ref('');
@@ -33,11 +37,8 @@ const suggestionDrafts = reactive<Record<string, string>>({});
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
 const pendingSuggestions = computed(() => props.suggestions.filter((item) => item.status === 'pending'));
-const segments = computed(() => buildClinicalRecordAnnotationSegments(
-  props.modelValue,
-  props.facts,
-  pendingSuggestions.value,
-));
+const segments = computed(() => buildClinicalRecordAnnotationSegments(props.modelValue, props.facts, pendingSuggestions.value));
+
 function sourceLabel(fact: ClinicalRecordExplicitFact): string {
   if (fact.source === 'template-context') return '根据上下文修正';
   if (fact.source === 'structured-answer') return '结构化问诊已明确';
@@ -54,9 +55,12 @@ function syncEditableContent(): void {
   if (element.innerText !== props.modelValue) element.textContent = props.modelValue || '';
 }
 
-async function startEditing(): Promise<void> {
-  if (window.getSelection()?.toString().trim() || selectionCopy.text) return;
+async function startEditing(event: Event): Promise<void> {
+  // A popover action can remove its own DOM before the click reaches the paragraph.
+  if (event.target instanceof Element && event.target.closest('button, textarea, .clinical-record-popover')) return;
+  if (props.readonly || window.getSelection()?.toString().trim() || selectionCopy.text) return;
   activeAnnotationKey.value = '';
+  draftEdited = false;
   editing.value = true;
   await nextTick();
   syncEditableContent();
@@ -64,11 +68,18 @@ async function startEditing(): Promise<void> {
 }
 
 function handleDocumentInput(event: Event): void {
+  if (props.readonly) return;
+  draftEdited = true;
+  if (props.commitOnBlur) return;
   const target = event.target as HTMLElement | null;
   emit('update:modelValue', target ? readEditableText(target) : '');
 }
 
 function finishEditing(): void {
+  if (draftEdited && editing.value && props.commitOnBlur && !props.readonly && editableContentRef.value) {
+    const text = readEditableText(editableContentRef.value);
+    if (text !== props.modelValue) emit('update:modelValue', text);
+  }
   editing.value = false;
 }
 
@@ -244,17 +255,23 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', closeTransientLayers);
   clearCopyFeedback();
 });
+watch(() => props.readonly, (locked) => {
+  if (locked) {
+    finishEditing();
+    closeAnnotationPopover();
+  }
+});
 watch(() => props.modelValue, () => void nextTick(syncEditableContent));
 </script>
 
 <template>
   <div ref="annotationRootRef" class="clinical-record-annotated-text">
-    <p v-if="editing" class="clinical-record-line is-editing">
+    <p v-if="editing && !readonly" class="clinical-record-line is-editing">
       <label>{{ title }}：</label>
       <span
         ref="editableContentRef"
         class="clinical-record-editable"
-        contenteditable="true"
+        contenteditable="plaintext-only"
         role="textbox"
         :aria-label="title"
         :data-placeholder="placeholder"
@@ -266,7 +283,9 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
     <p
       v-else
       class="clinical-record-line"
-      :aria-label="`${title}，点击正文可编辑，选择文字可快速复制，点击 AI 标记可查看核查参考`"
+      :aria-label="readonly ? `${title}，只读` : `${title}，点击正文可编辑，选择文字可快速复制，点击 AI 标记可查看核查参考`"
+      :tabindex="readonly ? undefined : 0"
+      @keydown.enter.self.prevent="startEditing"
       @click="startEditing"
       @mouseup="handleTextSelection"
       @keyup="handleTextSelection"
@@ -306,7 +325,7 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
               <span class="clinical-record-popover-tags">
                 <span>{{ segment.fact.polarity === 'positive' ? '阳性指标' : '阴性事实' }}</span>
               </span>
-              <span>该内容已属于正式病历，点击正文空白处可继续编辑。</span>
+              <span>{{ readonly ? '该内容已属于正式病历。' : '该内容已属于正式病历，点击正文空白处可继续编辑。' }}</span>
               <button type="button" class="clinical-record-copy-button" @click="copyText(segment.text)">
                 {{ copiedText === segment.text.trim() ? '已复制' : '复制此段' }}
               </button>
@@ -318,7 +337,7 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
               class="clinical-record-annotation is-suggestion"
               :class="{ 'is-critical': segment.suggestion.priority === 'critical' }"
               :data-clinical-fact-id="segment.suggestion.id"
-              :aria-label="`${segment.text}，AI 补充建议，${segment.suggestion.priority === 'critical' ? '重点提示' : '一般提示'}，已在病历正文，会随所选字段回写，点击查看核查参考`"
+              :aria-label="`${segment.text}，AI 补充建议，${segment.suggestion.priority === 'critical' ? '重点提示' : '一般提示'}，已在病历正文${readonly ? '' : '，会随所选字段回写'}，点击查看核查参考`"
               @click.stop="toggleSuggestion(segment.suggestion.id, segment.text, $event)"
             >
               <span class="clinical-record-annotation-sign" aria-hidden="true">AI</span>
@@ -353,7 +372,7 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
                 <strong>依据</strong>
                 <span>{{ segment.suggestion.rationale }}</span>
               </span>
-              <span class="clinical-record-writeback-state is-included">
+              <span v-if="!readonly" class="clinical-record-writeback-state is-included">
                 已在病历正文中，将随当前所选病历字段回写；如不准确请调整或移除。
               </span>
               <span class="clinical-record-popover-actions">
@@ -367,8 +386,8 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
                   >应用</button>
                 </template>
                 <template v-else>
-                  <button type="button" class="clinical-record-text-button is-danger" @click="removeSuggestion(segment)">移除</button>
-                  <button type="button" class="clinical-record-text-button" @click="startSuggestionEdit(segment)">调整</button>
+                  <button v-if="!readonly" type="button" class="clinical-record-text-button is-danger" @click="removeSuggestion(segment)">移除</button>
+                  <button v-if="!readonly" type="button" class="clinical-record-text-button" @click="startSuggestionEdit(segment)">调整</button>
                   <button type="button" class="clinical-record-copy-button" @click="copySuggestionText(segment)">
                     {{ copiedText === segment.text.trim() ? '已复制' : '复制' }}
                   </button>
@@ -378,7 +397,7 @@ watch(() => props.modelValue, () => void nextTick(syncEditableContent));
           </span>
         </template>
       </template>
-      <span v-else class="clinical-record-placeholder">未记录（点击补充）</span>
+      <span v-else class="clinical-record-placeholder">{{ emptyText ?? (readonly ? '未记录' : '未记录（点击补充）') }}</span>
     </p>
     <span
       v-if="selectionCopy.text && !editing"

@@ -10,6 +10,11 @@
  * @module composables/useVoiceConsultation
  */
 
+import type { VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
+import {
+  buildVoiceOutpatientEmrDocument, hashVoiceOutpatientRecognitionTemplate, matchesVoiceOutpatientRecognitionTemplate,
+  prepareVoiceOutpatientRecognitionTemplate, type VoiceOutpatientRecognitionTemplate,
+} from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { nextTick, ref, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { trackClick, trackError, trackRecommendationAction } from '@services/operationTracker';
@@ -18,7 +23,7 @@ import type { PatientMemoryBrief } from '@entities/patient-memory';
 import { buildPatientMemoryPromptContext } from '@features/patient-memory/lib/patientMemoryPromptContext';
 import {
   clearVoiceConsultationCacheById,
-  hasVoiceConsultationCache,
+  getVoiceConsultationCacheScope,
   loadVoiceConsultationCacheEntry,
   persistVoiceConsultationCacheEntry,
   resolveVoiceConsultationId,
@@ -61,6 +66,7 @@ export type { VoiceEditorSnapshot } from '@features/voice-consultation';
 export interface VoiceConsultationOptions {
   /** 当前患者信息 */
   currentPatient: Ref<AppPatient | null>;
+  voiceOutpatientEmrContext?: Readonly<Ref<VoiceOutpatientEmrStartContext | null>>;
   /** 服务端纵向患者记忆；只作为本次问诊核对线索。 */
   patientMemoryBrief?: Ref<PatientMemoryBrief | null>;
   /** Toast 提示函数 */
@@ -158,8 +164,14 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     return { consultationId: currentConsultationId(), ...extra };
   }
 
-  function readCache(consultationId: string): VoiceConsultationCacheEntry | null {
-    return loadVoiceConsultationCacheEntry(consultationId);
+  function readCache(consultationId: string, patient = currentPatient.value): VoiceConsultationCacheEntry | null {
+    if (!consultationId || consultationId === 'unknown') return null;
+    const entry = loadVoiceConsultationCacheEntry(consultationId, getVoiceConsultationCacheScope(patient));
+    if (!entry || entry.intentResult.voiceTemplateError) return null;
+    const session = options.voiceOutpatientEmrContext?.value;
+    const draft = entry.intentResult.voiceTemplateDraft;
+    if (session ? !matchesVoiceOutpatientRecognitionTemplate(draft, session) : Boolean(draft)) return null;
+    return entry;
   }
 
   function writeCache(entry: VoiceConsultationCacheEntry): void {
@@ -175,7 +187,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     if (!consultationId) {
       return;
     }
-    clearVoiceConsultationCacheById(consultationId);
+    clearVoiceConsultationCacheById(consultationId, getVoiceConsultationCacheScope(currentPatient.value));
   }
 
   function createStreamingClinicalResult(message = '正在整理语音病历'): ClinicalResultInput {
@@ -305,7 +317,33 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       return false;
     }
 
-    await showClinicalResult(cached.intentResult, 'cache');
+    const session = options.voiceOutpatientEmrContext?.value;
+    let restored = cached.intentResult;
+    if (session) {
+      const owner = getVoiceConsultationCacheScope(currentPatient.value);
+      const token = processingToken;
+      const isCurrent = () => options.voiceOutpatientEmrContext?.value === session && consultationId === currentConsultationId()
+        && owner === getVoiceConsultationCacheScope(currentPatient.value) && token === processingToken;
+      try {
+        const document = cached.intentResult.voiceTemplateDocument;
+        if (document) {
+          const hash = await hashVoiceOutpatientRecognitionTemplate(session);
+          if (!isCurrent() || !matchesVoiceOutpatientRecognitionTemplate(document, session, hash)
+            || !matchesVoiceOutpatientRecognitionTemplate(cached.intentResult.voiceTemplateDraft, session, hash)) return false;
+        } else {
+          const prepared = await prepareVoiceOutpatientRecognitionTemplate(session, [], isCurrent);
+          if (!prepared || !isCurrent() || !matchesVoiceOutpatientRecognitionTemplate(
+            cached.intentResult.voiceTemplateDraft, session, prepared.identity.templateHash,
+          )) return false;
+          restored = { ...restored, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(
+            prepared, undefined, restored.voiceTemplateDraft?.fieldValues,
+          ) };
+        }
+      } catch {
+        return false;
+      }
+    }
+    await showClinicalResult(restored, 'cache');
     showToast('已恢复上次未提交的语音病例解析结果', 'info');
     console.log('[VoiceConsultation] Restored cached voice result', {
       consultationId,
@@ -325,15 +363,19 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
 
     const currentToken = processingToken + 1;
     processingToken = currentToken;
+    const ownerScope = getVoiceConsultationCacheScope(currentPatient.value);
+    const consultationId = currentConsultationId();
+    const templateContext = options.voiceOutpatientEmrContext?.value;
+    const isCurrent = () => templateContext === options.voiceOutpatientEmrContext?.value && currentToken === processingToken && consultationId === currentConsultationId()
+      && ownerScope === getVoiceConsultationCacheScope(currentPatient.value);
     let timing: ReturnType<typeof voiceTimingTracker.start> | undefined;
     try {
       const normalizedText = transcribedText.trim();
       if (await options.routeVoiceTranscript?.(normalizedText)) {
         return;
       }
-      if (currentToken !== processingToken) return;
+      if (!isCurrent()) return;
 
-      const consultationId = resolveVoiceConsultationId(currentPatient.value);
       consultationRoundId.value = crypto.randomUUID();
       const roundId = consultationRoundId.value;
       timing = voiceTimingTracker.start(roundId);
@@ -349,7 +391,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
         },
       });
       const cached = readCache(consultationId);
-      if (cached?.transcribedText === normalizedText) {
+      if (!templateContext && cached?.transcribedText === normalizedText) {
         console.log('[VoiceConsultation] Cache hit, skip LLM parsing', {
           consultationId,
           transcriptionLength: normalizedText.length,
@@ -366,22 +408,54 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       // 否则 VoiceCapsule 的 processing watcher 会补发一次胶囊 resize transition，
       // 与结果页导航竞争并把视图切回录音完成页。
       await nextTick();
-      if (currentToken !== processingToken) return;
+      if (!isCurrent()) return;
       isProcessingVoice.value = true;
 
       timing.mark('window_and_skeleton_ready');
       intentRecognition.clearTranscripts();
       intentRecognition.addTranscript(transcribedText);
       const patient = currentPatient.value;
+      let outpatientTemplate: VoiceOutpatientRecognitionTemplate | undefined;
+      let voiceTemplateError: string | undefined;
+      if (templateContext) {
+        try {
+          outpatientTemplate = await prepareVoiceOutpatientRecognitionTemplate(
+            templateContext, [patient?.naPi, patient?.patientName, patient?.idPi, patient?.patientId, consultationId], isCurrent,
+          );
+        } catch {
+          voiceTemplateError = '本次门诊模板准备失败，已保留语音病历。';
+        }
+        if (!isCurrent()) return;
+        if (outpatientTemplate && cached?.transcribedText === normalizedText
+          && matchesVoiceOutpatientRecognitionTemplate(cached.intentResult.voiceTemplateDraft, templateContext, outpatientTemplate.identity.templateHash)) {
+          intentSource.value = 'cache';
+          const previous = cached.intentResult.voiceTemplateDocument;
+          const text = previous && matchesVoiceOutpatientRecognitionTemplate(previous, templateContext, outpatientTemplate.identity.templateHash)
+            ? Object.fromEntries(previous.chapters.map(chapter => [chapter.chapterId, chapter.text])) : undefined;
+          intentResult.value = cloneClinicalResultInput({
+            ...cached.intentResult, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(
+              outpatientTemplate, text, cached.intentResult.voiceTemplateDraft?.fieldValues,
+            ),
+          });
+          isProcessingVoice.value = false;
+          timing.finish('cached');
+          return;
+        }
+      }
+      if (outpatientTemplate && intentResult.value) {
+        intentResult.value = { ...intentResult.value, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(outpatientTemplate) };
+      }
       const patientAllergyHistory = getPatientContextAllergyHistory(patient) || '';
       const patientPastMedicalHistory = getPatientContextPastMedicalHistory(patient) || '';
       const patientMedicationHistory = getPatientContextCurrentMedicationHistory(patient) || '';
-      const includeFemaleHistory = isFemaleHistoryEligible({
+      const includeFemaleHistory = Boolean(outpatientTemplate) || isFemaleHistoryEligible({
         gender: getPatientContextGenderText(patient),
         ageText: getPatientContextAgeText(patient),
         ageYears: patient?.ageYears ?? patient?.demographics?.ageYears,
       });
       const result = await intentRecognition.processTranscript(transcribedText, {
+        ...(outpatientTemplate ? { outpatientTemplate } : {}),
+        ...(voiceTemplateError ? { skipTranscriptTestCache: true } : {}),
         consultationId,
         timing,
         memoryContext: buildPatientMemoryPromptContext(options.patientMemoryBrief?.value, {
@@ -404,13 +478,13 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
           vitals: getCurrentPatientVitalSource(patient) || null,
         },
         onProgress: ({ result: partialResult }) => {
-          if (currentToken !== processingToken) return;
+          if (!isCurrent()) return;
           intentSource.value = 'llm';
           intentResult.value = cloneClinicalResultInput(partialResult);
         },
       });
 
-      if (currentToken !== processingToken) {
+      if (!isCurrent()) {
         return;
       }
 
@@ -421,7 +495,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
         showToast(errMsg, 'error');
         await writeCancelledResult(errMsg);
         setTimeout(() => {
-          if (currentToken === processingToken) {
+          if (isCurrent()) {
             exitWork('error');
           }
         }, 2000);
@@ -429,18 +503,19 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       }
 
       isProcessingVoice.value = false;
+      const completedResult = voiceTemplateError ? { ...result, voiceTemplateError } : result;
       writeCache({
-        consultationId,
+        consultationId, ownerScope,
         transcribedText: normalizedText,
-        intentResult: result,
+        intentResult: completedResult,
         savedAt: Date.now(),
       });
       intentSource.value = 'llm';
-      intentResult.value = cloneClinicalResultInput(result);
+      intentResult.value = cloneClinicalResultInput(completedResult);
 
       console.log('[VoiceConsultation] Intent recognition completed successfully');
     } catch (err: unknown) {
-      if (currentToken !== processingToken) {
+      if (!isCurrent()) {
         return;
       }
 
@@ -452,10 +527,12 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
       showToast(`处理失败: ${errMessage}`, 'error');
       await writeCancelledResult(`处理失败: ${errMessage}`);
       setTimeout(() => {
-        if (currentToken === processingToken) {
+        if (isCurrent()) {
           exitWork('error');
         }
       }, 2000);
+    } finally {
+      if (currentToken === processingToken && !isCurrent()) resetVoiceSessionState();
     }
   }
 
@@ -514,7 +591,10 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     updateGeneratedClinicalResultProgress: generatedClinicalResultSession.updateProgress,
     showGeneratedClinicalResult,
     resumeCachedVoiceResult,
-    hasCachedVoiceResult: (patient?: AppPatient | null) => hasVoiceConsultationCache(patient ?? currentPatient.value),
+    hasCachedVoiceResult: (patient?: AppPatient | null) => {
+      const owner = patient ?? currentPatient.value;
+      return Boolean(readCache(resolveVoiceConsultationId(owner), owner));
+    },
     handleVoiceStop,
     handleVoiceError,
     abandonVoiceCapture,

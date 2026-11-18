@@ -3,6 +3,7 @@ import type {
   Diagnosis,
   TreatmentRecommendation,
 } from '@/types/consultation';
+import type { VoiceOutpatientEmrDocument, VoiceOutpatientEmrInitialDraft } from '@features/outpatient-emr/types';
 import type { DiagnosisHint, TreatmentHint } from '@/prompts';
 import type { OutpatientRecord } from './outpatientRecord';
 import type { ClinicalRecordFactSuggestion } from './clinicalRecordFactConfirmation';
@@ -130,6 +131,9 @@ export interface ChronicExaminationReminders {
 }
 
 export interface ClinicalResultInput {
+  voiceTemplateDocument?: VoiceOutpatientEmrDocument;
+  voiceTemplateDraft?: VoiceOutpatientEmrInitialDraft;
+  voiceTemplateError?: string;
   chiefComplaint: string;
   historyOfPresentIllness: string;
   pastMedicalHistory: string;

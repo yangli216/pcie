@@ -1,5 +1,8 @@
 import { OUTPATIENT_RECORD_SCHEMA_VERSION } from '@features/clinical-result/outpatientRecord';
 import { RECORD_CONFIRMED_WRITEBACK_FIELDS } from '@features/clinical-result/recordConfirmedPayload';
+import { buildRecordConfirmedEmrFieldValues } from '@features/clinical-result/recordConfirmedEmrFieldValues';
+import { collectHistoryRecordTemplateSlotValues } from '@features/clinical-result/historyRecordTemplates';
+import { collectPhysicalExamVitalSigns } from '@features/clinical-result/physicalExamVitalTemplate';
 import {
   isOutpatientEmrDictionaryFieldType,
   resolveOutpatientEmrFinalDictionaryItem,
@@ -11,6 +14,7 @@ import { OutpatientEmrError } from './outpatientEmrTemplate';
 import { isPreparedOutpatientEmrWritebackPayload } from './voiceOutpatientEmr';
 import type {
   OutpatientEmrAnalysisRequest,
+  OutpatientEmrFieldValueSource,
   OutpatientEmrPreparedWritebackPayload,
   OutpatientEmrProjectedRecord,
   OutpatientEmrRecordConfirmedPayload,
@@ -43,7 +47,7 @@ export async function hashOutpatientEmrTemplate(
 export function normalizeOutpatientEmrModelValues(
   rawValue: unknown,
   fields: OutpatientEmrTemplateField[],
-): Record<string, string> {
+): Record<string, string | null> {
   if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
     throw new OutpatientEmrError(
       'ANALYSIS_FAILED',
@@ -53,15 +57,9 @@ export function normalizeOutpatientEmrModelValues(
   const source = rawValue as Record<string, unknown>;
 
   return Object.fromEntries(fields.map((field) => {
-    const hasCandidate = Object.prototype.hasOwnProperty.call(source, field.id);
-    const candidate = source[field.id];
+    const candidate = Object.prototype.hasOwnProperty.call(source, field.id) ? source[field.id] : undefined;
+    if (candidate === null) return [field.id, null];
     if (field.dictionaryItems.length > 0) {
-      if (!hasCandidate) {
-        throw new OutpatientEmrError(
-          'ANALYSIS_FAILED',
-          `模型结果缺少字典字段 ${field.name || field.id}。`,
-        );
-      }
       const dictionaryItem = resolveOutpatientEmrFinalDictionaryItem(field, candidate);
       return [field.id, dictionaryItem?.text || ''];
     }
@@ -93,11 +91,33 @@ function composeOutpatientEmrSectionValue(
   }, []).join('；');
 }
 
+function bindStandardSections(
+  record: Partial<Record<OutpatientEmrRecordField, string>>,
+  selectedRecordFields: ReadonlySet<OutpatientEmrRecordField>,
+) {
+  return buildRecordConfirmedEmrFieldValues({
+    record,
+    selectedRecordFields,
+    historyTemplateValues: collectHistoryRecordTemplateSlotValues(record),
+    physicalExamVitalSigns: collectPhysicalExamVitalSigns(record.physicalExam || ''),
+  });
+}
+
+export function isDirectOutpatientEmrTextField(field: OutpatientEmrTemplateField): boolean {
+  return field.projectionMode === 'direct' && !field.dictionaryItems.length
+    && ['text', 'textarea'].includes(field.type.toLowerCase());
+}
+
 export function buildOutpatientEmrRecordConfirmedPayload(input: {
   request: OutpatientEmrAnalysisRequest;
   templateHash: string;
   fields: OutpatientEmrTemplateField[];
   fieldValues: Record<string, string>;
+  fieldValueSources?: Readonly<Record<string, OutpatientEmrFieldValueSource>>;
+  voiceRecordValues?: Readonly<Partial<Record<OutpatientEmrRecordField, string>>>;
+  reviewedRecord?: Readonly<Partial<Record<OutpatientEmrRecordField, string>>>;
+  templateFieldIds?: readonly string[];
+  documentDirectText?: Readonly<Record<string, string>>;
   timestamp: number;
   baseWritebackPayload?: OutpatientEmrPreparedWritebackPayload | null;
 }): OutpatientEmrRecordConfirmedPayload {
@@ -115,14 +135,32 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
       '待合并的语音问诊回写快照与当前门诊模板任务不一致。',
     );
   }
-  const activeFields = input.fields;
-  const conflictingRecordFieldMapping = findConflictingOutpatientEmrRecordFieldMapping(activeFields);
+  const conflictingRecordFieldMapping = findConflictingOutpatientEmrRecordFieldMapping(input.fields);
   if (conflictingRecordFieldMapping) {
     throw new Error(
       `多个模板字段对同一标准字段 ${conflictingRecordFieldMapping.recordField} 形成歧义：${conflictingRecordFieldMapping.fieldIds.join('、')}`,
     );
   }
 
+  const currentValues = { ...input.fieldValues, ...input.documentDirectText };
+  if (input.reviewedRecord && !input.documentDirectText) {
+    for (const field of input.fields) {
+      if (!field.recordField || !isDirectOutpatientEmrTextField(field)) continue;
+      const reviewed = input.reviewedRecord[field.recordField];
+      if (typeof reviewed === 'string') currentValues[field.id] = reviewed;
+    }
+  }
+  const activeFields = input.fields.filter((field) => {
+    if (!Object.prototype.hasOwnProperty.call(currentValues, field.id)) return false;
+    const value = currentValues[field.id];
+    if (typeof value !== 'string') {
+      throw new OutpatientEmrError('WRITEBACK_FAILED', `模板字段 ${field.name || field.id} 的值应为文本。`);
+    }
+    if (value.trim()) return true;
+    return !isOutpatientEmrDictionaryFieldType(field.type)
+      && field.dictionaryItems.length === 0
+      && input.fieldValueSources?.[field.id] === 'doctor';
+  });
   const dictionarySelections: OutpatientEmrRecordConfirmedPayload['dictionarySelections'] = {};
   const fieldValues = Object.fromEntries(activeFields.map((field) => {
     if (
@@ -144,16 +182,7 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
       );
     }
 
-    if (
-      !Object.prototype.hasOwnProperty.call(input.fieldValues, field.id)
-      || typeof input.fieldValues[field.id] !== 'string'
-    ) {
-      throw new OutpatientEmrError(
-        'WRITEBACK_FAILED',
-        `医生最终值缺少模板字段 ${field.name || field.id}。`,
-      );
-    }
-    const value = input.fieldValues[field.id];
+    const value = currentValues[field.id];
     if (field.dictionaryItems.length === 0) return [field.id, value];
 
     const dictionaryItem = resolveOutpatientEmrFinalDictionaryItem(field, value);
@@ -184,7 +213,10 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     }
   });
   const mappedRecordFields = RECORD_CONFIRMED_WRITEBACK_FIELDS.filter(
-    (recordField): recordField is OutpatientEmrRecordField => mappedFields.has(recordField),
+    (recordField): recordField is OutpatientEmrRecordField => mappedFields.has(recordField)
+      || (input.fields.some(field => field.recordField === recordField) && (
+        Boolean(input.reviewedRecord?.[recordField]?.trim()) || input.voiceRecordValues?.[recordField] === ''
+      )),
   );
   const allowedProjectedRecordFields = baseWritebackPayload
     ? new Set(baseWritebackPayload.writebackScope.recordFields)
@@ -194,6 +226,15 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
   ));
   const projectedValues: Partial<Record<OutpatientEmrRecordField, string>> = {};
   projectedRecordFields.forEach((recordField) => {
+    const reviewed = input.reviewedRecord?.[recordField];
+    if (typeof reviewed === 'string') {
+      projectedValues[recordField] = reviewed;
+      return;
+    }
+    if (input.voiceRecordValues) {
+      projectedValues[recordField] = input.voiceRecordValues[recordField] ?? '';
+      return;
+    }
     const fields = mappedFields.get(recordField)!;
     const isSectionComposition = fields.some(
       (field) => field.projectionMode === 'section-compose',
@@ -243,6 +284,23 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     field.id,
     dictionarySelections[field.id]?.value ?? fieldValues[field.id],
   ]));
+  // The template owns all requested IDs, including empty and excluded fields.
+  // A standard voice binding for the same ID must not repopulate an omitted field.
+  const targetIds = new Set([...input.request.targetFieldIds, ...(input.templateFieldIds ?? [])]);
+  const voiceBindValues = Object.fromEntries(
+    Object.entries(baseWritebackPayload?.emrFieldValues || {}).filter(([id]) => !targetIds.has(id)),
+  );
+  if ((input.reviewedRecord || input.voiceRecordValues) && baseWritebackPayload) {
+    // The ordinary voice builder may have expanded a short history into its default history form.
+    // Rebind only existing compatibility IDs for the selected dynamic sections.
+    const selected = new Set(projectedRecordFields);
+    const originalBindings = bindStandardSections(baseOutpatientRecord || {}, selected);
+    const reviewedBindings = bindStandardSections(projectedValues, selected);
+    for (const id of Object.keys(voiceBindValues)) {
+      if (Object.prototype.hasOwnProperty.call(reviewedBindings, id)) voiceBindValues[id] = reviewedBindings[id];
+      else if (Object.prototype.hasOwnProperty.call(originalBindings, id)) delete voiceBindValues[id];
+    }
+  }
 
   const result: OutpatientEmrRecordConfirmedPayload = {
     ...(baseWritebackPayload
@@ -299,7 +357,7 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     fieldValues,
     dictionarySelections,
     emrFieldValues: {
-      ...(baseWritebackPayload?.emrFieldValues || {}),
+      ...voiceBindValues,
       ...templateBindValues,
     },
     ...projectedCompatibilityValues,

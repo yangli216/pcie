@@ -478,7 +478,7 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     });
   });
 
-  it('keeps the sanitized template baseline and blocks submission after analysis failure', async () => {
+  it('keeps the sanitized template editable and submittable after model failure', async () => {
     const analysis = useOutpatientEmrAnalysis({
       analyzeFields: vi.fn().mockRejectedValue(new Error('JSON解析失败')),
       hashTemplate: vi.fn().mockResolvedValue('template-hash'),
@@ -490,7 +490,29 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
       personalHistory: '个人史基线',
       familyHistory: '家族史基线',
     });
-    expect(analysis.canSubmit.value).toBe(false);
+    expect(analysis.canSubmit.value).toBe(true);
+    analysis.updateFieldValue('familyHistory', '医生核对的家族史');
+    expect(analysis.buildConfirmedPayload()?.fieldValues.familyHistory).toBe('医生核对的家族史');
+  });
+
+  it('locks an early submission to the displayed draft through a late model response and HIS retry', async () => {
+    const model = deferred<Record<string, string>>();
+    const completeConsultation = vi.fn().mockResolvedValue(undefined);
+    const analysis = useOutpatientEmrAnalysis({ analyzeFields: () => model.promise, completeConsultation });
+    const generation = analysis.start(createRequest());
+    await vi.waitFor(() => expect(analysis.canSubmit.value).toBe(true));
+    expect(analysis.analysisStatus.value).toBe('analyzing');
+    analysis.updateFieldValue('personalHistory', '医生核对记录');
+    expect(await analysis.writeBack()).toBe(true);
+    expect(analysis.analysisStatus.value).toBe('draft');
+    expect(await analysis.writeBack()).toBe(false);
+    analysis.updateFieldValue('familyHistory', '保存中的编辑');
+    model.resolve({ personalHistory: '晚到值', familyHistory: '晚到的家族史' });
+    expect(await generation).toBe(false);
+    expect(analysis.fieldValues.value).toEqual({ personalHistory: '医生核对记录', familyHistory: '家族史基线' });
+    analysis.applyReferenceFeedback({ consultationId: 'VIS-001', requestId: 'REQ-001', status: 'failed' });
+    expect(await analysis.writeBack()).toBe(true);
+    expect(completeConsultation.mock.calls[1][0].fieldValues).toEqual(completeConsultation.mock.calls[0][0].fieldValues);
   });
 
   it('clears the previous template before reporting a replacement template error', async () => {
@@ -520,7 +542,7 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     expect(analysis.fieldValues.value).toEqual({});
   });
 
-  it('blocks every renderer-selected dictionary field regardless of local gender inference', async () => {
+  it('allows an unselected dictionary field without inferring marital status', async () => {
     const templateDefinition = JSON.stringify([{
       ID: 'article-marriage-history',
       NAME: '婚育史',
@@ -555,8 +577,9 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
       targetFieldIds: ['婚育状况'],
       patient: { sdSexText: '男性' },
     }))).resolves.toBe(true);
-    expect(analysis.canSubmit.value).toBe(false);
-    expect(analysis.dictionaryValidationMessage.value).toContain('婚育状况');
+    expect(analysis.canSubmit.value).toBe(true);
+    expect(analysis.dictionaryValidationMessage.value).toBe('');
+    expect(analysis.buildConfirmedPayload()?.fieldValues).toEqual({});
 
     analysis.updateFieldValue('婚育状况', '已婚已育');
     expect(analysis.canSubmit.value).toBe(true);
@@ -568,7 +591,7 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     }));
   });
 
-  it('requires an explicit model result even when the template has a valid default selection', async () => {
+  it('allows the doctor to leave a dictionary selection blank even when the template has a preset', async () => {
     const templateDefinition = JSON.stringify([{
       ID: 'article-past-history',
       NAME: '既往史',
@@ -601,10 +624,11 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
       templateDefinition,
       targetFieldIds: ['高血压病史标志'],
     }))).resolves.toBe(true);
+    analysis.updateFieldValue('高血压病史标志', '');
     expect(analysis.fieldValues.value).toEqual({ 高血压病史标志: '' });
     expect(analysis.analysisStatus.value).toBe('ready');
-    expect(analysis.canSubmit.value).toBe(false);
-    expect(analysis.dictionaryValidationMessage.value).toContain('尚未确定');
+    expect(analysis.canSubmit.value).toBe(true);
+    expect(analysis.dictionaryValidationMessage.value).toBe('');
 
     analysis.updateFieldValue('高血压病史标志', '否认');
     expect(analysis.canSubmit.value).toBe(true);

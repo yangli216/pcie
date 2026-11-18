@@ -41,6 +41,7 @@ type BridgeResult = Record<string, unknown>;
 type HttpPost = (path: string, payload: OutpatientRequest) => Promise<BridgeResult>;
 
 interface MedHermesInstance {
+  startVoice(patient: Record<string, unknown>): Promise<BridgeResult>;
   analyzeOutpatientEmr(request: OutpatientRequest): Promise<BridgeResult>;
   on(event: string, listener: (payload: unknown) => void): MedHermesInstance;
   destroy(): void;
@@ -130,6 +131,7 @@ function createConfirmedEnvelope(
       }],
     },
     fieldValues: { [request.targetFieldIds[0]]: '医生确认值' },
+    emrFieldValues: { [request.targetFieldIds[0]]: '医生确认值' },
     dictionarySelections: {},
     writebackScope: {
       recordFields: [],
@@ -211,6 +213,65 @@ describe('MedHermes outpatient EMR SDK flow', () => {
 
     expect(received).toEqual([payload]);
     expect(errors).toEqual([]);
+  });
+
+  it.each(['voice', 'standalone'])('accepts an authorized confirmed subset and rejects a foreign field on %s', async mode => {
+    const sdk = new (loadSdk())();
+    stubAcceptedBridge(sdk);
+    const request = createRequest({ targetFieldIds: ['history', 'omitted'] });
+    const { recordContext: _facts, visitId, ...template } = request;
+    const received = vi.fn();
+    const errors = vi.fn();
+    sdk.on('record-confirmed', received);
+    sdk.on('error', errors);
+    async function check(target: string, authorized: boolean) {
+      let pending;
+      if (mode === 'voice') await sdk.startVoice({ idPi: 'SYN-PI', idVis: visitId, outpatientEmr: template });
+      else pending = sdk.analyzeOutpatientEmr(request);
+      const envelope = createConfirmedEnvelope({ ...request, targetFieldIds: [target] });
+      if (mode === 'voice') envelope.event.payload.referenceMessage = '等待 HIS 完成动态模板及已选诊疗内容回写并回执';
+      const resolution = pending && (authorized ? expect(pending).resolves.toEqual(envelope.event.payload)
+        : expect(pending).rejects.toThrow('INVALID_OUTPATIENT_EMR_RESULT'));
+      sdk._dispatchEnvelope(envelope);
+      await resolution;
+    }
+    await check('history', true);
+    await check('SYN-FOREIGN', false);
+    expect(received).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['voice', 'standalone'])('accepts an empty template patch and rejects bindings for omitted fields on %s', async mode => {
+    const sdk = new (loadSdk())();
+    stubAcceptedBridge(sdk);
+    const request = createRequest();
+    const received = vi.fn();
+    const errors = vi.fn();
+    sdk.on('record-confirmed', received);
+    sdk.on('error', errors);
+    for (const leak of [false, true]) {
+      let pending;
+      if (mode === 'voice') {
+        const { visitId, recordContext: _facts, ...template } = request;
+        await sdk.startVoice({ idVis: visitId, idPi: 'SYN-PI', outpatientEmr: template });
+      } else pending = sdk.analyzeOutpatientEmr(request);
+      const envelope = createConfirmedEnvelope(request);
+      const payload = envelope.event.payload;
+      (payload.templateMetadata as { fields: unknown[] }).fields = [];
+      payload.fieldValues = {};
+      payload.emrFieldValues = leak ? { history: '未确认的历史值' } : {};
+      if (mode === 'voice') {
+        payload.referenceMessage = '等待 HIS 完成动态模板及已选诊疗内容回写并回执';
+        payload.diagList = [{ naDiag: '合成诊断' }];
+        payload.writebackScope = { recordFields: [], includeDiagnosis: true, orderTypes: [] };
+      }
+      const resolution = pending && (leak ? expect(pending).rejects.toThrow('INVALID_OUTPATIENT_EMR_RESULT')
+        : expect(pending).resolves.toEqual(payload));
+      sdk._dispatchEnvelope(envelope);
+      await resolution;
+    }
+    expect(received).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an unknown top-level request field before calling the bridge', async () => {

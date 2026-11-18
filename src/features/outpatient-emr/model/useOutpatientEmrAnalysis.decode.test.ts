@@ -134,6 +134,89 @@ describe('server-decoded outpatient template analysis', () => {
     expect(analysis.analysisErrorCode.value).toBe('REQUEST_ID_CONFLICT');
   });
 
+  it.each([
+    ['plain', false], ['plain', true], ['encoded', false], ['encoded', true],
+  ] as const)('sends valid fields and attributed partial evidence on %s input with cache hit %s', async (transport, hit) => {
+    const leaf = (ID: string, NAME: string, TEXT: string, extra: Record<string, unknown> = {}) =>
+      ({ ID, NAME, TYPE: 'text', READONLY: false, VALUE: '', TEXT, ...extra });
+    const leaves = [
+      leaf('lastVisit', '上次就诊时间', '上月初'),
+      leaf('drift', '病程补充', '结构定义：七天', { VALUE: 543.21 }),
+      leaf('hidden', '隐藏事实', '合成隐藏值'),
+      leaf('restricted', '患者姓名', '合成行政姓名'),
+      leaf('readOnly', '只读记录', '合成只读值', { READONLY: true }),
+      leaf('badDict', '测量分类', '合成预设值', { TYPE: 'select' }),
+      leaf('object', '症状描述', '结构可见文字', { VALUE: { idPi: '合成嵌套患者身份' } }),
+    ];
+    const fieldHtml = (id: string, name: string, value: string, attrs = '', type = 'text') =>
+      `<span data-id="${id}" data-type="${type}" data-name="${name}" data-readonly="false" ${attrs}>${value}</span>`;
+    const mixedHtml = '<section data-id="history" data-article="既往史" data-name="既往史">'
+      + fieldHtml('lastVisit', '上次就诊时间', '上月初')
+      + fieldHtml('drift', '病程补充', '页面：五天<span data-id="nested">合成他项身份</span>')
+      + fieldHtml('hidden', '隐藏事实', '合成隐藏值', 'hidden')
+      + fieldHtml('restricted', '病程文字', '合成行政姓名')
+      + fieldHtml('readOnly', '只读记录', '合成只读值')
+      + fieldHtml('badDict', '测量分类', '合成预设值', '', 'select')
+      + fieldHtml('object', '症状描述', '页面可见文字')
+      + '</section><section data-id="partial" data-article="其他" data-name="其他">'
+      + fieldHtml('partialLeaf', '补充', '章节页面记录') + '</section>';
+    const mixedDefinition = JSON.stringify([
+      { ID: 'history', NAME: ' 既往史 ', ARTICLE: '既往史', eles: leaves },
+      { ID: 'partial', NAME: '其他', eles: [leaf('partialLeaf', '补充', '章节结构记录')] },
+    ]);
+    const ids = [...leaves.map(item => item.ID), 'partialLeaf', 'unknown'];
+    const parsed = parseOutpatientEmrTemplate(mixedHtml, mixedDefinition, ids);
+    boundary.post.mockImplementation((path: string, body: Record<string, unknown>) => {
+      if (path === DECODE) return { ...decodedResponse(mixedHtml), templateDefinition: mixedDefinition };
+      if (path === RESOLVE && hit) return {
+        ...resolveResponse(body, true),
+        parseResult: { schemaVersion: 'outpatient-emr-template-pair.v1', fields: parsed.fields },
+      };
+      return fakeHttp(path, body);
+    });
+    const { analysis, model, complete } = setup();
+    model.mockResolvedValueOnce('{"lastVisit":"上月初"}');
+    const source = transport === 'plain'
+      ? { templateHtml: mixedHtml, templateDefinition: mixedDefinition }
+      : { templateHtml: `data:text/html;charset=utf-8;base64,${encode(mixedHtml)}`,
+          templateDefinition: `data:application/json;charset=utf-8;base64,${encode(mixedDefinition)}` };
+    await expect(analysis.start(encodedRequest({
+      ...source, targetFieldIds: ids, recordContext: { recordText: '合成病例原话' },
+    }))).resolves.toBe(true);
+    expect(boundary.post.mock.calls.some(([path]) => path === SNAPSHOT)).toBe(!hit);
+    expect(model).toHaveBeenCalledTimes(1);
+    analysis.updateFieldValue('lastVisit', '');
+    model.mockClear().mockResolvedValueOnce('{"lastVisit":"上月初"}');
+    await expect(analysis.retry()).resolves.toBe(true);
+    expect(model).toHaveBeenCalledTimes(1);
+    const [system, user] = model.mock.calls[0][0];
+    const received = JSON.parse(user.content.slice(user.content.indexOf('\n') + 1));
+    expect(system.content).toContain('doctorTemplateEdits');
+    expect(received.recordContext).toEqual({
+      recordText: '合成病例原话',
+      doctorTemplateEdits: [{
+        id: 'lastVisit', name: '上次就诊时间', recordField: 'pastMedicalHistory', articleName: '既往史', value: '', source: 'doctor',
+      }],
+    });
+    expect(received.template.fields).toEqual([expect.objectContaining({
+      id: 'lastVisit', topic: 'past-history', templateDraft: '上月初', articleDefinitionName: ' 既往史 ',
+    })]);
+    expect(received.templateSourceNotes).toEqual(expect.arrayContaining([
+      { fieldId: 'hidden', reason: 'hidden' },
+      { fieldId: 'drift', reason: 'unavailable', htmlText: '页面：五天', definitionValues: [{ name: '病程补充', text: '结构定义：七天', value: 543.21 }] },
+      { fieldId: 'partialLeaf', reason: 'unavailable', htmlText: '章节页面记录', definitionValues: [{ name: '补充', text: '章节结构记录', value: '' }] },
+      { fieldId: 'object', reason: 'unavailable', htmlText: '页面可见文字', definitionValues: [{ name: '症状描述', text: '结构可见文字' }] },
+      ...['restricted', 'badDict', 'readOnly', 'unknown'].map(fieldId => ({ fieldId, reason: 'unavailable' })),
+    ]));
+    for (const excluded of ['合成行政姓名', '合成嵌套患者身份', '合成隐藏值', '合成他项身份', '合成预设值', '合成只读值', 'SYN-PATIENT']) {
+      expect(user.content).not.toContain(excluded);
+    }
+    expect(complete).not.toHaveBeenCalled();
+    expect(analysis.fieldValues.value).toEqual({ lastVisit: '' });
+    await expect(analysis.writeBack()).resolves.toBe(true);
+    expect(complete.mock.calls[0][0].fieldValues).toEqual({ lastVisit: '' });
+  });
+
   it('adds no decoding request for an already plain template pair', async () => {
     const plain = encodedRequest({ templateHtml: html, templateDefinition: definition });
     const { analysis } = setup();

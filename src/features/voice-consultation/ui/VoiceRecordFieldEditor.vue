@@ -10,7 +10,11 @@ withDefaults(defineProps<{
   title: string;
   rows: number;
   placeholder: string;
+  emptyText?: string;
   grow?: boolean;
+  readonly?: boolean;
+  titleDescription?: string;
+  commitOnBlur?: boolean;
   presentation?: 'form' | 'document';
   factHighlights?: ClinicalRecordExplicitFact[];
   factSuggestions?: ClinicalRecordFactSuggestion[];
@@ -36,6 +40,7 @@ function handleInput(event: Event): void {
 <template>
   <div
     class="record-field"
+    :title="titleDescription"
     :class="{ 'field-grow': grow, 'record-field-document': presentation === 'document' }"
     :style="{ '--record-field-rows': String(rows) }"
   >
@@ -43,7 +48,10 @@ function handleInput(event: Event): void {
       <ClinicalRecordAnnotatedText
         :model-value="modelValue"
         :title="title"
+        :readonly="readonly"
+        :commit-on-blur="commitOnBlur"
         :placeholder="placeholder"
+        :empty-text="emptyText"
         :facts="factHighlights"
         :suggestions="factSuggestions"
         @update:model-value="emit('update:modelValue', $event)"
@@ -57,9 +65,12 @@ function handleInput(event: Event): void {
       </div>
       <textarea
         :value="modelValue"
+        :aria-label="title"
         :rows="rows"
+        :readonly="readonly"
         :placeholder="placeholder"
-        @input="handleInput"
+        @input="!commitOnBlur && handleInput($event)"
+        @change="commitOnBlur && handleInput($event)"
       ></textarea>
     </template>
   </div>

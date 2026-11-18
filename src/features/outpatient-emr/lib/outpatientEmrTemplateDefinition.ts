@@ -54,7 +54,7 @@ export class OutpatientEmrTemplateDefinitionError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
+export function isTemplateObject(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
@@ -157,7 +157,7 @@ function readDictionaryItems(
   const items: OutpatientEmrDictionaryItem[] = [];
   field.BINDINGDATA.forEach((value, index) => {
     const itemLocation = `${location}的第 ${index + 1} 个字典项`;
-    if (!isRecord(value)) {
+    if (!isTemplateObject(value)) {
       throw new OutpatientEmrTemplateDefinitionError(
         `${itemLocation}必须是对象。`,
         'INVALID_DICTIONARY_DEFINITION',
@@ -200,9 +200,7 @@ function readDictionaryItems(
   return items;
 }
 
-export function parseOutpatientEmrTemplateDefinition(
-  source: string,
-): OutpatientEmrTemplateDefinition {
+export function readOutpatientEmrChapters(source: string): unknown[] {
   if (typeof source !== 'string' || !source.trim()) {
     throw new OutpatientEmrTemplateDefinitionError('templateDefinition 必须是非空 JSON 字符串。');
   }
@@ -217,6 +215,13 @@ export function parseOutpatientEmrTemplateDefinition(
     throw new OutpatientEmrTemplateDefinitionError('结构化模板 JSON 顶层必须是章节数组。');
   }
 
+  return parsed;
+}
+
+export function parseOutpatientEmrTemplateDefinition(
+  source: string,
+): OutpatientEmrTemplateDefinition {
+  const parsed = readOutpatientEmrChapters(source);
   const articles: OutpatientEmrTemplateDefinitionArticle[] = [];
   const fields: OutpatientEmrTemplateDefinitionField[] = [];
   const imports: OutpatientEmrTemplateDefinitionImport[] = [];
@@ -225,13 +230,17 @@ export function parseOutpatientEmrTemplateDefinition(
 
   parsed.forEach((articleValue, articleIndex) => {
     const location = `结构化模板第 ${articleIndex + 1} 个章节`;
-    if (!isRecord(articleValue)) {
+    if (!isTemplateObject(articleValue)) {
       throw new OutpatientEmrTemplateDefinitionError(`${location}必须是对象。`);
     }
     const templateId = readRequiredExactString(articleValue, 'ID', location);
-    const name = readRequiredExactString(articleValue, 'NAME', location);
+    const name = articleValue.NAME;
+    if (typeof name !== 'string' || !name.trim()) {
+      throw new OutpatientEmrTemplateDefinitionError(`${location}的 NAME 必须是非空章节名称。`);
+    }
     const articleId = readRequiredExactString(articleValue, 'ARTICLE', location);
-    if (!Array.isArray(articleValue.eles)) {
+    const eles = articleValue.eles;
+    if (!Array.isArray(eles)) {
       throw new OutpatientEmrTemplateDefinitionError(`${location}的 eles 必须是数组。`);
     }
     if (articleIds.has(templateId)) {
@@ -241,9 +250,9 @@ export function parseOutpatientEmrTemplateDefinition(
     const recordField = readOptionalExactString(articleValue, 'RECORD_FIELD', location);
     articles.push({ templateId, articleId, name, ...(recordField ? { recordField } : {}) });
 
-    articleValue.eles.forEach((fieldValue, fieldIndex) => {
+    eles.forEach((fieldValue, fieldIndex) => {
       const fieldLocation = `${location}“${name}”的第 ${fieldIndex + 1} 个字段`;
-      if (!isRecord(fieldValue)) {
+      if (!isTemplateObject(fieldValue)) {
         throw new OutpatientEmrTemplateDefinitionError(`${fieldLocation}必须是对象。`);
       }
       const id = readRequiredExactString(fieldValue, 'ID', fieldLocation);

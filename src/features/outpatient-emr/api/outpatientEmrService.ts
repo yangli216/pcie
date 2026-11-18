@@ -1,5 +1,6 @@
 import { parseLLMJson } from '@features/clinical-result';
 import { chatFast, type ChatMessage } from '@/services/llm';
+import type { describeOutpatientEmrNarrative } from '../lib/outpatientEmrNarrative';
 import { OutpatientEmrError } from '../lib/outpatientEmrTemplate';
 import { normalizeOutpatientEmrModelValues } from '../lib/outpatientEmrWriteback';
 import {
@@ -9,6 +10,7 @@ import {
 import type {
   OutpatientEmrAnalysisRequest,
   OutpatientEmrTemplateField,
+  OutpatientEmrTemplateSourceNote,
 } from '../types';
 
 export type OutpatientEmrChatFast = typeof chatFast;
@@ -43,6 +45,9 @@ export function validateOutpatientEmrRecordContext(recordContext: Record<string,
 export function buildOutpatientEmrAnalysisMessages(input: {
   request: OutpatientEmrAnalysisRequest;
   fields: OutpatientEmrTemplateField[];
+  templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
+  templateNarrative?: ReturnType<typeof describeOutpatientEmrNarrative>;
+  reviewedSectionOnly?: boolean;
 }): ChatMessage[] {
   validateOutpatientEmrRecordContext(input.request.recordContext);
   return buildOutpatientEmrPromptMessages(input);
@@ -78,10 +83,13 @@ export async function analyzeOutpatientEmrFields(
   input: {
     request: OutpatientEmrAnalysisRequest;
     fields: OutpatientEmrTemplateField[];
+    templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
+    templateNarrative?: ReturnType<typeof describeOutpatientEmrNarrative>;
+    reviewedSectionOnly?: boolean;
     signal?: AbortSignal;
   },
   dependencies: OutpatientEmrAnalysisApiDependencies = {},
-): Promise<Record<string, string>> {
+): Promise<Record<string, string | null>> {
   const messages = buildOutpatientEmrAnalysisMessages(input);
   if (input.signal?.aborted) throw createAbortError();
 

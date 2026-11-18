@@ -2,6 +2,7 @@ import type {
   OutpatientEmrFieldValueSource,
   OutpatientEmrTemplateField,
 } from '../types';
+import { resolveOutpatientEmrUnmentionedDefault } from './outpatientEmrPromptGenerator';
 
 export interface OutpatientEmrDraftValue {
   value: string;
@@ -33,8 +34,12 @@ export function buildOutpatientEmrInitialDraft(
  */
 export function resolveOutpatientEmrModelDraft(
   field: OutpatientEmrTemplateField,
-  modelValue: string,
+  modelValue: string | null,
 ): OutpatientEmrDraftValue {
+  if (modelValue === null) {
+    const value = resolveOutpatientEmrUnmentionedDefault(field);
+    if (value !== undefined) return { value, source: 'unmentioned-default' };
+  }
   if (field.dictionaryItems.length > 0) {
     return modelValue ? { value: modelValue, source: 'ai' } : { value: '', source: 'empty' };
   }

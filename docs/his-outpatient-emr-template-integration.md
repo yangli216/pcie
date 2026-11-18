@@ -59,7 +59,9 @@ await mh.startVoice({ ...patient, idVis: currentVisitId, outpatientEmr });
 
 该方法也接受 `data` 本身，仅将 HIS 原始 Base64 内容封装为 `templateHtml="data:text/html;charset=utf-8;base64,..."` 与 `templateDefinition="data:application/json;charset=utf-8;base64,..."`，使用 `idTep/tepName` 作为模板身份；SDK 和 HIS 均不解码、不推断字段。桌面端把这一明确的双编码源通过带设备令牌和 ECDSA P-256 签名的 `POST /v1/client/outpatient-emr/templates/decode` 转发 PCIE Server，由服务端严格 Base64/UTF-8 解码；失败立即停止，不以旧格式或本地解码兜底。成功后按解码原文计算既有模板对 hash、校验字段、展示和生成；快照登记仍发送编码源，服务端按相同规则解码后校验 hash 和保存。已在 HIS 正式渲染器获取到解码原文的既有六字段调用保持有效。编码只接受上述两个完整前缀且必须成对，禁止单侧封装或其他 data URI。
 
-Base64 是可逆编码，不是加密。桌面端必须取得解码后的模板才能显示；解码响应也需要传输。远端传输保密依赖 HTTPS，ECDSA 签名保证身份与完整性，不能替代 TLS。本功能不改变部署 TLS 配置，也不把 HTTP 上的 Base64 表述为安全传输。两份源解码后各最多 1 MiB；本地两类门诊入口按独立 4 MiB JSON 请求上限接收 Base64 膨胀后的载荷（仍受总正文限制），不扩大其他 Bridge 入口。语音事实就绪后，病历详情直接展示和生成该模板，医生在同页编辑并一键合并回写。
+Base64 是可逆编码，不是加密。桌面端必须取得解码后的模板才能显示；解码响应也需要传输。远端传输保密依赖 HTTPS，ECDSA 签名保证身份与完整性，不能替代 TLS。本功能不改变部署 TLS 配置，也不把 HTTP 上的 Base64 表述为安全传输。两份源解码后各最多 1 MiB；本地两类门诊入口按独立 4 MiB JSON 请求上限接收 Base64 膨胀后的载荷（仍受总正文限制），不扩大其他 Bridge 入口。普通语音问诊在紧凑窗口内录音和核对转写，进入主界面后沿用原有的分段病历详情。PCIE 在后台解析模板。首次语音分析按本次模板的临床章节、授权字段和句式生成各章正文、AI 标注及白名单内的模板参数。章节从生成到确认都沿用源章节 ID、名称及顺序。医生在原病历编辑器中分别核对同名、自定义及映射到同一标准段的不同章节。HIS 按返回的标准段落和字段 ID 接收本次选择的正文与模板值。模板字段以首轮生成值及后续医生修订为准。仅实际可写且在本次 targetFieldIds 中的源字段可回填；兼容绑定与源字段 ID 相同也遵守此范围。
+
+同次就诊中，动态模板分析使用当前已选诊断、医嘱及其完整开立明细。医生对模板字段的修订（含清空字段及模板自定义段）会连同原有病例进入下一轮分析、重试或补充重生成。字段未填、字典值待选或存在冲突时，其余已编辑内容仍作为来源提交给模型；HIS 最终回写须由医生在原确认流程完成。本地未提交的语音结果与编辑快照按当前机构、租户、患者及就诊恢复；旧缓存只有在已有身份信息能对应本次患者时可复用。
 
 `outpatientEmr` 必须且只能包含上表六个模板字段；身份字符串不得带首尾空白。两份模板原文各自最多 1 MiB（UTF-8）。不要把整个定义对象直接传入 `templateDefinition`，也不要把模板放在 `startVoice` 的第二个参数。
 
@@ -170,7 +172,7 @@ const confirmed = await mh.analyzeOutpatientEmr(request);
 | 当前显示值 | `VALUE / TEXT` | 核对同一渲染快照的当前状态 |
 | 选择控件 | `BINDINGDATA[{VALUE,TEXT}]` | 合法字典编码和显示文字 |
 
-最小完整模板见 [template.html](examples/outpatient-emr/template.html) 和 [template.json](examples/outpatient-emr/template.json)。字典由 JSON 的 `BINDINGDATA` 提供。章节及字段 ID 必须唯一，目标必须能在模板对中准确配对；模板不匹配、重复 ID、隐藏或只读目标会拒绝任务。
+最小完整模板见 [template.html](examples/outpatient-emr/template.html) 和 [template.json](examples/outpatient-emr/template.json)。字典由 JSON 的 `BINDINGDATA` 提供。PCIE 逐项核对请求中的目标。可见、可写、两份来源配对唯一且映射明确的字段进入医生编辑与确认。单字段失配时，其余目标继续分析；可见临床原文和差异原因随 templateSourceNotes 提供给模型。隐藏值、行政身份与字典预设受原权限边界约束。
 
 **每次发起任务都传完整当前模板对。** PCIE 自动按机构、模板 ID 和模板对 hash 查询 / 登记解析快照；HIS 不需要另写上传快照或判断历史命中的调用。命中快照后仍按本次病例分析，不复用其他患者的病历结果。
 
@@ -314,8 +316,8 @@ SDK 已处理握手、WebSocket 连接、重连及事件分发。无需另写轮
 | `resultType / emrType` | 固定为 `record-confirmed / outpatient-emr` |
 | `referenceType / action / referenceStatus` | `batch / batch / pending`，表示等待 HIS 处理 |
 | `templateMetadata` | `schemaVersion + templateId + templateName + templateHash + fields[]` |
-| `templateMetadata.fields[]` | 当前目标字段的 ID、名称、类型、章节、字典项及可选标准投影映射 |
-| **`fieldValues`** | 开放 `字段 ID → 最终显示文本`，必须完整覆盖本次目标 |
+| `templateMetadata.fields[]` | 本次确认写入的模板字段，可为空数组；每项含 ID、名称、类型、章节、字典项及可选标准投影映射 |
+| **`fieldValues`** | 开放 `字段 ID → 最终显示文本`，键与本次确认字段 ID 完全一致 |
 | **`dictionarySelections`** | 字典字段的 `字段 ID → {value,text}` |
 | **`emrFieldValues`** | 开放 `字段 ID → 控件绑定值`；文本为文本，字典为编码 |
 | `outpatientRecord` | 可选标准病历投影；不代替按动态字段 ID 回填 |
@@ -349,13 +351,13 @@ SDK 已处理握手、WebSocket 连接、重连及事件分发。无需另写轮
 
 1. 从本地任务表按 `requestId` 找到发起时的患者、就诊、病历记录 ID、模板和编辑器版本；不能只看当前患者姓名。
 2. 在 HIS 保存事务内锁定同一记录并校验当前版本。核对 `visitId / consultationId / templateId / templateName / templateHash`，模板已换或内容已变则拒绝旧结果。
-3. 核对 `fieldValues` 与 `templateMetadata.fields` 的 ID **恰好等于**原 `targetFieldIds`；缺目标、未知目标、重复 ID 都失败。
+3. 以 `templateMetadata.fields` 列出的医生确认字段为本次回写范围。其 ID 必须唯一、属于原 `targetFieldIds`，且与 `fieldValues` 的键完全一致。未提供值或未确认的目标从元数据、显示值、字典选择和绑定值中一并省略，HIS 保留控件原值。医生显式清空文本时，该 ID 仍在字段表中，显示值和绑定值均为 `""`。确认字段可以为零，独立分析和语音合并均跳过动态字段写入；语音流程继续处理同批已选诊疗内容，按原请求回执一次。
 4. 从当前渲染器字段表建立 `Map<稳定字段ID, 控件>`，逐一匹配；复查可见、可写、AI 允许策略和控件类型。先生成完整绑定计划，全部通过后才写入。
 5. 普通文本 / 数字 / 日期控件使用该 ID 的最终值；字典控件使用 `dictionarySelections[id].value` 作为编码、`.text` 作为显示值，二者必须唯一命中本控件字典。
-6. 在同一个保存批次中处理范围内的标准病历、诊断和医嘱，确认所有目标实际写入后调用 HIS 保存。
+6. 在同一个保存批次中处理范围内的标准病历、诊断和医嘱，核对本批次确认字段的实际写入结果后调用 HIS 保存。
 7. 保存成功留存流水，再发送 2.5 的成功回执。
 
-PHIS 可用 `medEleDatabinds(result.emrFieldValues)` 绑定，但必须检查返回结果和最终控件值，不能忽略无法匹配的 key。若绑定器会静默忽略未识别字段，应在调用前按上述规则校验，调用后逐项核对。**少写一个目标也不能报整体成功。**
+PHIS 可用 `medEleDatabinds(result.emrFieldValues)` 绑定，但必须检查返回结果和最终控件值，不能忽略无法匹配的 key。若绑定器会静默忽略未识别字段，应在调用前按上述规则校验，调用后逐项核对。**以 HIS 对本批确认内容的实际保存结果回执。**
 
 [template-writeback.example.mjs](examples/outpatient-emr/template-writeback.example.mjs)给出可复用的目标校验和绑定计划函数，兼容语音合并与独立结果；不包含 HIS 的真实编辑器、保存事务或回执队列。开发者将计划交给自身渲染器执行，无需为“主诉”“吸烟史”写特例。
 
@@ -373,8 +375,10 @@ const plan = buildTemplateWritebackPlan({
 });
 // PHIS 绑定器示例：只取本次动态目标；兼容绑定及诊疗范围另按 scope 处理。
 const dynamicBindings = Object.fromEntries(plan.map((field) => [field.id, field.value]));
-await hisEditor.medEleDatabinds(dynamicBindings);
-await hisEditor.assertAppliedFields(plan); // 逐项核对实际文字与字典编码
+if (plan.length) {
+  await hisEditor.medEleDatabinds(dynamicBindings);
+  await hisEditor.assertAppliedFields(plan);
+}
 // 随后调用 HIS 自身的病历保存；提交成功后才执行 2.5 回执。
 ```
 
@@ -445,8 +449,8 @@ async function handleTemplateWriteback(event) {
 
 | 入口 | 动态模板字段 | 标准病历、诊断、医嘱 |
 | --- | --- | --- |
-| 1.1 语音一体化 | 按上传的目标字段回填 | 保留医生已选 `writebackScope`；同批处理实际出现的 `outpatientRecord / diagList / orderList` |
-| 1.2 独立分析 | 按上传的目标字段回填 | 标准投影可选；`includeDiagnosis=false`、`orderTypes=[]`、`orderList=[]`，没有诊断医嘱合并 |
+| 1.1 语音一体化 | 按本次确认字段回填 | 保留医生已选 `writebackScope`；同批处理实际出现的 `outpatientRecord / diagList / orderList` |
+| 1.2 独立分析 | 按本次确认字段回填 | 标准投影可选；`includeDiagnosis=false`、`orderTypes=[]`、`orderList=[]`，没有诊断医嘱合并 |
 
 `orderList=[]` 与字段省略均不能解释为“清空 HIS 原内容”。语音结果的兼容绑定项与动态模板目标分开校验，不能因兼容项无法匹配而跳过动态目标，或将兼容项误算为越界动态字段；兼容绑定只允许写入本次已选标准范围。
 

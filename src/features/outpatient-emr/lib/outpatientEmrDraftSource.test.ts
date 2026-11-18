@@ -62,4 +62,27 @@ describe('outpatient EMR draft provenance', () => {
     expect(resolveOutpatientEmrModelDraft(dictionaryField, '')).toEqual({ value: '', source: 'empty' });
     expect(resolveOutpatientEmrModelDraft(dictionaryField, '有')).toEqual({ value: '有', source: 'ai' });
   });
+
+  it('defaults only when the model distinguishes an unmentioned field from an unresolved one', () => {
+    expect(resolveOutpatientEmrModelDraft(dictionaryField, null)).toEqual({ value: '否认', source: 'unmentioned-default' });
+    expect(resolveOutpatientEmrModelDraft(dictionaryField, '')).toEqual({ value: '', source: 'empty' });
+    expect(resolveOutpatientEmrModelDraft(dictionaryField, '否认')).toEqual({ value: '否认', source: 'ai' });
+    const ambiguous = field({ ...dictionaryField, dictionaryItems: [
+      { value: 'A', text: '正常' }, { value: 'B', text: '如常' },
+    ] });
+    expect(resolveOutpatientEmrModelDraft(ambiguous, null)).toEqual({ value: '', source: 'empty' });
+    const pregnancy = field({ ...dictionaryField, id: 'pregnant', name: '怀孕标志' });
+    expect(resolveOutpatientEmrModelDraft(pregnancy, null)).toEqual({ value: '', source: 'empty' });
+    const exam = field({ ...dictionaryField, id: '过敏反应', name: '过敏反应', recordField: 'physicalExam' });
+    expect(resolveOutpatientEmrModelDraft(exam, null)).toEqual({ value: '', source: 'empty' });
+  });
+
+  it('defaults whole history narratives while retaining presets and leaving details and measurements empty', () => {
+    const emptyHistory = field({ id: 'history', name: '家族史文本', recordField: 'familyHistory', baselineValue: '' });
+    expect(resolveOutpatientEmrModelDraft(emptyHistory, null)).toEqual({ value: '无', source: 'unmentioned-default' });
+    expect(resolveOutpatientEmrModelDraft(field(), null)).toEqual({ value: '否认吸烟史。', source: 'template' });
+    for (const name of ['家族史补充', '治疗日期', '身高']) {
+      expect(resolveOutpatientEmrModelDraft({ ...emptyHistory, name }, null)).toEqual({ value: '', source: 'empty' });
+    }
+  });
 });

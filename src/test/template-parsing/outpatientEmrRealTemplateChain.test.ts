@@ -140,18 +140,21 @@ describe('outpatient EMR real-template chain (Fake model)', () => {
     expect(analysis.fieldValueSources.value['就诊时间']).toBe('template');
     expect(analysis.fieldValues.value['高血压病史标志']).toBe('有');
     expect(analysis.fieldValueSources.value['主诉文本']).toBe('ai');
-    // 未提及的字典字段保持空待选，不回退模板当前“否认/清楚”。
+    // 模型返回空串表示无法确定，允许医生选填，回写保留其余控件的 HIS 原值。
     expect(analysis.fieldValues.value['吸烟史标志']).toBe('');
     expect(analysis.fieldValues.value['意识']).toBe('');
-    expect(analysis.canSubmit.value).toBe(false);
+    expect(analysis.canSubmit.value).toBe(true);
 
     analysis.updateFieldValue('吸烟史标志', '有');
-    analysis.updateFieldValue('意识', '清楚');
-    expect(analysis.canSubmit.value).toBe(true);
     await expect(analysis.writeBack()).resolves.toBe(true);
 
     expect(captured).toHaveLength(1);
     const result = captured[0];
+    expect(result.dictionarySelections['吸烟史标志']).toEqual({ value: '1', text: '有' });
+    expect(result.fieldValues).not.toHaveProperty('意识');
+    expect(result.emrFieldValues).not.toHaveProperty('意识');
+    expect(result.dictionarySelections).not.toHaveProperty('意识');
+    expect(result.templateMetadata.fields.map(field => field.id)).not.toContain('意识');
     expect(result.dictionarySelections['高血压病史标志']).toEqual({ value: '1', text: '有' });
     expect(result.emrFieldValues['高血压病史标志']).toBe('1');
     expect(result.fieldValues['体温']).toBe('36.8');

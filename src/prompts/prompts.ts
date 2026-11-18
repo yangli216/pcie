@@ -112,6 +112,9 @@ export interface VoiceRecommendationPlan {
 }
 
 export interface VoiceRecordDraft {
+  /** Optional data in record_extra when an HIS template is bound to the current voice round. */
+  templateFieldValues?: unknown;
+  templateChapterTexts?: Record<string, string>;
   chiefComplaint: string;
   historyOfPresentIllness: string;
   pastMedicalHistory: string;
@@ -219,6 +222,7 @@ export interface VoiceExtractionResult {
   recommendationPlan?: VoiceRecommendationPlan;
   /** 同次生成的病历候选阴性 / 正常表述，客户端统一质控后写入草稿。 */
   recordFactSuggestions?: Array<{
+    chapterId?: string;
     field?: 'historyOfPresentIllness' | 'pastMedicalHistory' | 'personalHistory' | 'familyHistory' | 'physicalExam';
     question?: string;
     negativeRecordText?: string;

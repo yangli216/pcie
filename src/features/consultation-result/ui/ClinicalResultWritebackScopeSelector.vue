@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { Icon } from '@iconify/vue';
-import type { RecordConfirmedWritebackField } from '@features/clinical-result';
 import type { WritebackScopeRecordFieldOption } from '../model/useClinicalResultWritebackScope';
 
 const props = defineProps<{
@@ -34,7 +33,7 @@ const emit = defineEmits<{
   (event: 'toggle-all'): void;
   (event: 'toggle-record-group'): void;
   (event: 'toggle-record-expanded'): void;
-  (event: 'toggle-record-field', field: RecordConfirmedWritebackField): void;
+  (event: 'toggle-record-field', field: string): void;
   (event: 'toggle-diagnosis'): void;
   (event: 'toggle-medicine'): void;
   (event: 'toggle-clinical-orders'): void;
@@ -210,6 +209,8 @@ onBeforeUnmount(() => {
           </span>
         </button>
       </div>
+
+      <slot />
 
       <p v-if="partialSelection" class="writeback-scope-partial-note">
         本次仅更新已选内容，未选内容保持 HIS 原值。

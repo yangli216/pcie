@@ -197,6 +197,7 @@ function buildOrderFacts(value: unknown): Array<Record<string, string | number>>
 
 export function buildVoiceOutpatientEmrRecordContext(
   payload: OutpatientEmrPreparedWritebackPayload,
+  selection?: { diagnoses: Record<string, unknown>[]; orders: Record<string, unknown>[] },
 ): OutpatientEmrRecordContext {
   const sourceRecord: Record<string, unknown> = isRecord(payload.outpatientRecord)
     ? payload.outpatientRecord
@@ -208,8 +209,8 @@ export function buildVoiceOutpatientEmrRecordContext(
   const recordText = Object.entries(sections)
     .map(([field, value]) => `${RECORD_FIELD_LABELS[field]}：${value}`)
     .join('\n');
-  const diagnoses = buildDiagnosisFacts(payload.diagList);
-  const orders = buildOrderFacts(payload.orderList);
+  const diagnoses = selection?.diagnoses ?? buildDiagnosisFacts(payload.diagList);
+  const orders = selection?.orders ?? buildOrderFacts(payload.orderList);
   const treatmentPlan = readText(payload.treatmentPlan);
   const structuredEvidence = collectOutpatientEmrStructuredEvidence(payload);
 

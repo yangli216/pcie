@@ -103,6 +103,8 @@ describe('buildOutpatientEmrAnalysisMessages', () => {
     const prompt = messages.map((message) => message.content).join('\n');
 
     expect(prompt).toContain('"dictionaryItems":[{"value":"0","text":"否认"}');
+    expect(prompt).toContain('"unmentionedDefault":"否认"');
+    expect(prompt).toContain('返回 JSON null');
     expect(prompt).not.toContain('"baselineValue":"否认"');
     expect(prompt).not.toContain('"baselineDictionaryValue":"0"');
   });
@@ -245,12 +247,17 @@ describe('analyzeOutpatientEmrFields', () => {
       过敏史标志: '',
     });
 
+    chat.mockResolvedValueOnce(JSON.stringify({ 过敏史标志: null }));
+    await expect(analyzeOutpatientEmrFields(
+      { request, fields: dictionaryFields }, { chatFast: chat },
+    )).resolves.toEqual({ 高血压病史标志: '', 过敏史标志: null });
+
     chat.mockResolvedValueOnce(JSON.stringify({
       高血压病史标志: '有',
     }));
     await expect(analyzeOutpatientEmrFields(
       { request, fields: dictionaryFields },
       { chatFast: chat },
-    )).rejects.toThrowError(/缺少字典字段 过敏史标志/);
+    )).resolves.toEqual({ 高血压病史标志: '有', 过敏史标志: '' });
   });
 });

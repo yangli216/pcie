@@ -1,73 +1,93 @@
 <script setup lang="ts">
-import type {
-  OutpatientEmrAnalysisStatus,
-  OutpatientEmrFieldValueSource,
-  OutpatientEmrTemplateField,
-  OutpatientEmrTemplateParseResult,
-} from '../types';
-import OutpatientEmrTemplatePreview from './OutpatientEmrTemplatePreview.vue';
+import { computed } from 'vue';
+import type { ClinicalRecordExplicitFact, ClinicalRecordFactSuggestion } from '@features/clinical-result';
+import VoiceRecordFieldEditor from '@features/voice-consultation/ui/VoiceRecordFieldEditor.vue';
+import { resolveOutpatientEmrFinalDictionaryItem } from '../lib/outpatientEmrDictionary';
+import { OUTPATIENT_EMR_FIELD_CONFLICT_LABEL, OUTPATIENT_EMR_FIELD_SOURCE_LABELS } from '../lib/outpatientEmrTemplate';
+import type { OutpatientEmrFieldValueSource, OutpatientEmrTemplateField } from '../types';
 
-withDefaults(defineProps<{
-  templateName: string;
-  template: OutpatientEmrTemplateParseResult | null;
-  fields: OutpatientEmrTemplateField[];
-  values: Record<string, string>;
-  sources: Record<string, OutpatientEmrFieldValueSource>;
-  status: OutpatientEmrAnalysisStatus;
-  errorCode?: string;
-  errorMessage?: string;
-  validationMessage?: string;
-  conflictFieldIds?: ReadonlySet<string>;
+const props = withDefaults(defineProps<{
+  field: OutpatientEmrTemplateField;
+  title: string;
+  value: string;
+  source?: OutpatientEmrFieldValueSource;
   editable?: boolean;
-  canRetry?: boolean;
-}>(), {
-  errorCode: '',
-  errorMessage: '',
-  validationMessage: '',
-  conflictFieldIds: () => new Set<string>(),
-  editable: true,
-  canRetry: false,
-});
+  conflict?: boolean;
+  presentation?: 'form' | 'document';
+  factHighlights?: ClinicalRecordExplicitFact[];
+  factSuggestions?: ClinicalRecordFactSuggestion[];
+}>(), { editable: true, presentation: 'document' });
 
 const emit = defineEmits<{
   'update-field': [fieldId: string, value: string];
-  retry: [];
+  'dismiss-fact-suggestion': [id: string];
 }>();
+
+const sourceDescription = computed(() => props.conflict
+  ? OUTPATIENT_EMR_FIELD_CONFLICT_LABEL
+  : props.source && OUTPATIENT_EMR_FIELD_SOURCE_LABELS[props.source]);
+const dictionaryItem = computed(() => resolveOutpatientEmrFinalDictionaryItem(props.field, props.value));
+const dictionaryText = computed(() => dictionaryItem.value?.text ?? props.value);
+
+function update(value: string): void {
+  if (props.editable) emit('update-field', props.field.id, value);
+}
 </script>
 
 <template>
-  <div class="voice-template-record" :aria-busy="status === 'analyzing'">
-    <div class="template-source">当前门诊模板：{{ templateName }}</div>
-    <p v-if="status === 'idle'" class="template-status" role="status">
-      正在等待本次语音病历，完成后按当前模板生成。
-    </p>
-    <p v-else-if="status === 'analyzing'" class="template-status" role="status">
-      正在按当前门诊模板生成病历，请稍候……
-    </p>
-    <div v-else-if="status === 'error'" class="template-error" role="alert">
-      <span>{{ errorMessage || errorCode || '当前模板病历生成失败，请重试。' }}</span>
-      <button v-if="canRetry" class="template-retry" type="button" @click="emit('retry')">
-        重新生成模板病历
-      </button>
+  <div
+    class="outpatient-record-field"
+    :data-outpatient-emr-field-id="field.id"
+    :data-outpatient-emr-source="source"
+    :aria-invalid="conflict || undefined"
+    :title="sourceDescription"
+  >
+    <div v-if="field.dictionaryItems.length" class="record-field record-field-document">
+      <label class="dictionary-line">
+        <strong>{{ title }}：</strong>
+        <span class="dictionary-value">
+          <select
+            :aria-label="title"
+            :disabled="!editable"
+            :value="dictionaryText"
+            @change="update(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">未选择</option>
+            <option v-if="dictionaryText && !dictionaryItem" :value="dictionaryText" disabled>
+              {{ dictionaryText }}
+            </option>
+            <option v-for="item in field.dictionaryItems" :key="item.text" :value="item.text">{{ item.text }}</option>
+          </select>
+          <span aria-hidden="true">{{ dictionaryText || '未选择' }}</span>
+        </span>
+      </label>
     </div>
-    <p v-if="validationMessage" class="template-error" role="alert">{{ validationMessage }}</p>
-    <OutpatientEmrTemplatePreview
-      v-if="template"
-      :sanitized-html="template.sanitizedHtml"
-      :fields="fields"
-      :field-values="values"
-      :field-sources="sources"
-      :conflict-field-ids="conflictFieldIds"
-      :editable="editable"
-      @update-field="(fieldId, value) => emit('update-field', fieldId, value)"
+    <VoiceRecordFieldEditor
+      v-else
+      :model-value="value"
+      :title="title"
+      :placeholder="`请输入${title}...`"
+      :rows="2"
+      :presentation="presentation"
+      :commit-on-blur="presentation === 'form'"
+      :readonly="!editable"
+      :fact-highlights="factHighlights"
+      :fact-suggestions="factSuggestions"
+      @update:model-value="update"
+      @dismiss-fact-suggestion="emit('dismiss-fact-suggestion', $event)"
     />
   </div>
 </template>
 
 <style scoped>
-.voice-template-record { display: grid; gap: 12px; min-width: 0; }
-.template-source { color: var(--text-secondary, #64748b); font-size: 13px; }
-.template-status { margin: 0; color: var(--text-secondary, #64748b); line-height: 1.6; }
-.template-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; color: #b91c1c; line-height: 1.6; }
-.template-retry { padding: 5px 10px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.dictionary-line { color: var(--voice-text); font-size: 15px; line-height: 1.75; }
+.dictionary-value { display: inline-block; position: relative; max-width: 100%; border-bottom: var(--field-underline, 1px dashed currentColor); }
+.dictionary-value select { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; padding: 0; opacity: 0; font: inherit; cursor: pointer; }
+.dictionary-value select:disabled { cursor: default; }
+.dictionary-value:focus-within { outline: 2px solid var(--voice-accent); outline-offset: 2px; }
+.outpatient-record-field[data-outpatient-emr-source="template"] { --field-underline: 1px dashed #b7791f; }
+.outpatient-record-field[data-outpatient-emr-source="template-matched"] { --field-underline: 1px solid #b7791f; }
+.outpatient-record-field[data-outpatient-emr-source="unmentioned-default"] { --field-underline: 1px dotted currentColor; }
+.outpatient-record-field :deep(.clinical-record-line > span:not(.clinical-record-placeholder)) { border-bottom: var(--field-underline); }
+.outpatient-record-field[aria-invalid="true"] { outline: 1px solid var(--voice-danger, #b52f2f); border-radius: 3px; }
 </style>

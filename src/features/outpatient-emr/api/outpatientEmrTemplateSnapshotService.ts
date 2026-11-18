@@ -228,6 +228,9 @@ function parseSnapshotField(value: unknown, index: number): OutpatientEmrTemplat
       throw new Error(`${path} 已映射字段的映射状态不一致。`);
     }
   }
+  if (typeof record.articleDefinitionName !== 'string' || !record.articleDefinitionName.trim()) {
+    throw new Error(`${path}.articleDefinitionName 必须是非空章节名称。`);
+  }
   return {
     id: requireString(record, 'id', path),
     name: requireString(record, 'name', path),
@@ -235,7 +238,7 @@ function parseSnapshotField(value: unknown, index: number): OutpatientEmrTemplat
     articleTemplateId: requireString(record, 'articleTemplateId', path),
     articleId: requireString(record, 'articleId', path),
     articleName: requireString(record, 'articleName', path),
-    articleDefinitionName: requireString(record, 'articleDefinitionName', path),
+    articleDefinitionName: record.articleDefinitionName,
     readonly: requireBoolean(record, 'readonly', path),
     aiSuitable: requireBoolean(record, 'aiSuitable', path),
     baselineValue: requireString(record, 'baselineValue', path, true),
@@ -255,10 +258,29 @@ function parseSnapshot(value: unknown): OutpatientEmrTemplateParseSnapshot {
   if (!Array.isArray(record.fields) || record.fields.length === 0) {
     throw new Error('parseResult.fields 必须是非空数组。');
   }
-  const fields = record.fields.map(parseSnapshotField);
-  if (new Set(fields.map((field) => field.id)).size !== fields.length) {
-    throw new Error('parseResult.fields 存在重复字段 ID。');
-  }
+  const byId = new Map<string, OutpatientEmrTemplateField>();
+  const seen = new Set<string>();
+  let firstIssue: Error | undefined;
+  record.fields.forEach((item: unknown, index: number) => {
+    const id = item && typeof item === 'object' && 'id' in item ? item.id : undefined;
+    if (typeof id === 'string') {
+      if (seen.has(id)) {
+        byId.delete(id);
+        firstIssue ??= new Error('parseResult.fields 存在重复字段 ID。');
+        return;
+      }
+      seen.add(id);
+    }
+    try {
+      const field = parseSnapshotField(item, index);
+      byId.set(field.id, field);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      firstIssue ??= error;
+    }
+  });
+  const fields = Array.from(byId.values());
+  if (!fields.length) throw firstIssue || new Error('parseResult.fields 没有可识别的字段。');
   return { schemaVersion: PARSE_SCHEMA, fields };
 }
 

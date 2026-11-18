@@ -172,36 +172,36 @@ describe('parseOutpatientEmrTemplate template pair', () => {
     ), 'INVALID_TARGET_FIELD_IDS');
   });
 
-  it('allows definition-only import actions but rejects an unmatched HTML action', () => {
+  it('isolates unmatched import actions from the paired clinical targets', () => {
     expect(() => parseOutpatientEmrTemplate(
       html.replace('<span data-id="action-visible" data-type="import">导入</span>', ''),
       definition,
       ['肝炎史补充'],
     )).not.toThrow();
 
-    expectOutpatientError(() => parseOutpatientEmrTemplate(
-      html.replace('action-visible', 'unknown-action'),
-      definition,
-      ['肝炎史补充'],
-    ), 'TEMPLATE_PAIR_MISMATCH');
+    const result = parseOutpatientEmrTemplate(html.replace('action-visible', 'unknown-action'), definition, ['肝炎史补充']);
+    expect(result.targetFields.map(field => field.id)).toEqual(['肝炎史补充']);
   });
 
   it.each([
     ['missing HTML field', html.replace(/<span\s+data-id="肝炎史补充"[\s\S]*?<\/span><\/span>/, '')],
+    ['field name mismatch', html.replace('data-name="肝炎史补充"', 'data-name="其他名称"')],
+  ])('rejects an unpairable sole target: %s', (_label, changedHtml) => {
+    expectOutpatientError(() => parseOutpatientEmrTemplate(changedHtml, definition, ['肝炎史补充']), 'TEMPLATE_PAIR_MISMATCH');
+  });
+
+  it.each([
     ['extra HTML field', html.replace(
       '</section>',
       '<span data-id="extra" data-name="extra" data-type="text" data-readonly="false"></span></section>',
     )],
-    ['field name mismatch', html.replace('data-name="肝炎史补充"', 'data-name="其他名称"')],
     ['field type mismatch', html.replace('data-type="select"', 'data-type="radio"')],
     ['field readonly mismatch', html.replace('data-readonly="false"', 'data-readonly="true"')],
     ['field value mismatch', html.replace('上呼吸道感染', '肺炎')],
     ['article id mismatch', html.replace('data-article="门急诊诊断"', 'data-article="诊断"')],
-  ])('rejects pair mismatch: %s', (_label, changedHtml) => {
-    expectOutpatientError(
-      () => parseOutpatientEmrTemplate(changedHtml, definition, ['肝炎史补充']),
-      'TEMPLATE_PAIR_MISMATCH',
-    );
+  ])('retains a paired target alongside an independent %s', (_label, changedHtml) => {
+    const result = parseOutpatientEmrTemplate(changedHtml, definition, ['肝炎史补充']);
+    expect(result.targetFields.map(field => field.id)).toEqual(['肝炎史补充']);
   });
 
   it('rejects dictionary VALUE/TEXT that do not resolve to one defined item', () => {

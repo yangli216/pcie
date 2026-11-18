@@ -28,16 +28,17 @@ describe('outpatient EMR dictionary resolution', () => {
     ])).toContain('无法唯一匹配');
   });
 
-  it('reports a missing or invalid final selection for every returned dictionary field', () => {
+  it('allows empty dictionary fields and reports a supplied illegal selection', () => {
     const fields = [{
       id: '肝炎史标志',
       name: '肝炎史标志',
       dictionaryItems: items,
     }];
-    expect(findInvalidOutpatientEmrDictionaryValue(fields, {})).toEqual({
+    expect(findInvalidOutpatientEmrDictionaryValue(fields, {})).toBeNull();
+    expect(findInvalidOutpatientEmrDictionaryValue(fields, { 肝炎史标志: '未定义选项' })).toEqual({
       fieldId: '肝炎史标志',
       fieldName: '肝炎史标志',
-      value: '',
+      value: '未定义选项',
     });
     expect(findInvalidOutpatientEmrDictionaryValue(fields, {
       肝炎史标志: '有',

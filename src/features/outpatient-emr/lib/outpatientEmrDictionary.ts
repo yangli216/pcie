@@ -68,7 +68,7 @@ export function findInvalidOutpatientEmrDictionaryValue(
   for (const field of fields) {
     if (field.dictionaryItems.length === 0) continue;
     const value = fieldValues[field.id] || '';
-    if (!resolveOutpatientEmrFinalDictionaryItem(field, value)) {
+    if (value.trim() && !resolveOutpatientEmrFinalDictionaryItem(field, value)) {
       return {
         fieldId: field.id,
         fieldName: field.name,

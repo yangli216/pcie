@@ -6,7 +6,7 @@ import type {
 } from '@/prompts';
 import type { ClinicalResultGenerationSection } from '@features/clinical-result';
 
-export type VoiceIntentStreamEventName = ClinicalResultGenerationSection | 'done';
+export type VoiceIntentStreamEventName = ClinicalResultGenerationSection | 'template_chapter' | 'done';
 
 export interface VoiceIntentStreamEvent {
   event: VoiceIntentStreamEventName;
@@ -15,6 +15,7 @@ export interface VoiceIntentStreamEvent {
 
 const EVENT_NAMES = new Set<VoiceIntentStreamEventName>([
   'record_core',
+  'template_chapter',
   'history_context',
   'record_suggestions',
   'explicit_orders',
@@ -263,13 +264,23 @@ export function applyVoiceIntentStreamEvent(
   const recordDraft = accumulator.payload.recordDraft!;
 
   switch (event.event) {
-    case 'record_core':
-      if (isObject(event.data)) Object.assign(recordDraft, event.data);
-      markReady(accumulator, 'record_core');
+    case 'template_chapter':
+      if (isObject(event.data) && typeof event.data.chapterId === 'string' && typeof event.data.text === 'string') {
+        recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, [event.data.chapterId]: event.data.text };
+      }
       break;
+    case 'record_core':
     case 'history_context':
-      if (isObject(event.data)) Object.assign(recordDraft, event.data);
-      markReady(accumulator, 'history_context');
+    case 'record_extra':
+      if (isObject(event.data)) {
+        const { templateChapterTexts, ...values } = event.data;
+        Object.assign(recordDraft, values);
+        if (isObject(templateChapterTexts)) {
+          const texts = Object.entries(templateChapterTexts).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+          recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, ...Object.fromEntries(texts) };
+        }
+      }
+      markReady(accumulator, event.event);
       break;
     case 'record_suggestions':
       accumulator.payload.recordFactSuggestions = Array.isArray(event.data)
@@ -296,10 +307,6 @@ export function applyVoiceIntentStreamEvent(
         accumulator.payload.recommendationPlan = event.data as unknown as VoiceRecommendationPlan;
       }
       markReady(accumulator, 'recommendation_plan');
-      break;
-    case 'record_extra':
-      if (isObject(event.data)) Object.assign(recordDraft, event.data);
-      markReady(accumulator, 'record_extra');
       break;
     case 'done':
       if (isObject(event.data)) {

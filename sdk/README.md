@@ -353,7 +353,7 @@ await mh.startConsultation({
 
 启动语音问诊。`patient` 可选，不传则沿用桌面端当前上下文。
 
-若 HIS 已在医生站中选中门急诊动态模板，可在患者对象中附加严格的 `outpatientEmr` 模板规格；此模式必须同时传 `idVis`。语音事实就绪后在病历详情直接按模板生成和编辑，医生完成诊断、治疗与模板字段核对后，最终只产生一条合并 `record-confirmed`：
+若 HIS 已在医生站中选中门急诊动态模板，可在患者对象中附加严格的 `outpatientEmr` 模板规格；此模式必须同时传 `idVis`。首次语音分析在同一条流按源模板临床章节生成正文、AI 标注及 HIS 模板参数。结果页沿用原病历的段落编辑器，相同标题的章节通过各自的源章节 ID 保持独立。语音结果页持续展示这份主病历。医生核对和编辑正文、选择本次病历与诊疗回写范围后，只产生一条合并 `record-confirmed`：
 
 下例 `templateSnapshot` 由 HIS 当前编辑器导出，不是 SDK 自带对象。白云 HI-EMR 4.1.0 的实际组件路径、`getXmlContent()` / `getHtmlContent()` 用法和采集函数见 [模板获取说明](../docs/his-outpatient-emr-template-integration.md#hiemr41-capture)；不要把示意 getter 名当成该编辑器已有 API。
 
@@ -375,7 +375,7 @@ await mh.startVoice({
 });
 ```
 
-`outpatientEmr` 只接受上例六个字段；身份和目标字段 ID 不修剪、不去重，模板两份原文不会进入联调日志。独立 `analyzeOutpatientEmr()` 仍只处理模板字段，不合并诊断和医嘱。
+`outpatientEmr` 只接受上例六个字段；身份和目标字段 ID 不修剪、不去重，模板两份原文不会进入联调日志。独立 `analyzeOutpatientEmr()` 只处理模板字段。回参中的 `templateMetadata.fields` 与 `fieldValues` 一一对应，均须属于发起时的目标范围。HIS 只绑定实际确认的字段。省略的目标保留原值，医生显式清空的文本以空字符串回写。确认字段可以为空，此时两类入口均跳过动态模板绑定，语音合并继续处理已选诊疗内容，整批仍回执一次。
 
 #### `interpretReport(request): Promise`
 
@@ -513,7 +513,7 @@ await mh.sendFeedback(record.requestId, 'success', 'HIS 已成功回填门诊病
 
 门诊 `record-confirmed/cancelled` 业务订阅只接收自身身份及固定回参结构完整的 payload；不完整事件会报告协议错误，不会先交给订阅回调再由 Promise 拒绝。
 
-`visitId / templateId / templateName / templateHtml / templateDefinition / targetFieldIds / recordContext / requestId` 必填，`patient` 可选；请求及 `patient` 只接受文档化字段。`templateHtml` 是模板自带渲染器输出的当前实例，`templateDefinition` 是同一模板的顶层章节 JSON 定义，二者必须同时提供，旧 `htmlContent / templateSource / sourceFormat` 不再接受。SDK 不按文件名判断，也不把二者当作可选格式。解析器按章节 `ID + ARTICLE` 和字段 `ID` 严格配对；字段所属章节由最近的 `data-article` 祖先确定，所有非 `TYPE=import` 字段的类型、名称、只读状态、所属章节和当前显示值必须一致，渲染章节名与定义章节名可不同并分别保留。字典只读取定义中的 `BINDINGDATA[].VALUE/TEXT`，HTML 字典属性不再作为输入；`VALUE/TEXT` 归一化后同时为空的首项仅作为“请选择”占位排除，其余字典项仍严格禁止首尾空白。`targetFieldIds` 必须由 HIS 渲染器执行联动规则后生成，且至少包含一个当前实际显示、可写并需要 AI 分析的字段；全医慧助不执行模板脚本或扩充范围。模板当前字典选择不会成为本次结果；模型必须逐个返回生效字典字段，漏 key 时本次分析失败，显式空字符串或无法匹配时留空让医生选择。相同 `requestId` 只有在 `visitId / templateId / templateName / 原始 templateHtml / 原始 templateDefinition / targetFieldIds 集合 / patient / recordContext` 全部相同时才复用同一 Promise；任一输入变化都以 `REQUEST_ID_CONFLICT` 拒绝。模板对 hash 计算方式和完整字段约束见项目 `api.md` 6.3C。确认/取消 payload 必须自身身份和固定回参结构完整，SDK 不从事件外层补齐。
+`visitId / templateId / templateName / templateHtml / templateDefinition / targetFieldIds / recordContext / requestId` 必填，`patient` 可选；请求及 `patient` 只接受文档化字段。`templateHtml` 是模板自带渲染器输出的当前实例，`templateDefinition` 是同一模板的顶层章节 JSON 定义，二者必须同时提供，旧 `htmlContent / templateSource / sourceFormat` 不再接受。SDK 不按文件名判断，也不把二者当作可选格式。解析器按章节 `ID + ARTICLE` 和字段 `ID` 严格配对；字段所属章节由最近的 `data-article` 祖先确定，逐个核对非 `TYPE=import` 字段的类型、名称、只读状态、所属章节和当前显示值。失配目标退出编辑和回写，其余可用目标继续；授权可见的临床原文随来源说明进入模型。渲染章节名与定义章节名可不同并分别保留。字典只读取定义中的 `BINDINGDATA[].VALUE/TEXT`，HTML 字典属性不再作为输入；`VALUE/TEXT` 归一化后同时为空的首项仅作为“请选择”占位排除，其余字典项仍严格禁止首尾空白。`targetFieldIds` 必须由 HIS 渲染器执行联动规则后生成，且至少包含一个当前实际显示、可写并需要 AI 分析的字段；全医慧助不执行模板脚本或扩充范围。模板当前字典选择不会成为本次结果；有效字典选择由医生确认。相同 `requestId` 只有在 `visitId / templateId / templateName / 原始 templateHtml / 原始 templateDefinition / targetFieldIds 集合 / patient / recordContext` 全部相同时才复用同一 Promise；任一输入变化都以 `REQUEST_ID_CONFLICT` 拒绝。模板对 hash 计算方式和完整字段约束见项目 `api.md` 6.3C。确认/取消 payload 必须自身身份和固定回参结构完整，SDK 不从事件外层补齐。
 
 同一模板的 HTML/定义原文和 `recordContext` 只通过本地 HTTP body 发送。离线兜底仅使用无参数 `med-hermes://launch` 拉起桌面端，不会把临床内容写入协议 URL。
 

@@ -1,9 +1,11 @@
 import type { AppPatient } from '@/types/appState';
-import { getPatientContextAnchorId } from '@/utils/patientContext';
+import { getHisAdapter } from '@/services/his';
+import { getPatientContextAnchorId, getPatientContextId } from '@/utils/patientContext';
 import type { VoiceIntentResult } from './useVoiceIntentRecognition';
 
 export interface VoiceConsultationCacheEntry {
   consultationId: string;
+  ownerScope?: string;
   transcribedText: string;
   intentResult: VoiceIntentResult;
   /**
@@ -23,6 +25,7 @@ export interface VoiceConsultationCacheEntry {
  * 组件或更上层模块；恢复端在使用前会做 narrowing。
  */
 export interface VoiceEditorSnapshot {
+  templateReview?: import('@features/outpatient-emr/lib/voiceOutpatientEmrDraftCache').VoiceOutpatientEmrReviewSnapshot;
   /** 同一运行期收起恢复的轮次身份；旧缓存仍可由显式 cache 入口恢复。 */
   consultationRoundId?: string | null;
   chiefComplaint?: string;
@@ -61,7 +64,15 @@ export function resolveVoiceConsultationId(patient: AppPatient | null | undefine
   return getPatientContextAnchorId(patient) || 'unknown';
 }
 
-export function getVoiceConsultationCacheKey(consultationId: string): string {
+export function getVoiceConsultationCacheScope(patient: AppPatient | null | undefined): string {
+  const patientId = getPatientContextId(patient);
+  if (!patientId) return '';
+  const scope = getHisAdapter()?.getContextScope?.();
+  return JSON.stringify([scope?.orgCode || '', scope?.tenantId || '', patientId]);
+}
+
+export function getVoiceConsultationCacheKey(consultationId: string, ownerScope?: string): string {
+  if (ownerScope) return `VOICE_CONSULTATION_CACHE_V4:${JSON.stringify([ownerScope, consultationId])}`;
   return `${VOICE_CONSULTATION_CACHE_PREFIX}:${consultationId}`;
 }
 
@@ -73,16 +84,23 @@ function isSameLocalDay(a: number, b: number): boolean {
     && da.getDate() === db.getDate();
 }
 
-export function loadVoiceConsultationCacheEntry(consultationId: string): VoiceConsultationCacheEntry | null {
+export function loadVoiceConsultationCacheEntry(consultationId: string, ownerScope: string): VoiceConsultationCacheEntry | null {
+  if (!ownerScope) return null;
   try {
-    const raw = localStorage.getItem(getVoiceConsultationCacheKey(consultationId));
+    let key = getVoiceConsultationCacheKey(consultationId, ownerScope);
+    let raw = localStorage.getItem(key);
+    if (!raw) {
+      key = getVoiceConsultationCacheKey(consultationId);
+      raw = localStorage.getItem(key);
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw) as VoiceConsultationCacheEntry;
-    if (!parsed?.intentResult || !parsed.transcribedText) return null;
+    if (parsed?.consultationId !== consultationId || parsed.ownerScope !== ownerScope
+      || !parsed.intentResult || !parsed.transcribedText) return null;
     if (typeof parsed.savedAt === 'number' && !isSameLocalDay(parsed.savedAt, Date.now())) {
       // 跨自然日失效，主动清除
       try {
-        localStorage.removeItem(getVoiceConsultationCacheKey(consultationId));
+        localStorage.removeItem(key);
       } catch (cleanupErr) {
         console.warn('[VoiceConsultation] Failed to evict expired cache:', consultationId, cleanupErr);
       }
@@ -97,9 +115,10 @@ export function loadVoiceConsultationCacheEntry(consultationId: string): VoiceCo
 }
 
 export function persistVoiceConsultationCacheEntry(entry: VoiceConsultationCacheEntry): void {
+  if (!entry.ownerScope) return;
   try {
     localStorage.setItem(
-      getVoiceConsultationCacheKey(entry.consultationId),
+      getVoiceConsultationCacheKey(entry.consultationId, entry.ownerScope),
       JSON.stringify(entry),
     );
   } catch (error) {
@@ -107,13 +126,16 @@ export function persistVoiceConsultationCacheEntry(entry: VoiceConsultationCache
   }
 }
 
-export function clearVoiceConsultationCacheById(consultationId?: string): void {
-  if (!consultationId) {
+export function clearVoiceConsultationCacheById(consultationId: string, ownerScope: string): void {
+  if (!consultationId || !ownerScope) {
     return;
   }
 
   try {
-    localStorage.removeItem(getVoiceConsultationCacheKey(consultationId));
+    localStorage.removeItem(getVoiceConsultationCacheKey(consultationId, ownerScope));
+    const legacyKey = getVoiceConsultationCacheKey(consultationId);
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy && JSON.parse(legacy)?.ownerScope === ownerScope) localStorage.removeItem(legacyKey);
     console.log('[VoiceConsultation] Cache cleared', { consultationId });
   } catch (error) {
     console.warn('[VoiceConsultation] Failed to clear cache:', consultationId, error);
@@ -126,7 +148,7 @@ export function clearVoiceConsultationCache(patient?: AppPatient | null): void {
     return;
   }
 
-  clearVoiceConsultationCacheById(consultationId);
+  clearVoiceConsultationCacheById(consultationId, getVoiceConsultationCacheScope(patient));
 }
 
 export function hasVoiceConsultationCache(patient?: AppPatient | null): boolean {
@@ -136,7 +158,7 @@ export function hasVoiceConsultationCache(patient?: AppPatient | null): boolean 
   }
 
   // 通过 loadVoiceConsultationCacheEntry 读取（其内部包含跨自然日失效检查与清理）
-  return loadVoiceConsultationCacheEntry(consultationId) !== null;
+  return loadVoiceConsultationCacheEntry(consultationId, getVoiceConsultationCacheScope(patient)) !== null;
 }
 
 /**
@@ -156,7 +178,7 @@ export function updateVoiceConsultationCache(
   if (!consultationId || consultationId === 'unknown') {
     return;
   }
-  const existing = loadVoiceConsultationCacheEntry(consultationId);
+  const existing = loadVoiceConsultationCacheEntry(consultationId, getVoiceConsultationCacheScope(patient));
   if (!existing) {
     // 还没有 base entry（比如纯打开未经历过 LLM）就不主动建；恢复链路本身依赖原始 LLM 结果
     return;
@@ -181,6 +203,6 @@ export function getVoiceConsultationEditorSnapshot(
 ): VoiceEditorSnapshot | null {
   const consultationId = resolveVoiceConsultationId(patient);
   if (!consultationId || consultationId === 'unknown') return null;
-  const entry = loadVoiceConsultationCacheEntry(consultationId);
+  const entry = loadVoiceConsultationCacheEntry(consultationId, getVoiceConsultationCacheScope(patient));
   return entry?.editorSnapshot ?? null;
 }

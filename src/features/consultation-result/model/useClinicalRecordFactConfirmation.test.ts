@@ -136,6 +136,17 @@ describe('useClinicalRecordFactConfirmation', () => {
     expect(controller.getFieldSuggestions('physicalExam')).toEqual([]);
   });
 
+  it('keeps dismissed candidates local to their source chapter across final and cached partitions', () => {
+    const { controller } = createController(async () => '{"items":[]}');
+    const template = { field: 'familyHistory', question: '亲属是否患病？', negativeRecordText: '否认家族肿瘤史。',
+      rationale: '', priority: 'general', status: 'pending' };
+    controller.restoreSuggestions(['a', 'b'].map(chapterId => ({ ...template, id: chapterId, chapterId })));
+    controller.dismissSuggestion('a');
+    controller.restoreSuggestions(['a', 'b'].map(chapterId => ({ ...template, id: 'new-' + chapterId, chapterId })));
+    expect(controller.suggestions.value.find(item => item.id === 'new-a')?.status).toBe('dismissed');
+    expect(controller.suggestions.value.find(item => item.id === 'new-b')?.status).toBe('pending');
+  });
+
   it('does not restore a dismissed examination item from a later stream partition', async () => {
     const { controller, record } = createController(async () => '{"items":[]}');
     await controller.generateSuggestions();

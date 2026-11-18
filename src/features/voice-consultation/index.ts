@@ -36,6 +36,7 @@ export {
   clearVoiceConsultationCache,
   clearVoiceConsultationCacheById,
   getVoiceConsultationCacheKey,
+  getVoiceConsultationCacheScope,
   getVoiceConsultationEditorSnapshot,
   hasVoiceConsultationCache,
   loadVoiceConsultationCacheEntry,

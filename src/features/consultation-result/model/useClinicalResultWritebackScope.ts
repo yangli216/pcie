@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { TreatmentRecommendation } from '@/types/consultation';
 import {
   RECORD_CONFIRMED_WRITEBACK_FIELDS,
@@ -32,14 +32,14 @@ export interface WritebackScopeRecordValues {
 }
 
 interface WritebackScopeAvailability {
-  recordFields: Record<RecordConfirmedWritebackField, boolean>;
+  recordFields: Record<string, boolean>;
   diagnosis: boolean;
   medicine: boolean;
   clinicalOrders: boolean;
 }
 
 export interface WritebackScopeRecordFieldOption {
-  key: RecordConfirmedWritebackField;
+  key: string;
   label: string;
   available: boolean;
   selected: boolean;
@@ -52,10 +52,17 @@ export interface ClinicalResultWritebackScopeSnapshot {
   includeMedicine: boolean;
   includeClinicalOrders: boolean;
   customized: boolean;
+  templateChapterIds?: string[];
+  templateScopeKey?: string;
+  /** Only present if the doctor changes chapter preferences before an old canonical selection finishes migrating. */
+  pendingChapterOverrides?: Record<string, boolean>;
 }
 
 export interface ClinicalResultWritebackScopeOptions {
   getRecord: () => WritebackScopeRecordValues;
+  getTemplateChapters?: () => readonly { key: string; label: string; available: boolean; recordFields: readonly RecordConfirmedWritebackField[] }[] | null;
+  getTemplateScopeKey?: () => string | null;
+  isTemplateScopeReady?: () => boolean;
   getSelectedDiagnosisCount: () => number;
   getSelectedTreatments: () => readonly TreatmentRecommendation[];
   notify?: (message: string, type?: string) => void;
@@ -76,36 +83,31 @@ function toOrderType(type: TreatmentRecommendation['type']): RecordConfirmedWrit
   return null;
 }
 
-function emptyRecordSelection(): Record<RecordConfirmedWritebackField, boolean> {
-  return RECORD_CONFIRMED_WRITEBACK_FIELDS.reduce<Record<RecordConfirmedWritebackField, boolean>>((result, field) => {
-    result[field] = false;
-    return result;
-  }, {} as Record<RecordConfirmedWritebackField, boolean>);
-}
-
 export function useClinicalResultWritebackScope(options: ClinicalResultWritebackScopeOptions) {
   const selectorOpen = ref(false);
   const recordExpanded = ref(true);
-  const selectedRecordMap = ref(emptyRecordSelection());
+  const selectedRecordMap = ref<Set<string>>(new Set());
+  const legacyTemplateSelection = ref<RecordConfirmedWritebackField[] | null>(null);
+  const pendingChapterOverrides = ref(new Map<string, boolean>());
   const includeDiagnosisPreference = ref(false);
   const includeMedicinePreference = ref(false);
   const includeClinicalOrdersPreference = ref(false);
   const customized = ref(false);
-  const newlyAvailableRecordFields = ref<RecordConfirmedWritebackField[]>([]);
+  const newlyAvailableRecordFields = ref<string[]>([]);
   const baselineAvailability = ref<WritebackScopeAvailability | null>(null);
 
   function getSelectedTreatmentItems(): TreatmentRecommendation[] {
     return options.getSelectedTreatments().filter((item) => item.selected !== false);
   }
 
+  const recordRows = computed(() => options.getTemplateChapters?.() ?? RECORD_CONFIRMED_WRITEBACK_FIELDS.map(field => ({
+    key: field, label: WRITEBACK_RECORD_FIELD_LABELS[field], available: isMeaningful(options.getRecord()[field]), recordFields: [field],
+  })));
+
   function getAvailability(): WritebackScopeAvailability {
-    const record = options.getRecord();
     const selectedTreatments = getSelectedTreatmentItems();
     return {
-      recordFields: RECORD_CONFIRMED_WRITEBACK_FIELDS.reduce<Record<RecordConfirmedWritebackField, boolean>>((result, field) => {
-        result[field] = isMeaningful(record[field]);
-        return result;
-      }, {} as Record<RecordConfirmedWritebackField, boolean>),
+      recordFields: Object.fromEntries(recordRows.value.map(row => [row.key, row.available])),
       diagnosis: options.getSelectedDiagnosisCount() > 0,
       medicine: selectedTreatments.some((item) => item.type === 'medicine'),
       clinicalOrders: selectedTreatments.some((item) => item.type !== 'medicine' && Boolean(toOrderType(item.type))),
@@ -120,12 +122,9 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
   ).length);
 
   const recordFieldOptions = computed<WritebackScopeRecordFieldOption[]>(() => (
-    RECORD_CONFIRMED_WRITEBACK_FIELDS.map((field) => ({
-      key: field,
-      label: WRITEBACK_RECORD_FIELD_LABELS[field],
-      available: availability.value.recordFields[field],
-      selected: availability.value.recordFields[field] && selectedRecordMap.value[field],
-      isNew: newlyAvailableRecordFields.value.includes(field),
+    recordRows.value.map(({key, label, available}) => ({
+      key, label, available, selected: available && selectedRecordMap.value.has(key),
+      isNew: newlyAvailableRecordFields.value.includes(key),
     }))
   ));
   const availableRecordFieldCount = computed(() => recordFieldOptions.value.filter((item) => item.available).length);
@@ -180,7 +179,7 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
       });
     }
     return {
-      recordFields: recordFieldOptions.value.filter((item) => item.selected).map((item) => item.key),
+      recordFields: [...new Set(recordRows.value.filter(row => row.available && selectedRecordMap.value.has(row.key)).flatMap(row => row.recordFields))],
       includeDiagnosis: includeDiagnosis.value,
       orderTypes: Array.from(orderTypes),
     };
@@ -190,12 +189,34 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
     customized.value = true;
   }
 
+  function syncLegacyTemplateSelection(): void {
+    const fields = legacyTemplateSelection.value;
+    const chapters = options.getTemplateChapters?.();
+    if (!fields || !chapters) return;
+    const selected = new Set(chapters.filter(row => (!customized.value && row.available)
+      || row.recordFields.some(field => fields.includes(field))).map(row => row.key));
+    for (const [key, include] of pendingChapterOverrides.value) {
+      if (include) selected.add(key);
+      else selected.delete(key);
+    }
+    selectedRecordMap.value = selected;
+    if (chapters.length && (options.isTemplateScopeReady?.() ?? true)) {
+      legacyTemplateSelection.value = null;
+      pendingChapterOverrides.value.clear();
+    }
+  }
+
+  function setRecordPreference(key: string, selected: boolean): void {
+    if (selected) selectedRecordMap.value.add(key);
+    else selectedRecordMap.value.delete(key);
+    if (legacyTemplateSelection.value) pendingChapterOverrides.value.set(key, selected);
+  }
+
   function reset(): void {
+    legacyTemplateSelection.value = null;
+    pendingChapterOverrides.value.clear();
     const current = getAvailability();
-    selectedRecordMap.value = RECORD_CONFIRMED_WRITEBACK_FIELDS.reduce<Record<RecordConfirmedWritebackField, boolean>>((result, field) => {
-      result[field] = current.recordFields[field];
-      return result;
-    }, emptyRecordSelection());
+    selectedRecordMap.value = new Set(recordRows.value.filter(row => row.available).map(row => row.key));
     includeDiagnosisPreference.value = current.diagnosis;
     includeMedicinePreference.value = current.medicine;
     includeClinicalOrdersPreference.value = current.clinicalOrders;
@@ -207,6 +228,7 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
   }
 
   function refreshAvailableContent(): void {
+    syncLegacyTemplateSelection();
     const previous = baselineAvailability.value;
     const current = getAvailability();
     if (!previous) {
@@ -214,21 +236,23 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
       return;
     }
 
-    const nextSelected = { ...selectedRecordMap.value };
-    const newFields: RecordConfirmedWritebackField[] = [];
-    RECORD_CONFIRMED_WRITEBACK_FIELDS.forEach((field) => {
+    const nextSelected = new Set(selectedRecordMap.value);
+    const newFields: string[] = [];
+    Object.keys(current.recordFields).forEach((field) => {
       if (!current.recordFields[field]) return;
       if (!previous.recordFields[field]) {
-        nextSelected[field] = !customized.value;
-        if (customized.value) newFields.push(field);
+        if (!customized.value) nextSelected.add(field);
+        else if (!nextSelected.has(field)) newFields.push(field);
       }
     });
     selectedRecordMap.value = nextSelected;
     newlyAvailableRecordFields.value = newFields;
 
-    if (!previous.diagnosis && current.diagnosis) includeDiagnosisPreference.value = !customized.value;
-    if (!previous.medicine && current.medicine) includeMedicinePreference.value = !customized.value;
-    if (!previous.clinicalOrders && current.clinicalOrders) includeClinicalOrdersPreference.value = !customized.value;
+    if (!customized.value) {
+      if (!previous.diagnosis && current.diagnosis) includeDiagnosisPreference.value = true;
+      if (!previous.medicine && current.medicine) includeMedicinePreference.value = true;
+      if (!previous.clinicalOrders && current.clinicalOrders) includeClinicalOrdersPreference.value = true;
+    }
     baselineAvailability.value = current;
   }
 
@@ -245,23 +269,23 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
     recordExpanded.value = value;
   }
 
-  function toggleRecordField(field: RecordConfirmedWritebackField): void {
+  function toggleRecordField(field: string): void {
     if (!availability.value.recordFields[field]) return;
-    selectedRecordMap.value = {
-      ...selectedRecordMap.value,
-      [field]: !selectedRecordMap.value[field],
-    };
+    setRecordPreference(field, !selectedRecordMap.value.has(field));
     newlyAvailableRecordFields.value = newlyAvailableRecordFields.value.filter((item) => item !== field);
     markCustomized();
   }
 
+  function setAvailableRecords(selected: boolean): void {
+    for (const { key, available } of recordRows.value) {
+      if (!available) continue;
+      setRecordPreference(key, selected);
+    }
+  }
+
   function toggleRecordGroup(): void {
     const shouldSelect = !recordGroupChecked.value;
-    const next = { ...selectedRecordMap.value };
-    RECORD_CONFIRMED_WRITEBACK_FIELDS.forEach((field) => {
-      if (availability.value.recordFields[field]) next[field] = shouldSelect;
-    });
-    selectedRecordMap.value = next;
+    setAvailableRecords(shouldSelect);
     newlyAvailableRecordFields.value = [];
     markCustomized();
   }
@@ -286,11 +310,7 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
 
   function toggleAll(): void {
     const shouldSelect = !allAvailableSelected.value;
-    const next = { ...selectedRecordMap.value };
-    RECORD_CONFIRMED_WRITEBACK_FIELDS.forEach((field) => {
-      if (availability.value.recordFields[field]) next[field] = shouldSelect;
-    });
-    selectedRecordMap.value = next;
+    setAvailableRecords(shouldSelect);
     includeDiagnosisPreference.value = shouldSelect && availability.value.diagnosis;
     includeMedicinePreference.value = shouldSelect && availability.value.medicine;
     includeClinicalOrdersPreference.value = shouldSelect && availability.value.clinicalOrders;
@@ -315,8 +335,17 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
   }
 
   function serialize(): ClinicalResultWritebackScopeSnapshot {
+    const chapters = options.getTemplateChapters?.();
+    const owner = options.getTemplateScopeKey?.();
+    const pending = legacyTemplateSelection.value;
+    const canonical = chapters
+      ? [...new Set(chapters.filter(row => selectedRecordMap.value.has(row.key)).flatMap(row => row.recordFields))]
+      : RECORD_CONFIRMED_WRITEBACK_FIELDS.filter(key => selectedRecordMap.value.has(key));
     return {
-      recordFields: RECORD_CONFIRMED_WRITEBACK_FIELDS.filter((field) => selectedRecordMap.value[field]),
+      recordFields: pending ?? canonical,
+      ...(chapters && owner ? { templateScopeKey: owner } : {}),
+      ...(chapters && !pending ? { templateChapterIds: [...selectedRecordMap.value] } : {}),
+      ...(pending && pendingChapterOverrides.value.size ? { pendingChapterOverrides: Object.fromEntries(pendingChapterOverrides.value) } : {}),
       includeDiagnosis: includeDiagnosisPreference.value,
       includeMedicine: includeMedicinePreference.value,
       includeClinicalOrders: includeClinicalOrdersPreference.value,
@@ -333,19 +362,35 @@ export function useClinicalResultWritebackScope(options: ClinicalResultWriteback
     const recordFields = Array.isArray(snapshot.recordFields)
       ? snapshot.recordFields.filter(isRecordField)
       : [];
-    selectedRecordMap.value = RECORD_CONFIRMED_WRITEBACK_FIELDS.reduce<Record<RecordConfirmedWritebackField, boolean>>((result, field) => {
-      result[field] = recordFields.includes(field);
-      return result;
-    }, emptyRecordSelection());
+    const chapters = options.getTemplateChapters?.();
+    const ids = snapshot.templateChapterIds;
+    if ((snapshot.templateScopeKey !== undefined && snapshot.templateScopeKey !== options.getTemplateScopeKey?.())
+      || (!chapters && Array.isArray(ids))) {
+      reset();
+      return;
+    }
+    pendingChapterOverrides.value.clear();
+    legacyTemplateSelection.value = chapters && !Array.isArray(ids) ? recordFields : null;
+    if (legacyTemplateSelection.value && snapshot.pendingChapterOverrides && typeof snapshot.pendingChapterOverrides === 'object') {
+      for (const [key, include] of Object.entries(snapshot.pendingChapterOverrides)) {
+        if (typeof include === 'boolean') pendingChapterOverrides.value.set(key, include);
+      }
+    }
+    selectedRecordMap.value = new Set(chapters
+      ? Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+      : recordFields);
     includeDiagnosisPreference.value = snapshot.includeDiagnosis === true;
     includeMedicinePreference.value = snapshot.includeMedicine === true;
     includeClinicalOrdersPreference.value = snapshot.includeClinicalOrders === true;
     customized.value = snapshot.customized === true;
+    syncLegacyTemplateSelection();
     newlyAvailableRecordFields.value = [];
     baselineAvailability.value = getAvailability();
   }
 
   reset();
+  if (options.getTemplateScopeKey) watch(options.getTemplateScopeKey, reset, { flush: 'sync' });
+  if (options.isTemplateScopeReady) watch(options.isTemplateScopeReady, syncLegacyTemplateSelection, { flush: 'sync' });
 
   return {
     selectorOpen,

@@ -480,7 +480,6 @@
       || typeof metadata.templateHash !== 'string'
       || !/^[a-f0-9]{64}$/.test(metadata.templateHash)
       || !Array.isArray(metadata.fields)
-      || !metadata.fields.length
     ) {
       return false;
     }
@@ -497,7 +496,7 @@
         || !isExactNonEmptyString(field.articleTemplateId)
         || !isExactNonEmptyString(field.articleId)
         || !isExactNonEmptyString(field.articleName)
-        || !isExactNonEmptyString(field.articleDefinitionName)
+        || typeof field.articleDefinitionName !== 'string' || !field.articleDefinitionName.trim()
         || !Array.isArray(field.dictionaryItems)
         || (field.recordField !== null
           && !includesOutpatientEmrValue(OUTPATIENT_EMR_RECORD_FIELDS, field.recordField))
@@ -541,7 +540,7 @@
     return true;
   }
 
-  function isCompleteOutpatientEmrConfirmedRecord(record, pending) {
+  function isCompleteOutpatientEmrConfirmedRecord(record, pending, voiceScope) {
     var metadata = record.templateMetadata;
     var standaloneReferenceMessage = '等待 HIS 完成门诊模板参数回填并回执';
     var combinedReferenceMessage = '等待 HIS 完成动态模板及已选诊疗内容回写并回执';
@@ -565,6 +564,7 @@
       || (pending && metadata.templateId !== pending.templateId)
       || (pending && metadata.templateName !== pending.templateName)
       || !isOutpatientEmrStringMap(record.fieldValues)
+      || (record.emrFieldValues !== undefined && !isOutpatientEmrStringMap(record.emrFieldValues))
       || !isPlainObject(record.dictionarySelections)
       || !isPlainObject(record.writebackScope)
       || !Array.isArray(record.writebackScope.recordFields)
@@ -612,12 +612,23 @@
 
     var valueKeys = Object.keys(record.fieldValues);
     if (valueKeys.length !== metadata.fields.length) return false;
+    var bindings = record.emrFieldValues;
+    if (bindings) {
+      var bindingKeys = Object.keys(bindings);
+      if (isStandaloneResult && bindingKeys.length !== valueKeys.length) return false;
+      if (isCombinedResult && voiceScope && bindingKeys.some(function (id) {
+        return voiceScope.targetFieldIds.indexOf(id) >= 0 && valueKeys.indexOf(id) < 0;
+      })) return false;
+    }
+    if (pending && !valueKeys.every(function (id) { return pending.targetFieldIds.indexOf(id) >= 0; })) return false;
     var dictionaryFieldCount = 0;
     for (var i = 0; i < metadata.fields.length; i++) {
       var field = metadata.fields[i];
-      if (!Object.prototype.hasOwnProperty.call(record.fieldValues, field.id)) return false;
+      if (!Object.prototype.hasOwnProperty.call(record.fieldValues, field.id)
+        || (bindings && !Object.prototype.hasOwnProperty.call(bindings, field.id))) return false;
       if (!field.dictionaryItems.length) {
-        if (Object.prototype.hasOwnProperty.call(record.dictionarySelections, field.id)) return false;
+        if (Object.prototype.hasOwnProperty.call(record.dictionarySelections, field.id)
+          || (bindings && bindings[field.id] !== record.fieldValues[field.id])) return false;
         continue;
       }
 
@@ -627,6 +638,7 @@
         !isPlainObject(selection)
         || typeof selection.value !== 'string'
         || typeof selection.text !== 'string'
+        || (bindings && selection.value !== bindings[field.id])
         || selection.text !== record.fieldValues[field.id]
       ) {
         return false;
@@ -1055,6 +1067,7 @@
     this._connected = false;
     this._destroyed = false;
     this._browserCtx = null;
+    this._voiceTemplateScope = null;
     this._currentPatientId = null;
     this._currentConsultationId = null;
     this._lastEventConsultationId = null;
@@ -1238,6 +1251,7 @@
    */
   MedHermes.prototype.startConsultation = function (patient) {
     var self = this;
+    this._voiceTemplateScope = null;
     this._currentPatientId = getPatientId(patient);
     this._currentConsultationId = getPatientAnchorId(patient);
     this._lastResultKey = '';
@@ -1263,6 +1277,7 @@
   MedHermes.prototype.assist = function (patient, action) {
     var self = this;
     var payload = assign({}, patient, { action: action });
+    this._voiceTemplateScope = null;
     this._currentPatientId = getPatientId(patient);
     this._currentConsultationId = getPatientAnchorId(patient);
     this._lastResultKey = '';
@@ -1301,6 +1316,13 @@
     } catch (error) {
       return Promise.reject(error);
     }
+    this._voiceTemplateScope = payload && payload.outpatientEmr ? {
+      visitId: payload.idVis,
+      templateId: payload.outpatientEmr.templateId,
+      templateName: payload.outpatientEmr.templateName,
+      requestId: payload.outpatientEmr.requestId,
+      targetFieldIds: payload.outpatientEmr.targetFieldIds.slice()
+    } : null;
     if (payload) {
       this._currentPatientId = getPatientId(payload);
       this._currentConsultationId = getPatientAnchorId(payload);
@@ -1367,6 +1389,7 @@
       return Promise.reject(new Error('generateInpatientEmr 缺少 admissionId、templateId、templateName 或 htmlContent'));
     }
 
+    this._voiceTemplateScope = null;
     this._currentPatientId = payload.admissionId;
     this._currentConsultationId = payload.admissionId;
     this._lastResultKey = '';
@@ -1495,6 +1518,7 @@
     }
     this._rejectReplacedOutpatientEmrRequests(payload);
 
+    this._voiceTemplateScope = null;
     this._currentPatientId = payload.visitId;
     this._currentConsultationId = payload.visitId;
     this._lastResultKey = '';
@@ -1515,6 +1539,7 @@
    */
   MedHermes.prototype.stop = function () {
     var self = this;
+    this._voiceTemplateScope = null;
     this._currentPatientId = null;
     this._currentConsultationId = null;
     this._lastEventConsultationId = null;
@@ -1538,6 +1563,7 @@
   MedHermes.prototype.receivePatient = function (patientId, optionalInfo) {
     var self = this;
     var payload = assign({ idPi: patientId }, optionalInfo || {});
+    this._voiceTemplateScope = null;
     this._currentPatientId = getPatientId(payload);
     this._currentConsultationId = getPatientAnchorId(payload);
     this._lastResultKey = '';
@@ -1893,6 +1919,7 @@
         requestId: stringValue(payload.requestId),
         templateId: stringValue(payload.templateId),
         templateName: stringValue(payload.templateName),
+        targetFieldIds: payload.targetFieldIds.slice(),
         requestSnapshotKey: getOutpatientEmrRequestSnapshotKey(payload),
         active: true,
         resolve: resolve,
@@ -2130,10 +2157,25 @@
     var resultType = event.type || record.resultType || 'final-report';
 
     var outpatientResultType = record.resultType || resultType;
+    var expected = null;
+    if (record.emrType === 'outpatient-emr' && outpatientResultType === 'record-confirmed') {
+      for (var pendingIndex = 0; pendingIndex < this._pendingOutpatientEmrRequests.length; pendingIndex++) {
+        var pending = this._pendingOutpatientEmrRequests[pendingIndex];
+        if (pending.active && matchesOutpatientEmrPending(pending, record)) {
+          expected = pending;
+          break;
+        }
+      }
+    }
+    var voiceScope = this._voiceTemplateScope;
+    var voiceScopeMismatch = voiceScope && record.referenceMessage === '等待 HIS 完成动态模板及已选诊疗内容回写并回执'
+      && (!matchesOutpatientEmrPending(voiceScope, record)
+        || record.templateMetadata.templateName !== voiceScope.templateName
+        || !Object.keys(record.fieldValues || {}).every(function (id) { return voiceScope.targetFieldIds.indexOf(id) >= 0; }));
     var malformedOutpatientEvent = record.emrType === 'outpatient-emr'
       && (
         (outpatientResultType === 'record-confirmed'
-          && !isCompleteOutpatientEmrConfirmedRecord(record, null))
+          && (voiceScopeMismatch || !isCompleteOutpatientEmrConfirmedRecord(record, expected, voiceScope)))
         || (outpatientResultType === 'cancelled'
           && !isOutpatientEmrCancelledRecord(record))
       );

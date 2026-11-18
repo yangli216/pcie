@@ -3,7 +3,7 @@
 // institution and signature values in this fixture are empty placeholders.
 import { describe, expect, it, vi } from 'vitest';
 import { analyzeOutpatientEmrFields } from '@features/outpatient-emr/api/outpatientEmrService';
-import { buildOutpatientEmrInitialDraft } from '@features/outpatient-emr/lib/outpatientEmrDraftSource';
+import { buildOutpatientEmrInitialDraft, resolveOutpatientEmrModelDraft } from '@features/outpatient-emr/lib/outpatientEmrDraftSource';
 import {
   parseOutpatientEmrTemplate,
   restoreOutpatientEmrTemplateFromSnapshot,
@@ -14,7 +14,7 @@ import type { OutpatientEmrAnalysisRequest } from '@features/outpatient-emr/type
 import html from './fixtures/his-internal-medicine-template.html?raw';
 import definition from './fixtures/his-internal-medicine-template.json?raw';
 
-const targetFieldIds = ['主诉文本', '持续时间', '呕吐标志', '腹泻标志', '时间单位', '体温', '注意事项文本'];
+const targetFieldIds = ['主诉文本', '持续时间', '呕吐标志', '腹泻标志', '胃纳', '时间单位', '夜寐', '体温', '注意事项文本'];
 
 function parseTemplate() {
   return parseOutpatientEmrTemplate(html, definition, targetFieldIds);
@@ -85,7 +85,7 @@ describe('supplied HIS internal medicine template pair', () => {
     };
     const chatFast = vi.fn(async () => JSON.stringify({
       主诉文本: '腹泻1天', 持续时间: '1', 呕吐标志: '0', 腹泻标志: '1',
-      时间单位: '3', 体温: '37.2', 注意事项文本: '注意饮食卫生，症状加重及时复诊。',
+      胃纳: null, 夜寐: null, 时间单位: '3', 体温: '37.2', 注意事项文本: '注意饮食卫生，症状加重及时复诊。',
     }));
     const values = await analyzeOutpatientEmrFields(
       { request, fields: template.targetFields }, { chatFast: chatFast as never },
@@ -95,15 +95,22 @@ describe('supplied HIS internal medicine template pair', () => {
     expect(JSON.stringify(messages)).not.toContain('SIM-HIS-PATIENT');
     expect(JSON.stringify(messages)).not.toContain('SIM-HIS-VISIT');
     expect(JSON.stringify(messages)).not.toContain('合成患者');
+    const fieldValues = Object.fromEntries(template.targetFields.map(field => {
+      const draft = resolveOutpatientEmrModelDraft(field, values[field.id]);
+      if (field.id === '胃纳' || field.id === '夜寐') expect(draft.source).toBe('unmentioned-default');
+      return [field.id, draft.value];
+    }));
     const payload = buildOutpatientEmrRecordConfirmedPayload({
       request, templateHash: 'a'.repeat(64), fields: template.targetFields,
-      fieldValues: values, timestamp: 1_800_000_000_000,
+      fieldValues, timestamp: 1_800_000_000_000,
     });
     expect(payload.templateMetadata.templateId).toBe('SIM-HIS-TEMPLATE');
     expect(payload.fieldValues['主诉文本']).toBe('腹泻1天');
     expect(payload.emrFieldValues['呕吐标志']).toBe('0');
     expect(payload.emrFieldValues['腹泻标志']).toBe('1');
     expect(payload.emrFieldValues['时间单位']).toBe('3');
+    expect(payload.dictionarySelections['胃纳']).toEqual({ value: '2', text: '如常' });
+    expect(payload.dictionarySelections['夜寐']).toEqual({ value: '0', text: '安' });
     expect(payload.outpatientRecord?.historyOfPresentIllness).toContain('持续时间：1');
     expect(payload.outpatientRecord?.historyOfPresentIllness).toContain('时间单位：天');
     expect(Object.keys(payload.fieldValues)).toEqual(targetFieldIds);

@@ -42,6 +42,7 @@ export interface ClinicalRecordExplicitFact {
 }
 
 export interface ClinicalRecordFactSuggestion {
+  chapterId?: string;
   id: string;
   field: ClinicalRecordFactField;
   question: string;
@@ -260,6 +261,7 @@ function normalizePriority(value: unknown): ClinicalRecordFactPriority {
 export function normalizeClinicalRecordFactSuggestions(
   response: string | ClinicalRecordFactSuggestionResponse,
   explicitFacts: readonly ClinicalRecordExplicitFact[] = [],
+  chapterTexts?: Readonly<Record<string, string>>,
 ): ClinicalRecordFactSuggestion[] {
   const parsed = typeof response === 'string'
     ? parseLLMJson<ClinicalRecordFactSuggestionResponse>(response)
@@ -281,6 +283,7 @@ export function normalizeClinicalRecordFactSuggestions(
   let otherCount = 0;
   return parsed.items
     .map((item, index): ClinicalRecordFactSuggestion | null => {
+      if (!item || typeof item !== 'object') return null;
       const field = item.field;
       const question = normalizeText(item.question);
       if (
@@ -295,13 +298,17 @@ export function normalizeClinicalRecordFactSuggestions(
         !negativeRecordText
         || GENERIC_NEGATIVE_VALUES.has(negativeRecordText.replace(/[。；;]$/u, ''))
       ) return null;
-      const key = `${field}:${normalizeComparable(question)}`;
+      const chapterId = chapterTexts && typeof item.chapterId === 'string' && item.chapterId ? item.chapterId : undefined;
+      const key = JSON.stringify([chapterId, field, normalizeComparable(question)]);
       if (seen.has(key)) return null;
       const proposedComparable = normalizeComparable(negativeRecordText);
-      const explicitCorpus = explicitCorpusByField[field];
+      const explicitCorpus = chapterId && chapterTexts
+        ? (Object.prototype.hasOwnProperty.call(chapterTexts, chapterId) && typeof chapterTexts[chapterId] === 'string' ? [chapterTexts[chapterId]] : [])
+        : explicitCorpusByField[field];
       if (
         explicitCorpus.some((fact) => {
           const comparable = normalizeComparable(fact);
+          if (!comparable) return false;
           return comparable === proposedComparable
             || comparable.includes(proposedComparable)
             || proposedComparable.includes(comparable);
@@ -312,7 +319,8 @@ export function normalizeClinicalRecordFactSuggestions(
       }
       seen.add(key);
       return {
-        id: stableFactId(field, question, index),
+        id: chapterId ? JSON.stringify([chapterId, stableFactId(field, question, index)]) : stableFactId(field, question, index),
+        ...(chapterId ? { chapterId } : {}),
         field,
         question,
         negativeRecordText,

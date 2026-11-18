@@ -190,6 +190,16 @@ export function buildSymptomClinicalResultInput(input: SymptomClinicalResultInpu
 export function cloneClinicalResultInput(result: ClinicalResultInput): ClinicalResultInput {
   return {
     ...result,
+    ...(result.voiceTemplateDocument ? { voiceTemplateDocument: {
+      ...result.voiceTemplateDocument, targetFieldIds: [...result.voiceTemplateDocument.targetFieldIds],
+      chapters: result.voiceTemplateDocument.chapters.map(chapter => ({ ...chapter, fieldIds: [...chapter.fieldIds],
+        ...(chapter.editableFieldIds ? { editableFieldIds: [...chapter.editableFieldIds] } : {}),
+      })),
+    } } : {}),
+    ...(result.voiceTemplateDraft ? { voiceTemplateDraft: {
+      ...result.voiceTemplateDraft, targetFieldIds: [...result.voiceTemplateDraft.targetFieldIds],
+      fieldValues: { ...result.voiceTemplateDraft.fieldValues },
+    } } : {}),
     diagnoses: result.diagnoses.map((item) => cloneValue(item) as ClinicalResultDiagnosis),
     treatments: result.treatments.map((item) => cloneValue(item) as ClinicalResultTreatment),
     factSuggestions: result.factSuggestions?.map((item) => cloneValue(item) as typeof item),

@@ -2,6 +2,8 @@ import { regionalPost } from '@/services/regionalClient';
 import { OutpatientEmrError } from '../lib/outpatientEmrTemplate';
 import type { OutpatientEmrAnalysisRequest } from '../types';
 
+export type OutpatientEmrTemplateSource = Pick<OutpatientEmrAnalysisRequest, 'templateHtml' | 'templateDefinition'>;
+
 const HTML_PREFIX = 'data:text/html;charset=utf-8;base64,';
 const DEFINITION_PREFIX = 'data:application/json;charset=utf-8;base64,';
 const RESPONSE_KEYS = ['schemaVersion', 'templateHtml', 'templateDefinition'];
@@ -31,10 +33,10 @@ async function waitForDecode(task: Promise<unknown>, signal?: AbortSignal): Prom
 }
 
 /** Encoded sources are decoded only by the signed PCIE Server endpoint. */
-export async function normalizeOutpatientEmrTemplateSource(
-  request: OutpatientEmrAnalysisRequest,
+export async function normalizeOutpatientEmrTemplateSource<T extends OutpatientEmrTemplateSource>(
+  request: T,
   signal?: AbortSignal,
-): Promise<OutpatientEmrAnalysisRequest> {
+): Promise<T> {
   if (signal?.aborted) throw abortError();
   if (!isDataUri(request.templateHtml) && !isDataUri(request.templateDefinition)) return request;
   if (

@@ -393,6 +393,7 @@ async function completeOutpatientEmrAnalysis(): Promise<void> {
 let routeVoiceTranscriptScenario: ((transcript: string) => Promise<boolean>) | null = null;
 const voiceConsultation = useVoiceConsultation({
   currentPatient,
+  voiceOutpatientEmrContext: voiceOutpatientEmrWorkflow.startContext,
   patientMemoryBrief,
   showToast,
   openVoiceConsultation,

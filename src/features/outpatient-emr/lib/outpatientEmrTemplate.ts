@@ -1,3 +1,4 @@
+import { isAdministrativeTemplateSlot } from './outpatientEmrPromptGenerator';
 import { sanitizeExternalHtml } from '@shared/lib/safeHtml';
 import {
   findConflictingOutpatientEmrRecordFieldMapping,
@@ -11,6 +12,8 @@ import {
 } from './outpatientEmrDictionary';
 import {
   parseOutpatientEmrTemplateDefinition,
+  isTemplateObject,
+  readOutpatientEmrChapters,
   OutpatientEmrTemplateDefinitionError,
   type OutpatientEmrTemplateDefinition,
   type OutpatientEmrTemplateDefinitionField,
@@ -21,6 +24,7 @@ import type {
   OutpatientEmrTemplateField,
   OutpatientEmrTemplateInspectionResult,
   OutpatientEmrTemplateParseResult,
+  OutpatientEmrTemplateSourceNote,
 } from '../types';
 
 export class OutpatientEmrError extends Error {
@@ -133,11 +137,18 @@ function resolveFieldValueElement(element: HTMLElement): HTMLElement {
   return element.querySelector<HTMLElement>('.tag-value') || element;
 }
 
+export function readFieldSourceText(element: HTMLElement, visibleClinicalText = false): string {
+  const clone = element.cloneNode(true) as HTMLElement;
+  if (visibleClinicalText) clone.querySelectorAll('[aria-hidden="true"], .tag-marker, header, footer, nav, button, template').forEach(child => child.remove());
+  clone.querySelectorAll('[data-id], [data-article], .placeholder, [hidden]').forEach(child => child.remove());
+  clone.querySelectorAll<HTMLElement>('[style]').forEach(child => {
+    if (HIDDEN_STYLE_PATTERN.test(child.getAttribute('style') || '')) child.remove();
+  });
+  return resolveFieldValueElement(clone).textContent || '';
+}
+
 function readFieldValue(element: HTMLElement): string {
-  const valueElement = resolveFieldValueElement(element);
-  const clone = valueElement.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll('.placeholder').forEach((placeholder) => placeholder.remove());
-  return (clone.textContent || '').replace(/\r\n?/g, '\n').trim();
+  return readFieldSourceText(element).replace(/\r\n?/g, '\n').trim();
 }
 
 function normalizeTemplateForPreview(template: HTMLTemplateElement): void {
@@ -485,27 +496,148 @@ function isHiddenByRenderer(element: Element, root: Node): boolean {
   return false;
 }
 
-// The renderer has already applied relationscript to this HTML instance; a target the
-// doctor cannot see in the preview must not be generated or written back unseen.
-function assertTargetFieldsVisible(
-  sanitizedHtml: string,
-  targetFields: OutpatientEmrTemplateField[],
-): void {
-  const template = createTemplateFragment(sanitizedHtml);
-  const targetIds = new Set(targetFields.map((field) => field.id));
-  const hiddenIds: string[] = [];
-  template.content.querySelectorAll<HTMLElement>('[data-id][data-type]').forEach((element) => {
-    const fieldId = element.getAttribute('data-id') || '';
-    if (targetIds.has(fieldId) && isHiddenByRenderer(element, template.content)) {
-      hiddenIds.push(fieldId);
-    }
-  });
-  if (hiddenIds.length > 0) {
-    throw new OutpatientEmrError(
-      'INVALID_TARGET_FIELD_IDS',
-      `targetFieldIds 包含当前渲染实例中隐藏的字段：${hiddenIds.join('、')}`,
-    );
+type TemplateObject = Record<string, unknown>;
+
+function groupById<T>(items: T[], identifier: (item: T) => unknown): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const id = identifier(item);
+    if (typeof id !== 'string' || !id) continue;
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
   }
+  return groups;
+}
+
+function definitionLeaves(chapters: TemplateObject[]) {
+  return chapters.flatMap(chapter => Array.isArray(chapter.eles)
+    ? chapter.eles.filter(isTemplateObject).map(leaf => ({ chapter, leaf })) : []);
+}
+
+/** On a malformed pair, check each uniquely identified field against its own two source nodes. */
+function recoverIndependentFields(templateHtml: string, definitionSource: string): OutpatientEmrTemplateInspectionResult {
+  const preview = prepareOutpatientEmrTemplatePreview(templateHtml);
+  const chapters = readOutpatientEmrChapters(definitionSource).filter(isTemplateObject);
+  const htmlChapters = groupById(Array.from(preview.content.querySelectorAll<HTMLElement>('[data-article]')), el => el.dataset.id);
+  const htmlFields = groupById(Array.from(preview.content.querySelectorAll<HTMLElement>('[data-id][data-type]')), el => el.dataset.id);
+  const definitionChapters = groupById(chapters, chapter => chapter.ID);
+  const definitionFields = groupById(definitionLeaves(chapters), item => item.leaf.ID);
+  const fields: OutpatientEmrTemplateField[] = [];
+
+  for (const [id, matches] of definitionFields) {
+    const { chapter, leaf } = matches[0];
+    const elements = htmlFields.get(id);
+    if (matches.length !== 1 || elements?.length !== 1 || typeof chapter.ID !== 'string') continue;
+    const owners = htmlChapters.get(chapter.ID);
+    if (definitionChapters.get(chapter.ID)?.length !== 1 || owners?.length !== 1
+      || elements[0].closest('[data-article]') !== owners[0]) continue;
+    const section = owners[0].cloneNode(false) as HTMLElement;
+    section.appendChild(elements[0].cloneNode(true));
+    try {
+      const partial = inspectOutpatientEmrTemplate(section.outerHTML, JSON.stringify([{ ...chapter, eles: [leaf] }]));
+      fields.push(...partial.fields);
+    } catch (error) {
+      if (!(error instanceof OutpatientEmrError)) throw error;
+    }
+  }
+  return { sanitizedHtml: preview.innerHTML, fields };
+}
+
+function clinicalScalar(value: unknown): string | number | boolean | null | undefined {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+}
+
+function isProtectedDefinitionSlot(chapter: TemplateObject, leaf: TemplateObject): boolean {
+  const labels = [chapter.ID, chapter.ARTICLE, chapter.NAME].filter((value): value is string => typeof value === 'string');
+  return leaf.READONLY === true || leaf.READONLY === 'true' || leaf.HIDDEN === true || leaf.HIDDEN === 'true'
+    || isOutpatientEmrDictionaryFieldType(typeof leaf.TYPE === 'string' ? leaf.TYPE : '')
+    || (Array.isArray(leaf.BINDINGDATA) && leaf.BINDINGDATA.length > 0)
+    || isAdministrativeTemplateSlot(String(leaf.ID), typeof leaf.NAME === 'string' ? leaf.NAME : '', labels);
+}
+
+function getTemplateFieldError(code: OutpatientEmrErrorCode, id: string): OutpatientEmrError {
+  return new OutpatientEmrError(code, `模板字段 ${id} 无法作为本次可回填目标。`);
+}
+
+function selectPairedTargets(
+  inspection: OutpatientEmrTemplateInspectionResult,
+  targetFieldIds: string[],
+  definitionSource?: string,
+  pairingError?: OutpatientEmrError,
+): OutpatientEmrTemplateParseResult {
+  if (!Array.isArray(targetFieldIds) || !targetFieldIds.length) {
+    throw new OutpatientEmrError('NO_SUPPORTED_TEMPLATE_FIELDS', 'HIS 模板渲染器未提供当前有效字段。');
+  }
+  if (targetFieldIds.some(id => typeof id !== 'string' || !id || id !== id.trim())
+    || new Set(targetFieldIds).size !== targetFieldIds.length) {
+    throw new OutpatientEmrError('INVALID_TARGET_FIELD_IDS', 'targetFieldIds 必须为无首尾空白且不重复的字段 ID。');
+  }
+  const fragment = createTemplateFragment(inspection.sanitizedHtml).content;
+  const rendered = groupById(Array.from(fragment.querySelectorAll<HTMLElement>('[data-id]:not([data-article])')), el => el.dataset.id);
+  const fieldErrors = new Map<string, OutpatientEmrErrorCode>();
+  let fields = inspection.fields.filter(field => {
+    if (!isOutpatientEmrDictionaryFieldType(field.type) || field.dictionaryItems.length) return true;
+    fieldErrors.set(field.id, 'MISSING_DICTIONARY_DEFINITION');
+    return false;
+  });
+  // A partial snapshot must also be valid when another request selects different targets.
+  let conflict = findConflictingOutpatientEmrRecordFieldMapping(fields);
+  while (conflict) {
+    const conflicts = new Set(conflict.fieldIds);
+    // The HIS field IDs still identify separate writable slots. Only their standard projection is ambiguous.
+    fields = fields.map(field => conflicts.has(field.id)
+      ? { ...field, recordField: null, mappingSource: 'unmapped', projectionMode: null }
+      : field);
+    conflict = findConflictingOutpatientEmrRecordFieldMapping(fields);
+  }
+
+  const byId = new Map(fields.map(field => [field.id, field]));
+  const selected = new Set<string>();
+  const notes: OutpatientEmrTemplateSourceNote[] = [];
+  let firstError = pairingError;
+  let leaves: ReturnType<typeof definitionLeaves> | undefined;
+  for (const id of targetFieldIds) {
+    const elements = rendered.get(id);
+    const field = byId.get(id);
+    const visible = elements?.length === 1 && !isHiddenByRenderer(elements[0], fragment);
+    if (visible && field && elements[0].dataset.type === field.type && elements[0].dataset.readonly === 'false' && !field.readonly) {
+      selected.add(id);
+      continue;
+    }
+    firstError ??= getTemplateFieldError(fieldErrors.get(id) || 'INVALID_TARGET_FIELD_IDS', id);
+    if (elements?.length === 1 && !visible) {
+      notes.push({ fieldId: id, reason: 'hidden' });
+      continue;
+    }
+    const note: OutpatientEmrTemplateSourceNote = { fieldId: id, reason: 'unavailable' };
+    // Keep the authorized clinical text from both sources even if their metadata disagree.
+    // Administrative identities, dictionary presets and hidden slots stay out of model evidence.
+    const element = elements?.[0];
+    const section = element?.closest<HTMLElement>('[data-article]');
+    if (visible && element && section && element.dataset.readonly === 'false'
+      && !isOutpatientEmrDictionaryFieldType(element.dataset.type || '')
+      && !isAdministrativeTemplateSlot(id, element.dataset.name || '', [section.dataset.id, section.dataset.article, section.dataset.name])) {
+      if (definitionSource) leaves ??= definitionLeaves(readOutpatientEmrChapters(definitionSource).filter(isTemplateObject));
+      const identified = (leaves || []).filter(item => item.leaf.ID === id);
+      if (!identified.some(({ chapter, leaf }) => isProtectedDefinitionSlot(chapter, leaf))) {
+        note.htmlText = readFieldSourceText(element);
+        note.definitionValues = identified.filter(item => item.chapter.ID === section.dataset.id)
+          .map(({ leaf }) => ({
+            name: typeof leaf.NAME === 'string' ? leaf.NAME : undefined,
+            text: clinicalScalar(leaf.TEXT),
+            value: clinicalScalar(leaf.VALUE),
+          }));
+      }
+    }
+    notes.push(note);
+  }
+  if (!selected.size) throw firstError || new OutpatientEmrError('NO_SUPPORTED_TEMPLATE_FIELDS', '当前模板没有可确认的可见字段。');
+  return {
+    ...inspection, fields,
+    targetFields: fields.filter(field => selected.has(field.id)),
+    ...(notes.length ? { templateSourceNotes: notes } : {}),
+  };
 }
 
 export function parseOutpatientEmrTemplate(
@@ -513,10 +645,21 @@ export function parseOutpatientEmrTemplate(
   templateDefinition: string,
   targetFieldIds: string[],
 ): OutpatientEmrTemplateParseResult {
-  const inspection = inspectOutpatientEmrTemplate(templateHtml, templateDefinition);
-  const targetFields = resolveOutpatientEmrTargetFields(inspection.fields, targetFieldIds);
-  assertTargetFieldsVisible(inspection.sanitizedHtml, targetFields);
-  return { ...inspection, targetFields };
+  let inspection: OutpatientEmrTemplateInspectionResult;
+  let pairingError: OutpatientEmrError | undefined;
+  try {
+    inspection = inspectOutpatientEmrTemplate(templateHtml, templateDefinition);
+  } catch (error) {
+    if (!(error instanceof OutpatientEmrError)) throw error;
+    pairingError = error;
+    try {
+      inspection = recoverIndependentFields(templateHtml, templateDefinition);
+    } catch (cause) {
+      if (cause instanceof OutpatientEmrTemplateDefinitionError) throw error;
+      throw cause;
+    }
+  }
+  return selectPairedTargets(inspection, targetFieldIds, templateDefinition, pairingError);
 }
 
 function cloneOutpatientEmrTemplateField(
@@ -528,77 +671,15 @@ function cloneOutpatientEmrTemplateField(
   };
 }
 
-function resolveOutpatientEmrTargetFields(
-  fields: OutpatientEmrTemplateField[],
-  targetFieldIds: string[],
-): OutpatientEmrTemplateField[] {
-  if (!Array.isArray(targetFieldIds) || targetFieldIds.length === 0) {
-    throw new OutpatientEmrError(
-      'NO_SUPPORTED_TEMPLATE_FIELDS',
-      'HIS 模板渲染器未提供当前有效字段，无法开始分析。',
-    );
-  }
-  if (targetFieldIds.some((fieldId) => (
-    typeof fieldId !== 'string'
-    || fieldId.length === 0
-    || fieldId !== fieldId.trim()
-  ))) {
-    throw new OutpatientEmrError(
-      'INVALID_TARGET_FIELD_IDS',
-      'targetFieldIds 只能包含无首尾空白的非空模板字段 ID。',
-    );
-  }
-  const requestedIds = new Set(targetFieldIds);
-  if (requestedIds.size !== targetFieldIds.length) {
-    throw new OutpatientEmrError(
-      'INVALID_TARGET_FIELD_IDS',
-      'targetFieldIds 不能包含重复模板字段 ID。',
-    );
-  }
-
-  const fieldsById = new Map(fields.map((field) => [field.id, field]));
-  const invalidTargetIds = Array.from(requestedIds).filter((fieldId) => {
-    const field = fieldsById.get(fieldId);
-    return !field || field.readonly;
-  });
-  if (invalidTargetIds.length > 0) {
-    throw new OutpatientEmrError(
-      'INVALID_TARGET_FIELD_IDS',
-      `targetFieldIds 包含模板中不存在或不可写的字段：${invalidTargetIds.join('、')}`,
-    );
-  }
-
-  const targetFields = fields.filter((field) => requestedIds.has(field.id));
-  const missingDictionaryDefinition = targetFields.find((field) => (
-    isOutpatientEmrDictionaryFieldType(field.type)
-    && field.dictionaryItems.length === 0
-  ));
-  if (missingDictionaryDefinition) {
-    throw new OutpatientEmrError(
-      'MISSING_DICTIONARY_DEFINITION',
-      `模板字段 ${missingDictionaryDefinition.id} 是字典字段，但结构定义没有提供完整字典项。`,
-    );
-  }
-  const conflictingRecordFieldMapping = findConflictingOutpatientEmrRecordFieldMapping(targetFields);
-  if (conflictingRecordFieldMapping) {
-    throw new OutpatientEmrError(
-      'DUPLICATE_RECORD_FIELD_MAPPING',
-      `多个模板字段对同一标准字段 ${conflictingRecordFieldMapping.recordField} 形成歧义：${conflictingRecordFieldMapping.fieldIds.join('、')}`,
-    );
-  }
-  return targetFields;
-}
-
 export function restoreOutpatientEmrTemplateFromSnapshot(
   templateHtml: string,
   snapshotFields: OutpatientEmrTemplateField[],
   targetFieldIds: string[],
+  templateDefinition?: string,
 ): OutpatientEmrTemplateParseResult {
   const fields = snapshotFields.map(cloneOutpatientEmrTemplateField);
   const sanitizedHtml = prepareOutpatientEmrTemplatePreview(templateHtml).innerHTML;
-  const targetFields = resolveOutpatientEmrTargetFields(fields, targetFieldIds);
-  assertTargetFieldsVisible(sanitizedHtml, targetFields);
-  return { sanitizedHtml, fields, targetFields };
+  return selectPairedTargets({ sanitizedHtml, fields }, targetFieldIds, templateDefinition);
 }
 
 export const OUTPATIENT_EMR_FIELD_SOURCE_LABELS: Readonly<
@@ -606,6 +687,7 @@ export const OUTPATIENT_EMR_FIELD_SOURCE_LABELS: Readonly<
 > = {
   template: '模板预置，未经本次病例核对',
   'template-matched': '模板预置，模型判定与本次病例一致，请核对',
+  'unmentioned-default': '本次未提及，按默认值填写',
   ai: 'AI 依据本次病例生成',
   structured: '来自已确认的结构化病历',
   doctor: '医生已修改',

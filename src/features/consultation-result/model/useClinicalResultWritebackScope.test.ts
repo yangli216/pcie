@@ -1,7 +1,7 @@
 import { reactive, ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
 import type { TreatmentRecommendation } from '@/types/consultation';
-import { useClinicalResultWritebackScope } from './useClinicalResultWritebackScope';
+import { useClinicalResultWritebackScope, type ClinicalResultWritebackScopeOptions } from './useClinicalResultWritebackScope';
 
 function treatment(type: TreatmentRecommendation['type'], name: string): TreatmentRecommendation {
   return {
@@ -12,7 +12,7 @@ function treatment(type: TreatmentRecommendation['type'], name: string): Treatme
   };
 }
 
-function createFixture() {
+function createFixture(options: Pick<ClinicalResultWritebackScopeOptions, 'getTemplateChapters' | 'isTemplateScopeReady' | 'getTemplateScopeKey'> = {}) {
   const record = reactive({
     chiefComplaint: '咳嗽3天',
     historyOfPresentIllness: '受凉后咳嗽。',
@@ -32,6 +32,7 @@ function createFixture() {
   ]);
   const notify = vi.fn();
   const scope = useClinicalResultWritebackScope({
+    ...options,
     getRecord: () => record,
     getSelectedDiagnosisCount: () => diagnosisCount.value,
     getSelectedTreatments: () => treatments.value.filter((item) => item.selected),
@@ -152,5 +153,93 @@ describe('useClinicalResultWritebackScope', () => {
     expect(restored.serialize()).toEqual(snapshot);
     expect(restored.writebackScope.value.recordFields).not.toContain('familyHistory');
     expect(restored.writebackScope.value.orderTypes).toEqual(['exam', 'lab_test']);
+  });
+
+  it('remembers temporarily unavailable fields and groups without submitting them while unavailable', () => {
+    const first = createFixture();
+    first.scope.toggleRecordField('pastMedicalHistory');
+    first.record.familyHistory = '';
+    first.diagnosisCount.value = 0;
+    first.treatments.value = [];
+    first.scope.refreshAvailableContent();
+    expect(first.scope.writebackScope.value).toMatchObject({ includeDiagnosis: false, orderTypes: [] });
+    expect(first.scope.writebackScope.value.recordFields).not.toContain('familyHistory');
+    const snapshot = first.scope.serialize();
+    expect(snapshot.recordFields).toContain('familyHistory');
+    expect(snapshot).not.toHaveProperty('templateChapterIds');
+
+    const next = createFixture();
+    next.record.familyHistory = '';
+    next.diagnosisCount.value = 0;
+    next.treatments.value = [];
+    next.scope.restore(snapshot);
+    next.record.familyHistory = '已有核对';
+    next.diagnosisCount.value = 1;
+    next.treatments.value = [treatment('medicine', '药品A')];
+    next.scope.refreshAvailableContent();
+    expect(next.scope.writebackScope.value.recordFields).toContain('familyHistory');
+    expect(next.scope.writebackScope.value.recordFields).not.toContain('pastMedicalHistory');
+    expect(next.scope.writebackScope.value).toMatchObject({ includeDiagnosis: true, orderTypes: ['medicine'] });
+  });
+
+  it('waits for the exact template metadata before migrating a legacy customized canonical selection', () => {
+    type ChapterRows = NonNullable<ReturnType<NonNullable<ClinicalResultWritebackScopeOptions['getTemplateChapters']>>>;
+    const chapters = ref<ChapterRows>([]);
+    const ready = ref(false);
+    const opts = { getTemplateChapters: () => chapters.value, isTemplateScopeReady: () => ready.value, getTemplateScopeKey: () => 'bound-A' };
+    const legacy = { recordFields: ['physicalExam'], customized: true };
+    const { scope } = createFixture(opts);
+    scope.restore(legacy);
+    expect(scope.serialize()).toMatchObject({ recordFields: ['physicalExam'], templateScopeKey: 'bound-A' });
+    expect(scope.serialize()).not.toHaveProperty('templateChapterIds');
+    chapters.value = [
+      { key: 'first', label: '复查', available: true, recordFields: [] },
+      { key: 'second', label: '复查', available: true, recordFields: [] },
+      { key: 'custom', label: '补充', available: true, recordFields: [] },
+    ];
+    scope.refreshAvailableContent();
+    scope.toggleRecordField('custom');
+    const partial = scope.serialize();
+    expect(partial.recordFields).toEqual(['physicalExam']);
+    const restored = createFixture(opts).scope;
+    restored.restore(partial);
+    chapters.value = chapters.value.map(row => ({ ...row, recordFields: row.key === 'custom' ? [] : ['physicalExam'] }));
+    ready.value = true;
+    restored.refreshAvailableContent();
+    expect(restored.serialize().templateChapterIds).toEqual(['first', 'second', 'custom']);
+    expect(restored.writebackScope.value.recordFields).toEqual(['physicalExam']);
+    restored.toggleRecordField('first');
+    expect(restored.serialize().templateChapterIds).toEqual(['second', 'custom']);
+  });
+
+  it('restores source chapter preferences independently and discards data bound to another request', () => {
+    const owner = ref<string | null>('bound-A');
+    const one = { key: 'a', label: '同名', available: true, recordFields: ['physicalExam' as const] };
+    const two = { ...one, key: 'b' };
+    const rows = ref([one, two]);
+    const opts = { getTemplateScopeKey: () => owner.value, getTemplateChapters: () => owner.value ? rows.value : null };
+    const { scope } = createFixture(opts);
+    scope.toggleRecordField('a');
+    const saved = scope.serialize();
+    expect(saved.templateChapterIds).toEqual(['b']);
+    rows.value = [];
+    scope.restore(saved);
+    expect(scope.serialize().templateChapterIds).toEqual(['b']);
+    rows.value = [one, { ...two, available: false }];
+    scope.refreshAvailableContent();
+    expect(scope.writebackScope.value.recordFields).toEqual([]);
+    expect(scope.serialize().templateChapterIds).toEqual(['b']);
+    rows.value = [one, two];
+    scope.refreshAvailableContent();
+    expect(scope.recordFieldOptions.value.map(row => row.selected)).toEqual([false, true]);
+
+    owner.value = 'bound-B';
+    scope.restore(saved);
+    expect(scope.customized.value).toBe(false);
+    expect(scope.recordFieldOptions.value.map(row => row.selected)).toEqual([true, true]);
+    owner.value = null;
+    scope.restore(saved);
+    expect(scope.serialize()).not.toHaveProperty('templateChapterIds');
+    expect(scope.writebackScope.value.recordFields).toContain('chiefComplaint');
   });
 });

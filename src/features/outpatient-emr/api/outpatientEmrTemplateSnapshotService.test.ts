@@ -197,6 +197,21 @@ describe('outpatientEmrTemplateSnapshotService', () => {
     }));
   });
 
+  it('preserves independent historical fields alongside malformed or ambiguous metadata', async () => {
+    const templateHash = 'a'.repeat(64);
+    const [valid, ambiguous] = buildOutpatientEmrTemplateSnapshotRequest({ request, template, templateHash }).parseResult.fields;
+    regionalMocks.post.mockResolvedValueOnce({
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
+      cacheHit: true, id: 'snapshot-partial', templateId: request.templateId, templateHash, receivedAt: 8,
+      parseResult: {
+        schemaVersion: 'outpatient-emr-template-pair.v1',
+        fields: [valid, ambiguous, { id: ambiguous.id, readonly: 'broken' }, null],
+      },
+    });
+    const resolved = await resolveOutpatientEmrTemplateSnapshot({ templateId: request.templateId, templateHash });
+    expect(resolved.parseResult?.fields).toEqual([valid]);
+  });
+
   it('never registers a manual-override mapping into the immutable automatic parse', () => {
     expect(() => buildOutpatientEmrTemplateSnapshotRequest({
       request,

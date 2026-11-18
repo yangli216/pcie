@@ -8,6 +8,7 @@ import {
   normalizeClinicalRecordFactSuggestions,
   normalizeGeneratedClinicalRecordNarrative,
   type ClinicalRecordExplicitFact,
+  type RecordConfirmedWritebackField,
   type ClinicalRecordFactField,
   type ClinicalRecordFactRecord,
   type ClinicalRecordFactSuggestion,
@@ -86,11 +87,11 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
     }
   }
 
-  function getFieldHighlights(field: ClinicalRecordFactField): ClinicalRecordExplicitFact[] {
+  function getFieldHighlights(field: RecordConfirmedWritebackField): ClinicalRecordExplicitFact[] {
     return explicitFacts.value.filter((item) => item.field === field);
   }
 
-  function getFieldSuggestions(field: ClinicalRecordFactField): ClinicalRecordFactSuggestion[] {
+  function getFieldSuggestions(field: RecordConfirmedWritebackField): ClinicalRecordFactSuggestion[] {
     return suggestions.value.filter((item) => item.field === field && item.status === 'pending');
   }
 
@@ -102,8 +103,8 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
 
   function preserveDismissals(items: ClinicalRecordFactSuggestion[]): ClinicalRecordFactSuggestion[] {
     const dismissed = suggestions.value.filter((item) => item.status === 'dismissed');
-    const incoming = items.map((item) => dismissed.some((old) => old.id === item.id
-      || (old.field === item.field && old.negativeRecordText === item.negativeRecordText))
+    const incoming = items.map((item) => dismissed.some((old) => old.chapterId === item.chapterId
+      && (old.id === item.id || (old.field === item.field && old.negativeRecordText === item.negativeRecordText)))
       ? { ...item, status: 'dismissed' as const } : item);
     return [...incoming, ...dismissed.filter((old) => !incoming.some((item) => item.id === old.id))];
   }
@@ -140,10 +141,10 @@ export function useClinicalRecordFactConfirmation(options: ClinicalRecordFactCon
     const evidence = stripUnverifiedPhysicalExam(record.physicalExam, [...suggestions.value, ...validated]);
     const preserveExam = options.isPhysicalExamModified?.();
     const restored = preserveDismissals([
-      ...validated.filter((item) => item.field !== 'physicalExam'
+      ...validated.filter((item) => item.chapterId || item.field !== 'physicalExam'
         || (!preserveExam && (item.status === 'dismissed'
           || canAppendPhysicalExamCandidate(item.negativeRecordText, `${evidence}；${record.historyOfPresentIllness}`)))),
-      ...[...suggestions.value, ...validated].filter((item, index, all) => preserveExam && item.field === 'physicalExam'
+      ...[...suggestions.value, ...validated].filter((item, index, all) => preserveExam && !item.chapterId && item.field === 'physicalExam'
         && (item.status === 'dismissed' || record.physicalExam.includes(item.negativeRecordText))
         && all.findIndex((other) => other.id === item.id) === index),
     ]);

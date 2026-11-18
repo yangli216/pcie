@@ -45,6 +45,14 @@ describe('voiceIntentStream', () => {
     expect(events).toEqual([]);
   });
 
+  it('keeps chapter patches by source ID when an optional record partition reports a partial map', () => {
+    const state = createVoiceIntentStreamAccumulator();
+    applyVoiceIntentStreamEvent(state, { event: 'template_chapter', data: { chapterId: 'first', text: '已到达正文' } });
+    applyVoiceIntentStreamEvent(state, { event: 'record_extra', data: { templateChapterTexts: { second: '第二章', first: null } } });
+    expect(state.payload.recordDraft?.templateChapterTexts).toEqual({ first: '已到达正文', second: '第二章' });
+    expect(state.readySections).toEqual(['record_extra']);
+  });
+
   it('parses pretty-printed, concatenated and array-wrapped stream events', () => {
     const accumulator = createVoiceIntentStreamAccumulator();
     const parser = createVoiceIntentStreamParser((event) => applyVoiceIntentStreamEvent(accumulator, event));

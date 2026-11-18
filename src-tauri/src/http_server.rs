@@ -1597,25 +1597,39 @@ fn validate_debug_complete_consultation(
         .get("fieldValues")
         .and_then(serde_json::Value::as_object)
         .ok_or("联调完成结果 fieldValues 必须是对象")?;
-    if field_values.is_empty() {
-        return Err("联调完成结果 fieldValues 不能为空");
-    }
     let allowed_fields = template.target_field_ids.iter().collect::<HashSet<_>>();
-    if field_values.iter().any(|(field_id, value)| {
-        !allowed_fields.contains(field_id)
-            || value
-                .as_str()
-                .map(|text| text.trim().is_empty())
-                .unwrap_or(true)
-    }) {
-        return Err("联调完成结果 fieldValues 只能包含当前目标字段及非空字符串值");
+    if field_values
+        .iter()
+        .any(|(id, value)| !allowed_fields.contains(id) || !value.is_string())
+    {
+        return Err("联调完成结果 fieldValues 只能包含当前目标字段及字符串值");
     }
-    if payload
+    let selections = payload
         .get("dictionarySelections")
         .and_then(serde_json::Value::as_object)
-        .is_none()
-    {
-        return Err("联调完成结果 dictionarySelections 必须是对象");
+        .ok_or("联调完成结果 dictionarySelections 必须是对象")?;
+    for (id, selection) in selections {
+        let text = selection.get("text").and_then(serde_json::Value::as_str);
+        let code = selection.get("value").and_then(serde_json::Value::as_str);
+        if text.map(str::trim).unwrap_or_default().is_empty()
+            || text != field_values.get(id).and_then(serde_json::Value::as_str)
+            || code.is_none()
+        {
+            return Err("联调字典选择须提供确认字段的编码及显示文本");
+        }
+    }
+    if let Some(bindings) = payload.get("emrFieldValues") {
+        let bindings = bindings.as_object().ok_or("联调绑定值必须是对象")?;
+        if bindings.iter().any(|(id, value)| {
+            !value.is_string() || (allowed_fields.contains(id) && !field_values.contains_key(id))
+        }) || field_values.iter().any(|(id, text)| {
+            let code = selections
+                .get(id)
+                .and_then(|selection| selection.get("value"));
+            bindings.get(id) != Some(code.unwrap_or(text))
+        }) {
+            return Err("联调绑定值与本次确认字段不一致");
+        }
     }
     if payload
         .get("orderList")
@@ -3239,8 +3253,27 @@ mod tests {
         });
         assert_eq!(
             validate_debug_complete_consultation(&foreign_field, Some(&patient)).unwrap_err(),
-            "联调完成结果 fieldValues 只能包含当前目标字段及非空字符串值"
+            "联调完成结果 fieldValues 只能包含当前目标字段及字符串值"
         );
+    }
+
+    #[test]
+    fn debug_complete_consultation_accepts_an_empty_patch_and_explicit_text_clear() {
+        let patient = debug_complete_patient();
+        let mut result = debug_complete_result();
+        result.record["templateMetadata"]["fields"] = serde_json::json!([]);
+        result.record["fieldValues"] = serde_json::json!({});
+        result.record["emrFieldValues"] = serde_json::json!({});
+        assert!(validate_debug_complete_consultation(&result, Some(&patient)).is_ok());
+
+        result.record["emrFieldValues"]["chief"] = serde_json::json!("old value");
+        assert!(validate_debug_complete_consultation(&result, Some(&patient)).is_err());
+        result.record["templateMetadata"]["fields"] = serde_json::json!([{ "id": "chief" }]);
+        result.record["fieldValues"]["chief"] = serde_json::json!("");
+        result.record["emrFieldValues"]["chief"] = serde_json::json!("");
+        assert!(validate_debug_complete_consultation(&result, Some(&patient)).is_ok());
+        result.record["fieldValues"]["chief"] = serde_json::Value::Null;
+        assert!(validate_debug_complete_consultation(&result, Some(&patient)).is_err());
     }
 
     #[test]

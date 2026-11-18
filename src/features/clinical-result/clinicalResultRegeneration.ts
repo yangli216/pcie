@@ -17,6 +17,21 @@ export interface ClinicalResultRegenerationRecord {
   precautions: string;
 }
 
+export interface ClinicalResultRegenerationChapter {
+  chapterId: string;
+  title: string;
+  text: string;
+  fieldIds: readonly string[];
+  editableFieldIds?: readonly string[];
+  narrative?: unknown;
+  recordField?: keyof ClinicalResultRegenerationRecord | null;
+}
+
+interface RegeneratedClinicalResult extends ClinicalResultRegenerationRecord {
+  chapterTexts?: Record<string, string>;
+  templateFieldValues?: Record<string, string | null>;
+}
+
 export interface BuildClinicalResultRegenerationRequestInput {
   channel: ClinicalResultChannel;
   patient: {
@@ -25,6 +40,16 @@ export interface BuildClinicalResultRegenerationRequestInput {
     age?: string;
   };
   currentRecord: ClinicalResultRegenerationRecord;
+  templateFields?: ReadonlyArray<{
+    id: string;
+    name?: string;
+    articleName?: string;
+    dictionaryItems?: ReadonlyArray<{ value: string; text: string }>;
+    recordField?: string | null;
+    value: string;
+    source: string;
+  }>;
+  templateChapters?: readonly ClinicalResultRegenerationChapter[];
   doctorSupplement: string;
   consultationId?: string;
 }
@@ -64,9 +89,18 @@ export function buildClinicalResultRegenerationRequest(
     throw new Error('请先填写或录入补充信息');
   }
 
+  const system = [SYSTEM_PROMPT];
+  if (input.templateFields?.length) {
+    system.push('当前模板字段另列于 templateFields。source=unmentioned-default 表示问诊未提及时采用的书写默认值，不能据此写出患者明确否认、查体正常或检查阴性。结合字段含义使用有病例依据的事实。source=doctor 是医生对该字段的最新修订，空字符串表示医生已清空；正文草稿有冲突时按医生修订及本轮补充重写。');
+  }
+  if (input.templateChapters?.length) {
+    system.push('templateChapters 是本次 HIS 模板各源章的当前正文与字段范围。与标准字段在同一个 JSON 对象中输出 chapterTexts，以 chapterId 为键，保留各章语序、既有事实和医生编辑；同名或映射同一标准段的不同章仍须分开。只改受本轮补充影响的章；无改动时原样返回至少一个现有章。');
+    system.push('同时在 templateFieldValues 中按原始字段 ID 提供每个改写章的全部有据可写字段值，空字符串表示清空。只填 editableFieldIds 范围内的字段。对字典使用提供的合法编码或文字，保留原单位，尊重医生已核对或清空的字段；模板预置、查体建议与示例均不是已确认事实。');
+  }
+
   return {
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: system.join('\n') },
       {
         role: 'user',
         content: [
@@ -74,8 +108,10 @@ export function buildClinicalResultRegenerationRequest(
           '输入数据如下：',
           JSON.stringify({
             channel: input.channel,
-            patient: input.patient,
+            patient: input.templateChapters?.length ? { gender: input.patient.gender, age: input.patient.age } : input.patient,
             currentRecord: input.currentRecord,
+            ...(input.templateFields?.length ? { templateFields: input.templateFields } : {}),
+            ...(input.templateChapters?.length ? { templateChapters: input.templateChapters } : {}),
             doctorSupplement,
           }, null, 2),
         ].join('\n\n'),
@@ -110,11 +146,52 @@ function readField(
   return normalized.text;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function readRegeneratedChapters(
+  record: Record<string, unknown>, chapters: readonly ClinicalResultRegenerationChapter[],
+  templateFields: readonly { id: string }[],
+): Pick<RegeneratedClinicalResult, 'chapterTexts' | 'templateFieldValues'> {
+  const legacy = !Object.prototype.hasOwnProperty.call(record, 'chapterTexts');
+  const texts = isRecord(record.chapterTexts) ? record.chapterTexts : {};
+  const leaves = isRecord(record.templateFieldValues) ? record.templateFieldValues : {};
+  const authorized = new Set(templateFields.map(field => field.id));
+  const updated: [string, string][] = [];
+  const fieldValues: [string, string | null][] = [];
+  let recognized = false;
+  for (const chapter of chapters) {
+    const key = chapter.recordField;
+    const uniqueProjection = key && chapters.filter(other => other.recordField === key).length === 1;
+    const source = legacy && uniqueProjection ? record : texts;
+    const id = legacy && uniqueProjection ? key : chapter.chapterId;
+    if (!Object.prototype.hasOwnProperty.call(source, id) || typeof source[id] !== 'string') continue;
+    const raw = source[id].replace(/\r\n?/gu, '\n').trim();
+    const normalized = normalizeGeneratedClinicalRecordNarrative(raw, key ?? undefined);
+    if (raw && !normalized.text && normalized.issues.length) continue;
+    recognized = true;
+    const text = normalized.issues.length ? normalized.text : raw;
+    if (text === chapter.text) continue;
+    updated.push([chapter.chapterId, text]);
+    const writable = chapter.editableFieldIds ?? chapter.fieldIds.filter(fieldId => authorized.has(fieldId));
+    for (const fieldId of writable) {
+      if (!Object.prototype.hasOwnProperty.call(leaves, fieldId)) continue;
+      const value = leaves[fieldId];
+      if (typeof value === 'string' || value === null) fieldValues.push([fieldId, value]);
+    }
+  }
+  if (!recognized) throw new Error('重新生成结果缺少当前模板的章节正文，请重试。');
+  return { chapterTexts: Object.fromEntries(updated), templateFieldValues: Object.fromEntries(fieldValues) };
+}
+
 export function normalizeClinicalResultRegenerationOutput(
   value: unknown,
   fallback: ClinicalResultRegenerationRecord,
-): ClinicalResultRegenerationRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  templateChapters: readonly ClinicalResultRegenerationChapter[] = [],
+  templateFields: readonly { id: string }[] = [],
+): RegeneratedClinicalResult {
+  if (!isRecord(value)) {
     throw new Error('重新生成的病例不是有效 JSON 对象');
   }
 
@@ -131,6 +208,7 @@ export function normalizeClinicalResultRegenerationOutput(
     precautions: readField(record, 'precautions', fallback.precautions),
   };
 
+  if (templateChapters.length) return { ...result, ...readRegeneratedChapters(record, templateChapters, templateFields) };
   if (!result.chiefComplaint || !result.historyOfPresentIllness) {
     throw new Error('重新生成的病例缺少主诉或现病史');
   }

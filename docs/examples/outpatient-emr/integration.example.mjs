@@ -39,6 +39,14 @@ function assertSameIds(actualIds, expectedIds, description) {
   );
 }
 
+export function getConfirmedFieldIds(template, metadata, values) {
+  const confirmed = metadata.fields.map((field) => field?.id);
+  assert(Array.isArray(template.targetFieldIds) && template.targetFieldIds.length > 0
+    && confirmed.every((id) => template.targetFieldIds.includes(id)), '含未获授权的回写字段');
+  assertSameIds(Object.keys(values), confirmed, '显示字段');
+  return confirmed;
+}
+
 // request 是发送时持久保存的原始请求，不应从当前页面重新拼装。
 // expectedHash 应由 calculateTemplateHash(request.templateHtml, request.templateDefinition) 得到。
 // 此函数校验独立 analyzeOutpatientEmr 结果，不适用于 startVoice 的合并批次。
@@ -73,11 +81,8 @@ export function assertStandaloneResult(request, expectedHash, result) {
       && isObject(result.emrFieldValues),
     '缺少字段值、字典选择或绑定值'
   );
-  assertSameIds(Object.keys(result.fieldValues), request.targetFieldIds, '显示字段');
-  assertSameIds(Object.keys(result.emrFieldValues), request.targetFieldIds, '绑定字段');
-  assertSameIds(
-    metadata.fields.map((field) => field?.id), request.targetFieldIds, '字段元数据'
-  );
+  const confirmed = getConfirmedFieldIds(request, metadata, result.fieldValues);
+  assertSameIds(Object.keys(result.emrFieldValues), confirmed, '绑定字段');
   const dictionaryIds = [];
   for (const field of metadata.fields) {
     const display = result.fieldValues[field.id];

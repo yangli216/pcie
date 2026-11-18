@@ -208,12 +208,11 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
     expect(title).toMatchObject({ baselineValue: '门(急)诊病历', readonly: true });
   });
 
-  it('TC-19 目标字段在渲染实例中被联动隐藏时报 INVALID_TARGET_FIELD_IDS', () => {
+  it('TC-19 隐藏目标独立排除，可见目标照常分析', () => {
     // 真实模板在“高血压病史标志=否认”时以内联 display:none 隐藏补充字段。
-    expectOutpatientError(
-      () => parseOutpatientEmrTemplate(templateHtml, templateDefinition, ['主诉文本', '高血压病史补充']),
-      'INVALID_TARGET_FIELD_IDS',
-    );
+    const mixed = parseOutpatientEmrTemplate(templateHtml, templateDefinition, ['主诉文本', '高血压病史补充']);
+    expect(mixed.targetFields.map(field => field.id)).toEqual(['主诉文本']);
+    expect(mixed.templateSourceNotes).toEqual([{ fieldId: '高血压病史补充', reason: 'hidden' }]);
     const probe = parseOutpatientEmrTemplate(templateHtml, templateDefinition, ['主诉文本']);
     expectOutpatientError(
       () => restoreOutpatientEmrTemplateFromSnapshot(templateHtml, probe.fields, ['高血压病史补充']),
@@ -270,13 +269,11 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
     );
   });
 
-  it('TC-13 结构定义章节数量与 HTML 不一致时报 TEMPLATE_PAIR_MISMATCH', () => {
+  it('TC-13 其他章节缺失仍可配对主诉', () => {
     const articles = parseRawDefinition();
     articles.pop();
-    expectOutpatientError(
-      () => parseOutpatientEmrTemplate(templateHtml, JSON.stringify(articles), ['主诉文本']),
-      'TEMPLATE_PAIR_MISMATCH',
-    );
+    const result = parseOutpatientEmrTemplate(templateHtml, JSON.stringify(articles), ['主诉文本']);
+    expect(result.targetFields.map(field => field.id)).toEqual(['主诉文本']);
   });
 
   it('TC-14 字段 TEXT 与 HTML 渲染值漂移时报 TEMPLATE_PAIR_MISMATCH', () => {
@@ -298,18 +295,16 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
     );
   });
 
-  it('TC-16 多个字段显式映射同一标准字段时报 DUPLICATE_RECORD_FIELD_MAPPING', () => {
+  it.each([['主诉文本'], ['主诉文本', '现病史文本']])('TC-16 映射冲突仍保留明确目标 %s，仅省略冲突的标准投影', (...ids) => {
     const articles = parseRawDefinition();
     findEle(articles, '主诉文本').RECORD_FIELD = 'chiefComplaint';
     findEle(articles, '现病史文本').RECORD_FIELD = 'chiefComplaint';
-    expectOutpatientError(
-      () => parseOutpatientEmrTemplate(
-        templateHtml,
-        JSON.stringify(articles),
-        ['主诉文本', '现病史文本'],
-      ),
-      'DUPLICATE_RECORD_FIELD_MAPPING',
-    );
+    const result = parseOutpatientEmrTemplate(templateHtml, JSON.stringify(articles), ids);
+    const restored = restoreOutpatientEmrTemplateFromSnapshot(templateHtml, result.fields, ids);
+    for (const view of [result, restored]) {
+      expect(view.targetFields.map(field => field.id)).toEqual(ids);
+      expect(view.targetFields.every(field => field.recordField === null && field.projectionMode === null)).toBe(true);
+    }
   });
 
   it('TC-17 结构定义非法 JSON / 顶层非数组时报 INVALID_TEMPLATE_JSON', () => {
@@ -323,17 +318,12 @@ describe('门诊病历模板解析评估（真实模板对：16 章节 / 83 元�
     );
   });
 
-  it('TC-18 章节或字段 ID 重复时报 INVALID_TEMPLATE_JSON', () => {
+  it('TC-18 章节或字段 ID 重复仅影响身份存在歧义的字段', () => {
     const duplicatedArticle = parseRawDefinition();
     duplicatedArticle.push(JSON.parse(JSON.stringify(duplicatedArticle[0])) as RawArticle);
-    expectOutpatientError(
-      () => parseOutpatientEmrTemplate(
-        templateHtml,
-        JSON.stringify(duplicatedArticle),
-        ['主诉文本'],
-      ),
-      'INVALID_TEMPLATE_JSON',
-    );
+    const result = parseOutpatientEmrTemplate(templateHtml, JSON.stringify(duplicatedArticle), ['主诉文本']);
+    expect(result.targetFields.map(field => field.id)).toEqual(['主诉文本']);
+    expect(result.fields.some(field => field.articleTemplateId === duplicatedArticle[0].ID)).toBe(false);
 
     const duplicatedField = parseRawDefinition();
     const chief = duplicatedField.find((article) => article.ID === '主诉');

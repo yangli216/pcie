@@ -101,17 +101,11 @@ describe('clinical result architecture boundary', () => {
     expect(clinicalResultSupplementDialogSource).toContain('waveformLevels');
   });
 
-  it('shows independent female history fields only within the eligible age range below personal history', () => {
-    expect(resultImplementationSource).toContain('v-if="hasFemaleHistoryFields"');
+  it('uses the shared clinical section order and female history eligibility in the result document', () => {
     expect(resultImplementationSource).toContain('isFemaleHistoryEligible');
-    expect(resultImplementationSource).toContain('v-model="menstrualHistory"');
-    expect(resultImplementationSource).toContain('title="月经史"');
-    expect(resultImplementationSource.indexOf('v-model="personalHistory"')).toBeLessThan(
-      resultImplementationSource.indexOf('v-model="menstrualHistory"'),
-    );
-    expect(resultImplementationSource.indexOf('v-model="menstrualHistory"')).toBeLessThan(
-      resultImplementationSource.indexOf('v-model="familyHistory"'),
-    );
+    expect(resultImplementationSource).toContain('RECORD_CONFIRMED_WRITEBACK_FIELDS.filter');
+    expect(resultImplementationSource).toContain('WRITEBACK_RECORD_FIELD_LABELS[key]');
+    expect(resultImplementationSource).toContain('v-for="section in recordSections"');
   });
 
   it('keeps the record and decision columns independently readable on desktop', () => {
@@ -184,7 +178,7 @@ describe('clinical result architecture boundary', () => {
     expect(voiceRecordFieldEditorSource).not.toContain('confirm-positive-fact');
     expect(voiceRecordFieldEditorSource).not.toContain('not-applicable-fact');
     expect(voiceRecordFieldEditorSource).toContain("@dismiss-suggestion=\"emit('dismiss-fact-suggestion', $event)\"");
-    expect(resultImplementationSource).toContain(':fact-suggestions="getRecordFieldFactSuggestions');
+    expect(resultImplementationSource).toContain(':fact-suggestions="section.suggestions"');
     expect(resultImplementationSource).toContain('@dismiss-fact-suggestion="dismissFactSuggestion"');
     expect(resultImplementationSource).toContain('hasPendingFactSuggestions');
     expect(resultImplementationSource).toContain('clinical-record-ai-notice');

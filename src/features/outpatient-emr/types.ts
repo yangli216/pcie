@@ -24,6 +24,24 @@ export interface VoiceOutpatientEmrStartContext {
   template: VoiceOutpatientEmrTemplateInput;
 }
 
+export interface VoiceOutpatientEmrTemplateIdentity {
+  visitId: string;
+  requestId: string;
+  templateId: string;
+  templateHash: string;
+  targetFieldIds: string[];
+}
+
+/** Local voice document. Chapter identity and order come from the current rendered HIS source. */
+export interface VoiceOutpatientEmrDocument extends VoiceOutpatientEmrTemplateIdentity {
+  chapters: Array<{ chapterId: string; title: string; fieldIds: string[]; editableFieldIds?: string[]; text: string }>;
+}
+
+/** Approved template identity and leaf values produced in the ordinary voice recognition request. */
+export interface VoiceOutpatientEmrInitialDraft extends VoiceOutpatientEmrTemplateIdentity {
+  fieldValues: Record<string, string | null>;
+}
+
 export type OutpatientEmrRecordContext = Record<string, unknown>;
 
 export interface OutpatientEmrAnalysisRequest {
@@ -66,6 +84,7 @@ export type OutpatientEmrParsedFieldMappingSource = Exclude<
 export type OutpatientEmrFieldValueSource =
   | 'template'
   | 'template-matched'
+  | 'unmentioned-default'
   | 'ai'
   | 'structured'
   | 'doctor'
@@ -94,9 +113,17 @@ export interface OutpatientEmrTemplateInspectionResult {
   fields: OutpatientEmrTemplateField[];
 }
 
+export interface OutpatientEmrTemplateSourceNote {
+  fieldId: string;
+  reason: 'hidden' | 'unavailable';
+  htmlText?: string;
+  definitionValues?: Array<{ name?: string; text?: string | number | boolean | null; value?: string | number | boolean | null }>;
+}
+
 export interface OutpatientEmrTemplateParseResult
   extends OutpatientEmrTemplateInspectionResult {
   targetFields: OutpatientEmrTemplateField[];
+  templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
 }
 
 export type OutpatientEmrErrorCode =
@@ -117,7 +144,7 @@ export type OutpatientEmrErrorCode =
   | 'ANALYSIS_FAILED'
   | 'WRITEBACK_FAILED';
 
-export type OutpatientEmrAnalysisStatus = 'idle' | 'analyzing' | 'ready' | 'error';
+export type OutpatientEmrAnalysisStatus = 'idle' | 'analyzing' | 'draft' | 'ready' | 'error';
 export type OutpatientEmrWritebackStatus =
   | 'idle'
   | 'submitting'
