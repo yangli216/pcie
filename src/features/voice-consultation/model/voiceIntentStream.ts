@@ -266,14 +266,17 @@ export function applyVoiceIntentStreamEvent(
   switch (event.event) {
     case 'template_chapter':
       if (isObject(event.data) && typeof event.data.chapterId === 'string' && typeof event.data.text === 'string') {
-        recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, [event.data.chapterId]: event.data.text };
+        const { chapterId, text, fieldValues } = event.data;
+        recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, [chapterId]: text };
+        recordDraft.templateChapterFieldValues = { ...recordDraft.templateChapterFieldValues,
+          [chapterId]: isObject(fieldValues) ? fieldValues : {} };
       }
       break;
     case 'record_core':
     case 'history_context':
     case 'record_extra':
       if (isObject(event.data)) {
-        const { templateChapterTexts, ...values } = event.data;
+        const { templateChapterTexts, templateChapterFieldValues: _reserved, ...values } = event.data;
         Object.assign(recordDraft, values);
         if (isObject(templateChapterTexts)) {
           const texts = Object.entries(templateChapterTexts).filter((entry): entry is [string, string] => typeof entry[1] === 'string');

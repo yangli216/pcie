@@ -1013,6 +1013,7 @@ export function useVoiceIntentRecognition() {
       timing?.mark('context_prepared');
       let streamAccumulator = createVoiceIntentStreamAccumulator();
       let earlierChapterTexts: Record<string, string> | undefined;
+      let earlierChapterFields: Record<string, Record<string, unknown>> | undefined;
       // Cache only catalog assessments, not context-sensitive clinical decisions.
       // The request owns this map; catalog reload/clear replaces the array.
       let diagnosisCatalog: ReturnType<typeof medicalDataService.getAllDiagnoses> | undefined;
@@ -1058,7 +1059,7 @@ export function useVoiceIntentRecognition() {
         if (outpatientTemplate) {
           const draft = streamAccumulator.payload.recordDraft;
           if (streamAccumulator.readySections.includes('record_extra')) {
-            partial.intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, draft?.templateFieldValues);
+            partial.intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, draft?.templateFieldValues, draft?.templateChapterFieldValues);
           }
           partial.intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
             outpatientTemplate, draft?.templateChapterTexts, partial.intentResult.voiceTemplateDraft?.fieldValues,
@@ -1114,6 +1115,7 @@ export function useVoiceIntentRecognition() {
           );
           timing?.mark('fallback_completed');
           earlierChapterTexts = streamAccumulator.payload.recordDraft?.templateChapterTexts;
+          earlierChapterFields = streamAccumulator.payload.recordDraft?.templateChapterFieldValues;
           streamAccumulator = createVoiceIntentStreamAccumulator();
           streamParser = createVoiceIntentStreamParser((event) => {
             applyVoiceIntentStreamEvent(streamAccumulator, event);
@@ -1185,7 +1187,9 @@ export function useVoiceIntentRecognition() {
       } = built;
 
       if (outpatientTemplate) {
-        intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, parsed.recordDraft?.templateFieldValues);
+        intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, parsed.recordDraft?.templateFieldValues,
+          { ...earlierChapterFields, ...streamAccumulator.payload.recordDraft?.templateChapterFieldValues,
+            ...parsed.recordDraft?.templateChapterFieldValues });
         intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
           outpatientTemplate, { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts,
             ...parsed.recordDraft?.templateChapterTexts }, intentResult.voiceTemplateDraft.fieldValues,

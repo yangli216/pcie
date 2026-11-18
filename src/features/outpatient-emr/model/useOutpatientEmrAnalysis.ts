@@ -56,6 +56,7 @@ export interface OutpatientEmrAnalysisDependencies {
   restoreTemplateFromSnapshot?: typeof restoreOutpatientEmrTemplateFromSnapshot;
   hashTemplate?: typeof hashOutpatientEmrTemplate;
   getPreparedVoiceTemplate?: (request: OutpatientEmrAnalysisRequest) => PreparedOutpatientEmrTemplate | undefined;
+  isFieldInWriteback?: (field: OutpatientEmrTemplateField, value: string | undefined, source: OutpatientEmrFieldValueSource | undefined) => boolean;
   completeConsultation?: OutpatientEmrCompleteConsultation;
   now?: () => number;
 }
@@ -132,11 +133,18 @@ export function useOutpatientEmrAnalysis(
   const now = dependencies.now || Date.now;
 
   const targetFields = computed(() => template.value?.targetFields || []);
+  const isFieldInWriteback = dependencies.isFieldInWriteback;
+  const writebackFields = computed(() => isFieldInWriteback
+    ? targetFields.value.filter(field => isFieldInWriteback(field, fieldValues.value[field.id], fieldValueSources.value[field.id]))
+    : targetFields.value);
+  const writebackFieldValues = computed(() => isFieldInWriteback
+    ? Object.fromEntries(writebackFields.value.map(field => [field.id, fieldValues.value[field.id]]))
+    : fieldValues.value);
   const dictionaryValidationIssue = computed(() => (
-    findInvalidOutpatientEmrDictionaryValue(targetFields.value, fieldValues.value)
+    findInvalidOutpatientEmrDictionaryValue(writebackFields.value, fieldValues.value)
   ));
   const fieldConflicts = computed(() => (
-    findOutpatientEmrFieldConflicts(targetFields.value, fieldValues.value)
+    findOutpatientEmrFieldConflicts(writebackFields.value, fieldValues.value)
   ));
   const conflictFieldIds = computed(() => new Set(fieldConflicts.value.flatMap((conflict) => [
     conflict.flagFieldId,
@@ -381,7 +389,7 @@ export function useOutpatientEmrAnalysis(
       request: request.value,
       templateHash: templateHash.value,
       fields: selectedFields ? template.value.targetFields.filter(field => selectedFields.ids.has(field.id)) : template.value.targetFields,
-      fieldValues: fieldValues.value,
+      fieldValues: writebackFieldValues.value,
       documentDirectText: selectedFields?.directText,
       templateFieldIds: selectedFields && [
         ...template.value.fields.map(field => field.id),
@@ -525,6 +533,7 @@ export function useOutpatientEmrAnalysis(
     fieldConflicts,
     conflictFieldIds,
     fieldValues,
+    writebackFieldValues,
     fieldValueSources,
     analysisStatus,
     analysisErrorCode,

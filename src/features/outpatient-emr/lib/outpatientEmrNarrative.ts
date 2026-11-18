@@ -1,7 +1,7 @@
 import type { OutpatientEmrRecordField, OutpatientEmrTemplateField, OutpatientEmrTemplateParseResult } from '../types';
 import { resolveOutpatientEmrFinalDictionaryItem } from './outpatientEmrDictionary';
 import { readFieldSourceText } from './outpatientEmrTemplate';
-import { isAdministrativeTemplateSlot } from './outpatientEmrPromptGenerator';
+import { isAdministrativeTemplateSlot, resolveOutpatientEmrFieldPromptProfile } from './outpatientEmrPromptGenerator';
 
 type TextPart = { kind: 'text'; text: string };
 type Slot = { kind: 'field'; field: OutpatientEmrTemplateField };
@@ -32,6 +32,23 @@ export interface OutpatientEmrDocumentChapter {
   sections: OutpatientEmrNarrativeSection[];
   /** Present only in the model's source-reading pass, never used to derive writable targets. */
   referenceSlots?: Array<{ id: string; name: string; htmlText: string; readonly: boolean }>;
+}
+
+/** A bare input can be a duration, a measurement or a detail. Only a named full-body
+ * text slot in its own clause can safely receive reviewed chapter prose verbatim. */
+export function outpatientEmrChapterTextField(chapter: OutpatientEmrDocumentChapter): OutpatientEmrTemplateField | undefined {
+  const fields = chapter.fields.filter(slot => slot.editable).map(slot => slot.field);
+  const titles = new Set([chapter.title, ...fields.flatMap(field => [field.articleId, field.articleDefinitionName])].filter(Boolean));
+  const candidates = fields.filter(field => {
+    if (!['text', 'textarea'].includes(field.type) || field.dictionaryItems.length
+      || [field.name, field.id].some(label => /(?:时间|时长|日期|多久)$/u.test(label))
+      || resolveOutpatientEmrFieldPromptProfile(field, fields).shape !== 'narrative') return false;
+    const equivalent = [field.name, field.id].some(name => titles.has(name) || titles.has(name.replace(/(?:结果文本|文本|全文|正文|内容|详情|描述)$/u, '')))
+      || ['全文', '章节正文', '正文'].includes(field.name);
+    return equivalent && chapter.sections.some(section => section.clauses.some(clause => !clause.separator
+      && clause.parts.length === 1 && clause.parts[0].kind === 'field' && clause.parts[0].field.id === field.id));
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 interface DocumentScan {

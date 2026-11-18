@@ -150,10 +150,18 @@ export function buildVoiceOutpatientEmrDocument(
 export function buildVoiceOutpatientEmrInitialDraft(
   template: VoiceOutpatientRecognitionTemplate,
   raw: unknown,
+  byChapter?: Readonly<Record<string, Record<string, unknown>>>,
 ): VoiceOutpatientEmrInitialDraft {
-  const values = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
-  const present = template.fields.filter(field => Object.prototype.hasOwnProperty.call(values, field.id));
-  const fieldValues = normalizeOutpatientEmrModelValues(values, present);
+  const values = new Map(Object.entries(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}));
+  for (const chapter of template.chapters) {
+    const patch = byChapter && Object.prototype.hasOwnProperty.call(byChapter, chapter.id) ? byChapter[chapter.id] : undefined;
+    if (!patch) continue;
+    for (const { field, editable } of chapter.fields) {
+      if (editable && Object.prototype.hasOwnProperty.call(patch, field.id)) values.set(field.id, patch[field.id]);
+    }
+  }
+  const present = template.fields.filter(field => values.has(field.id));
+  const fieldValues = normalizeOutpatientEmrModelValues(Object.fromEntries(values), present);
   for (const field of template.promptData.fields) {
     if (field.topic === 'administrative' && Object.prototype.hasOwnProperty.call(fieldValues, field.id)) fieldValues[field.id] = '';
   }

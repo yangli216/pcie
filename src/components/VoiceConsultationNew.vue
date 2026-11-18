@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useVoiceOutpatientEmrRecord, VoiceOutpatientEmrFieldReview } from '@features/outpatient-emr';
+import { isVoiceOutpatientEmrFieldBound } from '@features/outpatient-emr/lib/outpatientEmrDraftSource';
 import { renderOutpatientEmrNarrativeSections } from '@features/outpatient-emr/lib/outpatientEmrNarrative';
 import { matchesVoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { buildVoiceOutpatientEmrRecordContext } from '@features/outpatient-emr/lib/voiceOutpatientEmr';
@@ -778,14 +779,21 @@ const templateRecordSections = computed(() => voiceTemplateDraft.chapterRows.val
   const text = suggestions.reduce(mergeClinicalRecordSuggestionIntoText, chapter.text);
   const facts = recordFactConfirmation.explicitFacts.value.filter(fact =>
     chapter.recordFields.includes(fact.field) || text.includes(fact.text));
-  return { ...chapter, text, suggestions, facts, readonly: !chapter.fieldIds.length, recordKey: null };
+  const boundCount = chapter.boundFieldIds.length;
+  let bindingNote = '';
+  if (voiceTemplateDraft.template.value && (text.trim() || boundCount)) {
+    if (!chapter.fieldIds.length) bindingNote = '本章为只读资料，HIS 未提供可回写字段。';
+    else if (!boundCount) bindingNote = '本章正文尚无可回写字段，可在“选择回写 → 模板回写字段”中核对或补录。';
+    else if (boundCount < chapter.fieldIds.length) bindingNote = `可回写 ${boundCount}/${chapter.fieldIds.length} 项模板字段`;
+  }
+  return { ...chapter, text, suggestions, facts, bindingNote, readonly: !chapter.fieldIds.length, recordKey: null };
 }));
 const recordSections = computed(() => voiceTemplateContext.value ? templateRecordSections.value
   : RECORD_CONFIRMED_WRITEBACK_FIELDS.filter(key =>
     hasFemaleHistoryFields.value || (key !== 'menstrualHistory' && key !== 'maritalReproductiveHistory'),
   ).map(key => ({
     key, label: WRITEBACK_RECORD_FIELD_LABELS[key], text: recordSectionRefs[key].value, recordKey: key,
-    readonly: false, facts: getRecordFieldFactHighlights(key), suggestions: getRecordFieldFactSuggestions(key),
+    readonly: false, bindingNote: '', facts: getRecordFieldFactHighlights(key), suggestions: getRecordFieldFactSuggestions(key),
   })));
 
 function updateReviewedRecord(section: (typeof recordSections.value)[number], text: string): void {
@@ -806,30 +814,31 @@ function updateReviewedRecord(section: (typeof recordSections.value)[number], te
 
 const templateScopeRows = computed(() => {
   const rows = templateRecordSections.value.map(chapter => {
-    const direct = chapter.sections.length === 1 ? chapter.sections[0].directField : null;
+    const ids = new Set(chapter.boundFieldIds);
+    const recordFields = [...new Set(chapter.fields.flatMap(field => ids.has(field.id) && field.recordField ? [field.recordField] : []))];
     const projection: Partial<Record<OutpatientEmrRecordField, string>> = {};
-    for (const key of chapter.recordFields) {
+    for (const key of recordFields) {
       if (chapter.sections[0]?.recordField === key) projection[key] = chapter.text;
       else {
-        const ids = new Set(chapter.fields.filter(field => field.recordField === key).map(field => field.id));
-        const values = Object.fromEntries(Object.entries(voiceTemplateDraft.fieldValues.value).filter(([id]) => ids.has(id)));
+        const values = Object.fromEntries(chapter.fields.filter(field => ids.has(field.id) && field.recordField === key)
+          .map(field => [field.id, voiceTemplateDraft.fieldValues.value[field.id]]));
         projection[key] = renderOutpatientEmrNarrativeSections(chapter.sections, values).map(part => part.text).join('');
       }
     }
     return {
-      key: JSON.stringify(['article', chapter.key]), label: chapter.label, fieldIds: chapter.fieldIds,
-      available: chapter.available || Boolean(chapter.fieldIds.length && chapter.suggestions.length),
-      recordFields: chapter.recordFields, projection,
-      directText: direct ? { [direct.id]: chapter.text } : {} as Record<string, string>,
+      key: JSON.stringify(['article', chapter.key]), label: chapter.label, fieldIds: chapter.boundFieldIds,
+      available: chapter.available, recordFields, projection,
+      directText: chapter.direct && chapter.directText !== undefined
+        ? { [chapter.direct.id]: chapter.text } : {} as Record<string, string>,
     };
   });
   // Explicitly authorized fields outside the clinical body retain their own review control (e.g. a signature time).
-  const inBody = new Set(rows.flatMap(row => row.fieldIds));
+  const inBody = new Set(templateRecordSections.value.flatMap(row => row.fieldIds));
   for (const section of voiceTemplateDraft.narrativeSections.value.filter(item => item.fallback)) {
     for (const field of section.fields.filter(item => !inBody.has(item.id))) {
       const value = voiceTemplateDraft.fieldValues.value[field.id] ?? '';
       rows.push({ key: JSON.stringify(['field', field.id]), label: field.name, fieldIds: [field.id],
-        available: Boolean(value.trim()) || (!field.dictionaryItems.length && voiceTemplateDraft.fieldValueSources.value[field.id] === 'doctor'),
+        available: isVoiceOutpatientEmrFieldBound(field, value, voiceTemplateDraft.fieldValueSources.value[field.id]),
         recordFields: field.recordField ? [field.recordField] : [],
         projection: field.recordField ? { [field.recordField]: value } : {}, directText: {} });
     }
@@ -1029,7 +1038,6 @@ async function applyEditorSnapshot(snapshot: VoiceEditorSnapshot, isCurrent: () 
 watch(templateScopeRows, () => {
   if (voiceTemplateContext.value) refreshWritebackScope();
 });
-const canSubmitTemplateWithoutScope = computed(() => Boolean(voiceTemplateContext.value && !writebackAvailableOptionCount.value));
 const writingTemplateRecordOnly = computed(() => Boolean(voiceTemplateContext.value
   && !writebackScope.value.includeDiagnosis && !writebackScope.value.orderTypes.length));
 const canSubmit = computed(() => (
@@ -1037,7 +1045,7 @@ const canSubmit = computed(() => (
   && (!diagnosisLoading.value || writingTemplateRecordOnly.value)
   && (!treatmentLoading.value || (writingTemplateRecordOnly.value && !treatmentGenerationIsInitial.value))
   && !isWritebackBusy.value
-  && (hasWritebackSelection.value || canSubmitTemplateWithoutScope.value)
+  && hasWritebackSelection.value
   && (!voiceTemplateContext.value || voiceTemplateDraft.canSubmit.value)
 ));
 
@@ -3381,7 +3389,7 @@ async function reconcileAutoSelectedMedicineInventory(
 
 async function handleBatchWriteBack(): Promise<void> {
   if (!canSubmit.value) return;
-  if (!canSubmitTemplateWithoutScope.value && !ensureWritebackSelection()) return;
+  if (!ensureWritebackSelection()) return;
   const templateContextAtStart = voiceTemplateContext.value;
   const templateRequestAtStart = voiceTemplateDraft.request.value;
   const patientAtStart = patientAnchorId.value;
@@ -3473,6 +3481,10 @@ async function handleBatchWriteBack(): Promise<void> {
       );
       if (!templateResult) {
         showToast?.('当前诊疗内容已更新，正在重新生成模板病历，请稍候再回写。', 'info');
+        return;
+      }
+      if (!Object.keys(templateResult.fieldValues).length && !diagList.length && !orderList.length) {
+        showToast?.('没有可发送的字段、诊断或医嘱，请核对本次回写范围。', 'info');
         return;
       }
       result = templateResult;
@@ -3840,20 +3852,22 @@ useChronicRefillTimingPresentation(() => ({
           </div>
 
           <div class="record-fields">
-            <VoiceRecordFieldEditor
-              v-for="section in recordSections" :key="section.key"
-              :model-value="section.text"
-              :title="section.label" presentation="document" :rows="3"
-              :grow="section.recordKey === 'historyOfPresentIllness'"
-              :placeholder="`请输入${section.label}...`"
-              :readonly="section.readonly || Boolean(voiceTemplateContext && (isResultUnavailable || isWritebackBusy))"
-              :commit-on-blur="Boolean(voiceTemplateContext)"
-              :empty-text="voiceTemplateContext ? '未记录' : undefined"
-              :fact-highlights="section.facts"
-              :fact-suggestions="section.suggestions"
-              @update:model-value="updateReviewedRecord(section, $event)"
-              @dismiss-fact-suggestion="dismissFactSuggestion"
-            />
+            <template v-for="section in recordSections" :key="section.key">
+              <VoiceRecordFieldEditor
+                :model-value="section.text"
+                :title="section.label" presentation="document" :rows="3"
+                :grow="section.recordKey === 'historyOfPresentIllness'"
+                :placeholder="`请输入${section.label}...`"
+                :readonly="section.readonly || Boolean(voiceTemplateContext && (isResultUnavailable || isWritebackBusy))"
+                :commit-on-blur="Boolean(voiceTemplateContext)"
+                :empty-text="voiceTemplateContext ? '未记录' : undefined"
+                :fact-highlights="section.facts"
+                :fact-suggestions="section.suggestions"
+                @update:model-value="updateReviewedRecord(section, $event)"
+                @dismiss-fact-suggestion="dismissFactSuggestion"
+              />
+              <p v-if="section.bindingNote" class="template-binding-note">{{ section.bindingNote }}</p>
+            </template>
           </div>
         </section>
 
@@ -4220,6 +4234,7 @@ useChronicRefillTimingPresentation(() => ({
 <style scoped src="../features/consultation-result/ui/ClinicalResultEditor.css"></style>
 
 <style scoped>
+.template-binding-note { margin: 0 0 8px; color: var(--voice-text-secondary); font-size: 12px; }
 .template-status { color: var(--voice-text-secondary); font-size: 13px; }
 .template-status p { margin: 4px 6px; }
 .template-status [role="alert"] { color: var(--voice-danger, #b52f2f); }

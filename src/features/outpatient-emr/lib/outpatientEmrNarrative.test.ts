@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import html from '@/test/template-parsing/fixtures/his-internal-medicine-template.html?raw';
 import definition from '@/test/template-parsing/fixtures/his-internal-medicine-template.json?raw';
 import { parseOutpatientEmrTemplate, restoreOutpatientEmrTemplateFromSnapshot } from './outpatientEmrTemplate';
-import { buildOutpatientEmrDocument, describeOutpatientEmrNarrative, parseOutpatientEmrNarrative, renderOutpatientEmrNarrative, renderOutpatientEmrNarrativeSections } from './outpatientEmrNarrative';
+import { buildOutpatientEmrDocument, outpatientEmrChapterTextField, describeOutpatientEmrNarrative, parseOutpatientEmrNarrative, renderOutpatientEmrNarrative, renderOutpatientEmrNarrativeSections } from './outpatientEmrNarrative';
 import type { OutpatientEmrTemplateField } from '../types';
 
 const ids = ['舒张压', '体温', '收缩压', '体格检查-精神', '胃纳', '痰声标志', '呕吐标志', '时间单位', '持续时间', '主诉文本'];
@@ -153,6 +153,21 @@ describe('the rendered HIS chapter document', () => {
     expect(chapters.flatMap(chapter => chapter.fields.filter(item => item.editable).map(item => item.field.id)))
       .toEqual(['痰声标志', '收缩压', '注意事项文本']);
     expect(chapters.find(chapter => chapter.id === '主诉')?.sections).toEqual([]);
+  });
+
+  it('distinguishes a full-body control from a single narrow text control or a unit-bound slot', () => {
+    function chapter(fields: OutpatientEmrTemplateField[], suffix = '') {
+      const html = '<section data-id="custom" data-article="观察">' + fields.map(field =>
+        `<p><span data-id="${field.id}" data-type="text"></span>${suffix}</p>`).join('') + '</section>';
+      return buildOutpatientEmrDocument({ sanitizedHtml: html, fields, targetFields: fields })[0];
+    }
+    for (const name of ['体重', '发病时间', '症状持续时间', '其他观察补充']) {
+      expect(outpatientEmrChapterTextField(chapter([customField('narrow', name)]))).toBeUndefined();
+    }
+    const full = customField('body', '观察结果文本');
+    expect(outpatientEmrChapterTextField(chapter([full, customField('duration', '持续时间')]))?.id).toBe('body');
+    expect(outpatientEmrChapterTextField(chapter([full], '次。'))).toBeUndefined();
+    expect(outpatientEmrChapterTextField(chapter([full, customField('other', '观察内容')]))).toBeUndefined();
   });
 
   it('preserves a single source sentence across standard mappings and omits clinical conclusions from read-only slots', () => {

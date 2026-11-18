@@ -103,6 +103,29 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     expect(matchesVoiceOutpatientRecognitionTemplate(result?.voiceTemplateDraft, context, 'different-hash')).toBe(false);
   });
 
+  it('binds each chapter event to its own writable controls in the original stream, including without record_extra', async () => {
+    const context = session();
+    const template = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    vi.mocked(chatStream).mockImplementation(async (messages, onChunk) => {
+      expect(messages[0].content).toContain('"fieldValues":{"本章可写字段的原始ID"');
+      const events = [
+        { event: 'template_chapter', data: { chapterId: '现病史', text: '有痰声。', fieldValues: { 痰声标志: '1', 收缩压: '异章值' } } },
+        { event: 'template_chapter', data: { chapterId: '体格检查', text: '血压120/73mmHg。',
+          fieldValues: { 收缩压: '120', 舒张压: '73', 就诊时间: '异章值', 未授权槽: '丢弃' } } },
+        { event: 'template_chapter', data: { chapterId: '未知章', text: '其他资料。', fieldValues: { 痰声标志: '0' } } },
+        { event: 'record_core', data: { chiefComplaint: '合成咳嗽' } }, { event: 'diagnoses', data: [] },
+        { event: 'recommendation_plan', data: { mode: 'explicit_only', recommendNow: [] } }, { event: 'done', data: {} },
+      ];
+      for (const event of events) onChunk(JSON.stringify(event) + '\n');
+    });
+    const result = await useVoiceIntentRecognition().processTranscript('合成咳嗽有痰声，血压120/73mmHg', { outpatientTemplate: template });
+    expect(result?.voiceTemplateDraft?.fieldValues).toEqual({ 痰声标志: '有', 收缩压: '120', 舒张压: '73' });
+    expect(result?.voiceTemplateDocument?.chapters.find(chapter => chapter.chapterId === '体格检查')?.text).toBe('血压120/73mmHg。');
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(chat).not.toHaveBeenCalled();
+    expect(chatFast).not.toHaveBeenCalled();
+  });
+
   it('streams source chapters by identity and retains their order, scoped candidates and explicit empty prose on completion', async () => {
     const context = session();
     const chapters = [

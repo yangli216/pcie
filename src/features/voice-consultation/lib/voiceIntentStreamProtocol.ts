@@ -31,10 +31,10 @@ function compactPhysicalExamGuidance(system: string): string {
 
 function templateChapterInstructions(fieldRules: string): string {
   return '\n【当前门诊模板病历】本次结果页的病历由 chapters 逐章组成。按提供的章序、实际句式、字段名称及语义，将本次临床资料写入对应章节。自定义、同名或同类的章节按各自 chapterId 分别书写；模板外资料可供诊疗分析，不要另创显示章节。'
-    + '在 record_core 前按章节顺序逐行输出 {"event":"template_chapter","data":{"chapterId":"模板提供的原始章节ID","text":"该章完整临床正文"}}。一章一行，包括无依据时的空字符串。标准病历分区另供诊疗及兼容映射使用；显示正文完全按模板临床章节和证据组织。无相应事实的标准字段可为空。'
+    + '在 record_core 前按章节顺序逐行输出 {"event":"template_chapter","data":{"chapterId":"模板提供的原始章节ID","text":"该章完整临床正文","fieldValues":{"本章可写字段的原始ID":"病例支持的字段值"}}}。一章一行，正文与字段同一行生成。依据每个字段的语义和原句拆出症状、时长、体征和有无等对应值；只填本章 writable 的原始 ID。整章文本只可赋给等价的全文控件，不得填入时间、测量、字典或局部描述。没有依据的字段省略，无依据的章节输出空正文及空对象。标准病历分区另供诊疗及兼容映射使用；显示正文完全按模板临床章节和证据组织。无相应事实的标准字段可为空。'
     + 'referenceSlots 是本章只读或未选字段的原始资料。htmlText 为本次 HIS 显示文字，definitionValues 为定义中的 TEXT/VALUE，可能是已填病例、编码或模板预设。结合转写、来源和其他病例资料判断，冲突并列保留；不把这些字段加入回写，也不把空白或预置正常项认定为确诊事实。'
     + 'record_suggestions 中的每项带对应 chapterId 和其临床语义 field。正文中不得把尚待核对的 AI 候选写成已证实事实。'
-    + '在 record_extra.data.templateFieldValues 以字段原始 ID 给出各实际可写字段值，与该章正文一致。字典用合法编码或显示文本。只有受本次资料支持的事实可用于书写。模板句式、示例、默认值并非患者事实。'
+    + 'record_extra.data.templateFieldValues 可补充尚未提供的字段。字典用合法编码或显示文本。只有受本次资料支持的事实可用于书写。模板句式、示例、默认值并非患者事实。'
     + '\n以下字段规则仅约束 templateFieldValues，缺少依据时可省略字段，null 仅用于 unmentionedDefault 约定。\n' + fieldRules;
 }
 

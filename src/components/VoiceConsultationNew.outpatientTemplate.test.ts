@@ -177,12 +177,13 @@ async function mountResult(
     streaming?: Ref<boolean>;
     chapters?: NonNullable<ClinicalResultInput['voiceTemplateDocument']>['chapters'];
     record?: Partial<ReturnType<typeof buildOutpatientRecord>>;
+    diagnoses?: ClinicalResultInput['diagnoses'];
   } = {},
 ): Promise<ReturnType<typeof vi.fn>> {
   const generated = buildOutpatientRecord({ chiefComplaint: '咳嗽3天', historyOfPresentIllness: '受凉后咳嗽3天，无发热。', ...options.record });
   const intent: ClinicalResultInput = {
     ...generated, allergyHistory: '', currentMedicationHistory: '', symptoms: ['咳嗽'], negativeSymptoms: ['发热'],
-    diagnoses: [{ name: '急性上呼吸道感染', code: 'J06.900', matchedItem: { id: 'SYN-DX', name: '急性上呼吸道感染', code: 'J06.900' } }],
+    diagnoses: options.diagnoses ?? [{ name: '急性上呼吸道感染', code: 'J06.900', matchedItem: { id: 'SYN-DX', name: '急性上呼吸道感染', code: 'J06.900' } }],
     treatments, treatmentPlan: '', healthEducation: '', outpatientRecord: generated, factSuggestions,
     recommendationPolicy: { autoFetchTreatments: false, allowTreatmentRefresh: false },
     generation: { status: 'complete', readySections: ['record_core', 'history_context', 'diagnoses', 'record_suggestions', 'record_extra'] },
@@ -569,6 +570,119 @@ describe('voice result with an HIS outpatient template', () => {
     expect(host.model).not.toHaveBeenCalled();
   });
 
+  it.each(['诊断', '补录病历字段'] as const)('only submits the reviewed selection (%s) when source prose has empty structured fields', async selection => {
+    const context = templateContext();
+    Object.assign(context.template, {
+      templateHtml: internalMedicineHtml, templateDefinition: internalMedicineDefinition,
+      targetFieldIds: ['持续时间', '时间单位', '体重'],
+    });
+    const historyText = '发病后间歇头晕，具体时长待核对。';
+    const examText = '查体配合，体重尚待测量。';
+    await mountResult(context, ref(true), ref(false), [], undefined, '女', [], {
+      fieldValues: {},
+      diagnoses: selection === '诊断' ? undefined : [],
+      chapters: [
+        { chapterId: '现病史', title: '现病史', fieldIds: ['持续时间', '时间单位'], text: historyText },
+        { chapterId: '体格检查', title: '体格检查', fieldIds: ['体重'], text: examText },
+      ],
+    });
+    const group = await openSectionEditor('现病史');
+    const scopeRow = (label: string) => Array.from(container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
+      .find(row => row.querySelector('.writeback-scope-row-copy > :first-child')?.textContent === label)!;
+    const history = scopeRow('现病史');
+    const exam = scopeRow('体格检查');
+    const diagnosis = scopeRow('诊断');
+    await vi.waitFor(() => {
+      expect(recordText('现病史')).toBe(historyText);
+      expect(recordText('体格检查')).toBe(examText);
+      expect(history.disabled).toBe(true);
+      expect(exam.disabled).toBe(true);
+      expect(history.getAttribute('aria-checked')).toBe('false');
+      expect(diagnosis.disabled).toBe(selection !== '诊断');
+      expect(container.querySelector('.template-binding-note')?.textContent).toContain('尚无可回写字段');
+    });
+    if (diagnosis.getAttribute('aria-checked') === 'true') diagnosis.click();
+    await vi.waitFor(() => expect(submit().disabled).toBe(true));
+    submit().click();
+    expect(host.received).toHaveLength(0);
+
+    if (selection === '诊断') {
+      diagnosis.click();
+    } else {
+      changeSectionText(group, '持续时间', '2');
+      await vi.waitFor(() => {
+        expect(history.disabled).toBe(false);
+        expect(exam.disabled).toBe(true);
+        expect(container.textContent).toContain('可回写 1/2 项模板字段');
+      });
+      if (history.getAttribute('aria-checked') !== 'true') history.click();
+    }
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    const payload = host.received[0];
+    const withHistory = selection === '补录病历字段';
+    expect(payload.fieldValues).toEqual(withHistory ? { 持续时间: '2' } : {});
+    expect(payload.templateMetadata.fields.map((item: { id: string }) => item.id)).toEqual(withHistory ? ['持续时间'] : []);
+    expect(payload.dictionarySelections).toEqual({});
+    expect(payload.writebackScope).toMatchObject({
+      recordFields: withHistory ? ['historyOfPresentIllness'] : [], includeDiagnosis: !withHistory, orderTypes: [],
+    });
+    expect(payload.orderList).toEqual([]);
+    if (withHistory) {
+      expect(payload.diagList).toBeUndefined();
+      expect(payload.emrFieldValues.持续时间).toBe('2');
+      expect(payload.emrFieldValues).not.toHaveProperty('时间单位');
+      expect(payload.emrFieldValues).not.toHaveProperty('体重');
+      expect(payload.outpatientRecord.historyOfPresentIllness).toBe(historyText);
+    } else {
+      expect(payload.diagList).toHaveLength(1);
+      expect(payload.outpatientRecord).toBeUndefined();
+    }
+    expect(host.model).not.toHaveBeenCalled();
+  });
+
+  it('writes only the history dictionary default that the doctor explicitly adopts', async () => {
+    const context = templateContext();
+    Object.assign(context.template, {
+      templateHtml: internalMedicineHtml, templateDefinition: internalMedicineDefinition,
+      targetFieldIds: ['肝炎史标志', '结核史标志'],
+    });
+    const ids = context.template.targetFieldIds;
+    await mountResult(context, ref(true), ref(false), [], undefined, '女', [], {
+      diagnoses: [], fieldValues: { 肝炎史标志: null, 结核史标志: null },
+      chapters: [{ chapterId: '既往史', title: '既往史', fieldIds: ids, text: '既往史待核对。' }],
+    });
+    const group = await openSectionEditor('既往史');
+    const defaults = () => [...group.querySelectorAll('button')].filter(button => button.textContent?.trim() === '确认采用此默认项');
+    const row = [...container.querySelectorAll<HTMLButtonElement>('.writeback-scope-check-row.is-field')]
+      .find(button => button.textContent?.includes('既往史'))!;
+    await vi.waitFor(() => {
+      expect(defaults()).toHaveLength(2);
+      expect(row.disabled).toBe(true);
+      expect(submit().disabled).toBe(true);
+    });
+    for (const id of ids) expect(group.querySelector<HTMLSelectElement>(`select[aria-label="${id}"]`)?.value).toBe('无');
+    const hepatitis = group.querySelector('[data-outpatient-emr-field-id="肝炎史标志"]')!;
+    (hepatitis.nextElementSibling as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(defaults()).toHaveLength(1);
+      expect(defaults()[0].previousElementSibling?.getAttribute('data-outpatient-emr-field-id')).toBe('结核史标志');
+      expect(row.disabled).toBe(false);
+      expect(container.textContent).toContain('可回写 1/2 项模板字段');
+    });
+    if (row.getAttribute('aria-checked') !== 'true') row.click();
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    const payload = host.received[0];
+    expect(payload.fieldValues).toEqual({ 肝炎史标志: '无' });
+    expect(payload.dictionarySelections).toEqual({ 肝炎史标志: { value: '0', text: '无' } });
+    expect(payload.emrFieldValues.肝炎史标志).toBe('0');
+    expect(payload.emrFieldValues).not.toHaveProperty('结核史标志');
+    expect(payload.templateMetadata.fields.map((field: { id: string }) => field.id)).toEqual(['肝炎史标志']);
+  });
+
   it('edits two source chapters independently when both have the same standard category', async () => {
     const context = templateContext();
     const definitions = [
@@ -597,7 +711,7 @@ describe('voice result with an HIS outpatient template', () => {
     const initial = choices.find(button => button.textContent?.includes('首诊主诉'))!;
     const followup = choices.find(button => button.textContent?.includes('复诊主诉'))!;
     expect(initial.getAttribute('aria-checked')).toBe('true');
-    expect(followup.getAttribute('aria-checked')).toBe('true');
+    await vi.waitFor(() => expect(followup.getAttribute('aria-checked')).toBe('true'));
     initial.click();
     await vi.waitFor(() => expect(initial.getAttribute('aria-checked')).toBe('false'));
     expect(followup.getAttribute('aria-checked')).toBe('true');

@@ -115,6 +115,8 @@ export interface VoiceRecordDraft {
   /** Optional data in record_extra when an HIS template is bound to the current voice round. */
   templateFieldValues?: unknown;
   templateChapterTexts?: Record<string, string>;
+  /** Raw field patches, scoped to their emitting HIS chapter until the bound template validates them. */
+  templateChapterFieldValues?: Record<string, Record<string, unknown>>;
   chiefComplaint: string;
   historyOfPresentIllness: string;
   pastMedicalHistory: string;

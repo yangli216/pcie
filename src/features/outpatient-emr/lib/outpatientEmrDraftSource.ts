@@ -9,6 +9,14 @@ export interface OutpatientEmrDraftValue {
   source: OutpatientEmrFieldValueSource;
 }
 
+/** Only case-derived values and deliberate text clears can be submitted by the voice result page. */
+export function isVoiceOutpatientEmrFieldBound(
+  field: OutpatientEmrTemplateField, value: string | undefined, source: OutpatientEmrFieldValueSource | undefined,
+): boolean {
+  if (typeof value !== 'string' || !source || source === 'template' || source === 'empty' || source === 'unmentioned-default') return false;
+  return Boolean(value.trim()) || (source === 'doctor' && !field.dictionaryItems.length);
+}
+
 function comparable(value: string): string {
   return value
     .normalize('NFKC')

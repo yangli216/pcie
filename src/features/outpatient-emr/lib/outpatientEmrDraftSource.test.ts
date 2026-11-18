@@ -3,6 +3,7 @@ import type { OutpatientEmrTemplateField } from '../types';
 import {
   buildOutpatientEmrInitialDraft,
   resolveOutpatientEmrModelDraft,
+  isVoiceOutpatientEmrFieldBound,
 } from './outpatientEmrDraftSource';
 
 function field(overrides: Partial<OutpatientEmrTemplateField> = {}): OutpatientEmrTemplateField {
@@ -36,6 +37,17 @@ const dictionaryField = field({
 });
 
 describe('outpatient EMR draft provenance', () => {
+  it('requires evidence or doctor confirmation for a voice binding and preserves an explicit text clear', () => {
+    expect(isVoiceOutpatientEmrFieldBound(field(), '模板预置', 'template')).toBe(false);
+    expect(isVoiceOutpatientEmrFieldBound(field(), '模板预置', 'doctor')).toBe(true);
+    expect(isVoiceOutpatientEmrFieldBound(field(), '', 'ai')).toBe(false);
+    expect(isVoiceOutpatientEmrFieldBound(field(), undefined, 'doctor')).toBe(false);
+    expect(isVoiceOutpatientEmrFieldBound(field(), '', 'doctor')).toBe(true);
+    expect(isVoiceOutpatientEmrFieldBound(dictionaryField, '否认', 'unmentioned-default')).toBe(false);
+    expect(isVoiceOutpatientEmrFieldBound(dictionaryField, '否认', 'doctor')).toBe(true);
+    expect(isVoiceOutpatientEmrFieldBound(dictionaryField, '', 'doctor')).toBe(false);
+  });
+
   it('renders the text template preset in the draft but never a dictionary selection', () => {
     expect(buildOutpatientEmrInitialDraft(field())).toEqual({ value: '否认吸烟史。', source: 'template' });
     expect(buildOutpatientEmrInitialDraft(field({ baselineValue: '' }))).toEqual({ value: '', source: 'empty' });
