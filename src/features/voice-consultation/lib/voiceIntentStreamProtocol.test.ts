@@ -32,6 +32,19 @@ describe('voice stream diagnosis-first protocol', () => {
     expect(formatted).not.toContain('基础项目库（均为未核实的书写候选）');
   });
 
+  it('requires field-only chapter patches and assigns units according to their actual template slots', () => {
+    const hosted = '机构规则：保留完整既往病历。';
+    const scoped = applyVoiceIntentStreamProtocol(hosted, '本次实际字段规则');
+    expect(scoped).toContain(hosted);
+    expect(scoped).toContain('template_chapter*>record_core');
+    const example = scoped.match(/逐章逐行输出 (\{.+?\})。/u);
+    expect(JSON.parse(example![1]).data).toEqual({ chapterId: expect.any(String), fieldValues: expect.any(Object) });
+    expect(scoped).toContain('另有单位槽，数量槽只填数量');
+    expect(scoped).toContain('独立的时长或全文控件可保留完整的');
+    expect(scoped).toContain('本次实际字段规则');
+    expect(applyVoiceIntentStreamProtocol(hosted)).not.toContain('template_chapter');
+  });
+
   it('preserves incomplete or non-NDJSON hosted instructions and adds the system-level order', () => {
     const system = '机构自定义规则\n{"event":"record_core","data":{}}\n不是JSON的说明';
     const formatted = applyVoiceIntentStreamProtocol(system);

@@ -3,6 +3,7 @@ import type { OutpatientEmrAnalysisRequest, OutpatientEmrTemplateField, VoiceOut
 export type ReviewedVoiceSections = Record<string, {
   chapterId?: string;
   fieldEditOnly?: boolean;
+  supplement?: boolean;
   text: string;
   values?: Record<string, string | null>;
   error?: string;

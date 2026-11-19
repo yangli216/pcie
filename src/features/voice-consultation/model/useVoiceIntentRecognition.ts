@@ -1,4 +1,4 @@
-import { buildVoiceOutpatientEmrDocument, buildVoiceOutpatientEmrInitialDraft, type VoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
+import { buildVoiceOutpatientEmrDraftAndDocument, type VoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import {
   normalizeRecommendationPlan,
   stabilizeOrdinaryVoiceRecommendationPlan,
@@ -726,7 +726,7 @@ export function useVoiceIntentRecognition() {
     assessDiagnosis: typeof medicalDataService.assessDiagnosisMatch = (name, context) =>
       medicalDataService.assessDiagnosisMatch(name, context),
     chapterIds?: ReadonlySet<string>,
-    chapterTexts?: Record<string, string>,
+    document?: VoiceIntentResult['voiceTemplateDocument'],
   ): {
     intentResult: VoiceIntentResult;
     matchedDiagnoses: MatchedDiagnosis[];
@@ -803,7 +803,8 @@ export function useVoiceIntentRecognition() {
     // A candidate in one source chapter must not be merged into a same-named sibling or a fixed section.
     if (chapterIds) {
       const scoped = rawSuggestions.filter(item => typeof item?.chapterId === 'string' && chapterIds.has(item.chapterId));
-      factSuggestions.push(...normalizeClinicalRecordFactSuggestions({ items: scoped }, [], chapterTexts ?? {}));
+      const chapterTexts = Object.fromEntries(document?.chapters.map(chapter => [chapter.chapterId, chapter.text]) ?? []);
+      factSuggestions.push(...normalizeClinicalRecordFactSuggestions({ items: scoped }, [], chapterTexts));
     }
 
     const intentResult: VoiceIntentResult = {
@@ -1042,6 +1043,10 @@ export function useVoiceIntentRecognition() {
         const partialExtraction = normalizeWithKnownHistories(streamAccumulator.payload);
         endNormalize?.();
         const endBuild = timing?.span(`build_intent_${event.event}`);
+        const draft = streamAccumulator.payload.recordDraft;
+        const templateResult = outpatientTemplate && buildVoiceOutpatientEmrDraftAndDocument(
+          outpatientTemplate, draft?.templateFieldValues, draft?.templateChapterFieldValues, draft?.templateChapterTexts,
+        );
         const partial = buildIntentResult(
           partialExtraction,
           'streaming',
@@ -1049,21 +1054,16 @@ export function useVoiceIntentRecognition() {
           undefined,
           patientCtx?.gender || undefined,
           vitalSourceText,
-          assessDiagnosis, chapterIds, streamAccumulator.payload.recordDraft?.templateChapterTexts,
+          assessDiagnosis, chapterIds, templateResult?.voiceTemplateDocument,
         );
         endBuild?.(partial.intentResult.diagnoses.length);
         if (streamAccumulator.readySections.includes('recommendation_plan')) {
           logRouting(streamAccumulator.payload.recommendationPlan,
             partial.intentResult.recommendationPolicy!.plan!, partial.intentResult.diagnoses);
         }
-        if (outpatientTemplate) {
-          const draft = streamAccumulator.payload.recordDraft;
-          if (streamAccumulator.readySections.includes('record_extra')) {
-            partial.intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, draft?.templateFieldValues, draft?.templateChapterFieldValues);
-          }
-          partial.intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
-            outpatientTemplate, draft?.templateChapterTexts, partial.intentResult.voiceTemplateDraft?.fieldValues,
-          );
+        if (templateResult) {
+          partial.intentResult.voiceTemplateDocument = templateResult.voiceTemplateDocument;
+          if (streamAccumulator.readySections.includes('record_extra')) partial.intentResult.voiceTemplateDraft = templateResult.voiceTemplateDraft;
         }
         options.onProgress({
           result: partial.intentResult,
@@ -1169,6 +1169,10 @@ export function useVoiceIntentRecognition() {
       );
       endExplicit?.(resolvedTreatments.length);
       const endFinalBuild = timing?.span('build_intent_complete');
+      const templateResult = outpatientTemplate && buildVoiceOutpatientEmrDraftAndDocument(outpatientTemplate,
+        parsed.recordDraft?.templateFieldValues,
+        { ...earlierChapterFields, ...streamAccumulator.payload.recordDraft?.templateChapterFieldValues, ...parsed.recordDraft?.templateChapterFieldValues },
+        { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts, ...parsed.recordDraft?.templateChapterTexts });
       const built = buildIntentResult(
         normalizedExtraction,
         'complete',
@@ -1176,8 +1180,7 @@ export function useVoiceIntentRecognition() {
         resolvedTreatments,
         patientCtx?.gender || undefined,
         vitalSourceText,
-        assessDiagnosis, chapterIds, { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts,
-          ...parsed.recordDraft?.templateChapterTexts },
+        assessDiagnosis, chapterIds, templateResult?.voiceTemplateDocument,
       );
       const {
         intentResult,
@@ -1186,15 +1189,7 @@ export function useVoiceIntentRecognition() {
         segregatedTreatments,
       } = built;
 
-      if (outpatientTemplate) {
-        intentResult.voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(outpatientTemplate, parsed.recordDraft?.templateFieldValues,
-          { ...earlierChapterFields, ...streamAccumulator.payload.recordDraft?.templateChapterFieldValues,
-            ...parsed.recordDraft?.templateChapterFieldValues });
-        intentResult.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(
-          outpatientTemplate, { ...earlierChapterTexts, ...streamAccumulator.payload.recordDraft?.templateChapterTexts,
-            ...parsed.recordDraft?.templateChapterTexts }, intentResult.voiceTemplateDraft.fieldValues,
-        );
-      }
+      if (templateResult) Object.assign(intentResult, templateResult);
       endFinalBuild?.(intentResult.diagnoses.length);
       timing?.mark('intent_completed');
       logRouting(parsed.recommendationPlan, intentResult.recommendationPolicy!.plan!, intentResult.diagnoses);

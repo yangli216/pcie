@@ -59,7 +59,7 @@ vi.mock('@features/voice-consultation', () => ({
 
 import * as templates from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { loadVoiceConsultationCacheEntry } from '@features/voice-consultation';
-import type { VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
+import type { OutpatientEmrTemplateField, VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
 import { useVoiceConsultation } from './useVoiceConsultation';
 
 const result = {
@@ -265,6 +265,38 @@ describe('confirmed voice transcript template preparation', () => {
       expect(api.intentResult.value?.voiceTemplateDocument).toEqual({ ...prepared.identity, chapters: [] });
       expect(mocks.processTranscript).not.toHaveBeenCalled();
     } finally { prepare.mockRestore(); }
+  });
+
+  it.each(['resume', 'same transcript'] as const)('rebuilds cached composite prose from its verified leaves via %s', async mode => {
+    const { api, prepared, current } = templateRound();
+    const duration: OutpatientEmrTemplateField = { id: 'duration', name: '持续时间', type: 'text', articleId: '现病史',
+      articleTemplateId: 'history', articleName: '现病史', articleDefinitionName: '现病史', readonly: false, aiSuitable: true,
+      baselineValue: '', baselineDictionaryValue: '', dictionaryItems: [], recordField: 'historyOfPresentIllness',
+      mappingSource: 'manual-override', projectionMode: 'section-compose' };
+    const unit = { ...duration, id: 'unit', name: '时间单位', type: 'select', dictionaryItems: [{ value: 'D', text: '天' }] };
+    const sourceFields = [duration, unit];
+    current.value!.template.targetFieldIds = prepared.identity.targetFieldIds = sourceFields.map(field => field.id);
+    prepared.fields = sourceFields;
+    prepared.chapters = [{ id: 'history', title: '现病史', fields: sourceFields.map(field => ({ field, editable: true })),
+      sections: [{ key: 'history', title: '现病史', recordField: 'historyOfPresentIllness', directField: null,
+        fields: sourceFields, clauses: [{ parts: [{ kind: 'field', field: duration }, { kind: 'field', field: unit },
+          { kind: 'text', text: '前' }], separator: '' }] }] }];
+    vi.mocked(loadVoiceConsultationCacheEntry).mockReturnValueOnce({
+      consultationId: 'visit-1', transcribedText: '已确认合成转写', savedAt: Date.now(), ownerScope: 'patient-1',
+      intentResult: { ...result, voiceTemplateDraft: { ...prepared.identity, fieldValues: { duration: '3', unit: 'D' } },
+        voiceTemplateDocument: { ...prepared.identity, chapters: [{ chapterId: 'history', title: '现病史',
+          fieldIds: ['duration', 'unit'], editableFieldIds: ['duration', 'unit'], text: '旧缓存自由章节中另写的内容。' }] } },
+    });
+    const hash = vi.spyOn(templates, 'hashVoiceOutpatientRecognitionTemplate').mockResolvedValue(prepared.identity.templateHash);
+    const prepare = vi.spyOn(templates, 'prepareVoiceOutpatientRecognitionTemplate').mockResolvedValueOnce(prepared);
+    try {
+      if (mode === 'resume') await expect(api.resumeCachedVoiceResult()).resolves.toBe(true);
+      else await api.handleVoiceStop(new Blob([]), '已确认合成转写');
+      expect(api.intentResult.value?.voiceTemplateDocument?.chapters[0].text).toBe('3天前');
+      expect(api.intentResult.value?.voiceTemplateDraft?.fieldValues).toEqual({ duration: '3', unit: '天' });
+      expect(api.intentSource.value).toBe('cache');
+      expect(mocks.processTranscript).not.toHaveBeenCalled();
+    } finally { prepare.mockRestore(); hash.mockRestore(); }
   });
 
   it('regenerates on the first voice stream for identical text bound to different template bytes', async () => {

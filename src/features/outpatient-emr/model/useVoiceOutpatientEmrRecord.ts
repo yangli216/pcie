@@ -10,9 +10,12 @@ import {
   describeOutpatientEmrNarrative,
   parseOutpatientEmrNarrative,
   outpatientEmrChapterTextField,
+  isVoiceOutpatientEmrFieldPlaceholder,
   renderOutpatientEmrNarrativeSections,
+  renderVoiceOutpatientEmrChapter,
 } from '../lib/outpatientEmrNarrative';
 import { isVoiceOutpatientEmrFieldBound } from '../lib/outpatientEmrDraftSource';
+import { resolveOutpatientEmrFinalDictionaryItem } from '../lib/outpatientEmrDictionary';
 import { patchVoiceRecordFieldEdit } from '../lib/voiceOutpatientEmrFieldEdit';
 import { getPreparedVoiceOutpatientTemplate, matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
 import { buildVoiceOutpatientEmrPatientInput } from '../lib/voiceOutpatientEmr';
@@ -47,6 +50,7 @@ export interface VoiceOutpatientEmrRecordOptions {
   initialDraft?: Readonly<Ref<VoiceOutpatientEmrInitialDraft | null | undefined>>;
   getLegacyRecord?: () => Readonly<Partial<Record<OutpatientEmrRecordField, string>>> | undefined;
   document?: Readonly<Ref<VoiceOutpatientEmrDocument | undefined>>;
+  streaming?: Readonly<Ref<boolean>>;
   awaitInitialDraft?: Readonly<Ref<boolean>>;
 }
 
@@ -59,7 +63,8 @@ export function useVoiceOutpatientEmrRecord(
   const analyzeFields = dependencies.analyzeFields ?? analyzeOutpatientEmrFields;
   const analysis = useOutpatientEmrAnalysis({
     ...dependencies,
-    isFieldInWriteback: isVoiceOutpatientEmrFieldBound,
+    isFieldInWriteback: (field, value, source) => isVoiceOutpatientEmrFieldBound(field, value, source)
+      && !isVoiceOutpatientEmrFieldPlaceholder(field, value, fieldPlaceholders.value.get(field.id)),
     getPreparedVoiceTemplate: dependencies.getPreparedVoiceTemplate ?? ((request) => {
       const context = templateSource.matchingContext.value;
       return context ? getPreparedVoiceOutpatientTemplate(context, request) : undefined;
@@ -145,7 +150,10 @@ export function useVoiceOutpatientEmrRecord(
     const document = options.document?.value;
     return analysis.template.value ?? (document && getPreparedVoiceOutpatientTemplate(context)?.template);
   });
-  const sourceChapters = computed(() => preparedTemplate.value ? buildOutpatientEmrDocument(preparedTemplate.value) : []);
+  const sourceChapters = computed(() => preparedTemplate.value
+    ? buildOutpatientEmrDocument(preparedTemplate.value, false, templateSource.prepared.value?.templateDefinition) : []);
+  const fieldPlaceholders = computed(() => new Map(sourceChapters.value.flatMap(chapter =>
+    chapter.fields.map(slot => [slot.field.id, slot.placeholder] as const))));
   const streamDocument = computed(() => {
     const context = templateSource.matchingContext.value;
     const document = options.document?.value;
@@ -157,6 +165,11 @@ export function useVoiceOutpatientEmrRecord(
   const boundValues = analysis.writebackFieldValues;
   const chapterRows = computed(() => {
     const streamed = streamDocument.value;
+    const session = templateSource.matchingContext.value;
+    const initial = options.initialDraft?.value;
+    const waitingForLeaves = ['idle', 'analyzing'].includes(analysis.analysisStatus.value);
+    const initialValues = waitingForLeaves && initial && session && matchesVoiceOutpatientRecognitionTemplate(initial, session,
+      analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(session)?.templateHash) ? initial.fieldValues : {};
     const incoming = new Map(streamed?.chapters.map(chapter => [chapter.chapterId, chapter]));
     const chapters = preparedTemplate.value ? sourceChapters.value : (streamed?.chapters ?? []).map(chapter => ({
       id: chapter.chapterId, title: chapter.title, fields: [], sections: [],
@@ -169,17 +182,23 @@ export function useVoiceOutpatientEmrRecord(
         : generated?.editableFieldIds ?? generated?.fieldIds.filter(id => streamed?.targetFieldIds.includes(id)) ?? [];
       const recordFields = [...new Set(fields.flatMap(field => field.recordField ? [field.recordField] : []))];
       const direct = outpatientEmrChapterTextField(chapter);
-      const legacyValue = !streamed && direct?.recordField && analysis.fieldValueSources.value[direct.id] !== 'doctor'
+      const legacyRecordText = !streamed && direct?.recordField && analysis.fieldValueSources.value[direct.id] !== 'doctor'
         && sourceChapters.value.filter(item => item.fields.some(slot => slot.editable && slot.field.recordField === direct.recordField)).length === 1
         ? options.getLegacyRecord?.()?.[direct.recordField] : undefined;
-      const rendered = renderOutpatientEmrNarrativeSections(chapter.sections, boundValues.value)
-        .map(part => part.text).join('');
-      const directHasValue = direct && Object.prototype.hasOwnProperty.call(boundValues.value, direct.id);
-      const text = edit?.text ?? generated?.text ?? (direct && !directHasValue && legacyValue?.trim()
-        ? legacyValue : (rendered || legacyValue || ''));
-      const canBindParagraph = direct && Boolean(edit || generated?.text?.trim() || legacyValue?.trim() || directHasValue);
-      const directText = canBindParagraph && (text.trim() || (edit && !edit.text && !edit.fieldEditOnly))
-        ? text : undefined;
+      const legacyValue = direct && legacyRecordText?.trim()
+        && !isVoiceOutpatientEmrFieldPlaceholder(direct, legacyRecordText, fieldPlaceholders.value.get(direct.id))
+        && !Object.prototype.hasOwnProperty.call(options.initialDraft?.value?.fieldValues ?? {}, direct.id)
+        ? legacyRecordText : undefined;
+      const directText = direct ? boundValues.value[direct.id] ?? legacyValue : undefined;
+      const values = direct && directText !== undefined ? { ...boundValues.value, [direct.id]: directText } : boundValues.value;
+      const rendered = renderVoiceOutpatientEmrChapter(chapter, { ...initialValues, ...values });
+      // Only a live recognition document has already been projected from this stream's leaves.
+      // Persisted documents may still contain prose from the earlier chapter-text protocol.
+      const reviewedText = edit && !edit.fieldEditOnly && !edit.supplement
+        && !(direct && isVoiceOutpatientEmrFieldPlaceholder(direct, edit.text, fieldPlaceholders.value.get(direct.id)))
+        ? edit.text : undefined;
+      const text = reviewedText
+        ?? (options.streaming?.value && generated ? generated.text : rendered);
       const boundFieldIds = fields.filter(field => (
         field.id === direct?.id && Boolean(directText?.trim())
         || Object.prototype.hasOwnProperty.call(boundValues.value, field.id)
@@ -267,23 +286,58 @@ export function useVoiceOutpatientEmrRecord(
       chapterId: row.key, title: row.label, text: row.text, fieldIds: row.fields.map(field => field.id),
       narrative: describeOutpatientEmrNarrative(row.sections, [analysis.request.value?.patient?.name,
         analysis.request.value?.patient?.idPi, analysis.request.value?.visitId]),
-      editableFieldIds: row.fieldIds, recordField: row.sections.length === 1 ? row.sections[0].recordField : null,
+      editableFieldIds: row.fieldIds, directTextFieldId: row.direct?.id,
+      recordField: row.sections.length === 1 ? row.sections[0].recordField : null,
     }));
   }
 
-  function applySupplementChapters(texts: Readonly<Record<string, string>>, values?: Readonly<Record<string, string | null>>): void {
+  function applySupplementPatch(fields: OutpatientEmrTemplateField[], values: Readonly<Record<string, string | null>>): void {
+    const targets = fields.filter(field => typeof values[field.id] === 'string' && !analysis.isIndividuallyEdited(field.id));
+    analysis.replaceReviewedSectionValues(targets.filter(field => values[field.id] !== ''), values);
+    // An explicit clear is a writable empty text. An unknown value leaves the original slot alone.
+    analysis.replaceReviewedSectionValues(targets.filter(field => values[field.id] === ''), {}, true);
+  }
+
+  function supplementTargets(row: (typeof chapterRows.value)[number], values: Readonly<Record<string, string | null>>) {
+    return row.fields.filter(field => {
+      if (!row.fieldIds.includes(field.id) || !Object.prototype.hasOwnProperty.call(values, field.id)
+        || analysis.isIndividuallyEdited(field.id)) return false;
+      const value = values[field.id];
+      return typeof value === 'string' && !isVoiceOutpatientEmrFieldPlaceholder(field, value, fieldPlaceholders.value.get(field.id))
+        && (!field.dictionaryItems.length || !value || Boolean(resolveOutpatientEmrFinalDictionaryItem(field, value)));
+    });
+  }
+
+  /** Diagnosis and treatment use the prospective record before their successful refresh commits the patch. */
+  function previewSupplementRecord(values: Readonly<Record<string, string | null>>) {
+    const rows = chapterRows.value.map(row => ({ row, changes: supplementTargets(row, values) }));
+    const keys = new Set(rows.flatMap(({ changes }) => changes.flatMap(field => field.recordField ? [field.recordField] : [])));
+    const projected: Partial<Record<OutpatientEmrRecordField, string>> = {};
+    for (const key of keys) {
+      projected[key] = rows.filter(({ row }) => row.recordFields.includes(key)).map(({ row, changes }) => {
+        if (!changes.length && row.recordFields.length === 1) return row.text;
+        const chapter = sourceChapters.value.find(item => item.id === row.key);
+        if (!chapter) return '';
+        const patched = { ...boundValues.value, ...Object.fromEntries(changes.map(field => [field.id, values[field.id]])) };
+        return renderVoiceOutpatientEmrChapter(chapter, Object.fromEntries(row.fields
+          .filter(field => field.recordField === key).map(field => [field.id, patched[field.id]])));
+      }).filter(Boolean).join('\n');
+    }
+    return projected;
+  }
+
+  function applySupplementFields(values: Readonly<Record<string, string | null>>): void {
     for (const row of chapterRows.value) {
-      if (!row.fieldIds.length || !Object.prototype.hasOwnProperty.call(texts, row.key)) continue;
+      const targets = supplementTargets(row, values);
+      if (!targets.length) continue;
       const key = chapterKey(row.key);
       sectionRuns.get(key)?.abort();
       sectionRuns.delete(key);
-      const leaves = Object.fromEntries(row.fieldIds.filter(id => values && Object.prototype.hasOwnProperty.call(values, id)).map(id => [id, values![id]]));
-      const direct = row.direct;
-      if (direct) leaves[direct.id] = texts[row.key];
-      analysis.replaceReviewedSectionValues(row.fields, leaves);
+      const leaves = Object.fromEntries(targets.map(field => [field.id, values[field.id]]));
+      applySupplementPatch(targets, leaves);
       reviewedSections.value = { ...reviewedSections.value, [key]: {
-        chapterId: row.key, text: direct && analysis.isIndividuallyEdited(direct.id)
-          ? analysis.fieldValues.value[direct.id] : texts[row.key], values: leaves,
+        chapterId: row.key, supplement: true, text: '',
+        values: { ...reviewedSections.value[key]?.values, ...leaves },
       } };
     }
   }
@@ -342,6 +396,10 @@ export function useVoiceOutpatientEmrRecord(
     const sections = chapter?.sections ?? narrativeSections.value.filter(section => section.recordField === key);
     const fields = chapter ? chapter.fields.filter(item => item.editable).map(item => item.field)
       : analysis.targetFields.value.filter(field => field.recordField === key);
+    if (edit.supplement) {
+      applySupplementPatch(fields, edit.values ?? {});
+      return true;
+    }
     const direct = chapter ? fields.filter(field => outpatientEmrChapterTextField(chapter)?.id === field.id)
       : fields.filter(isDirectOutpatientEmrTextField);
     const compound = fields.filter(field => !direct.includes(field));
@@ -415,8 +473,7 @@ export function useVoiceOutpatientEmrRecord(
     if (!row || !section) return;
     const key = chapterKey(row.key);
     const edit = reviewedSections.value[key];
-    const generated = streamDocument.value?.chapters.find(chapter => chapter.chapterId === row.key);
-    if (!edit && !generated) return; // An unedited field-derived paragraph already follows the reactive leaves.
+    if (!edit || edit.fieldEditOnly || edit.supplement) return;
 
     let text = row.text;
     if (row.direct?.id === id) {
@@ -601,7 +658,8 @@ export function useVoiceOutpatientEmrRecord(
     updateChapterField,
     getModelDraft,
     getSupplementChapters,
-    applySupplementChapters,
+    previewSupplementRecord,
+    applySupplementFields,
     updateReviewedRecordField,
     stopGenerationForWriteback() { stopSectionRuns(); analysis.stopGenerationForWriteback(); },
     retry,

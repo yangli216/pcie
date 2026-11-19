@@ -12,7 +12,7 @@
 
 import type { VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
 import {
-  buildVoiceOutpatientEmrDocument, hashVoiceOutpatientRecognitionTemplate, matchesVoiceOutpatientRecognitionTemplate,
+  buildVoiceOutpatientEmrDocument, buildVoiceOutpatientEmrDraftAndDocument, hashVoiceOutpatientRecognitionTemplate, matchesVoiceOutpatientRecognitionTemplate,
   prepareVoiceOutpatientRecognitionTemplate, type VoiceOutpatientRecognitionTemplate,
 } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { nextTick, ref, type Ref } from 'vue';
@@ -174,6 +174,18 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     return entry;
   }
 
+  function restoreTemplateFields(
+    cached: ClinicalResultInput, template: VoiceOutpatientRecognitionTemplate, context: VoiceOutpatientEmrStartContext,
+  ): ClinicalResultInput | null {
+    const { voiceTemplateDraft, voiceTemplateDocument } = cached;
+    if (!matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDraft, context, template.identity.templateHash)) return null;
+    if (voiceTemplateDocument && !matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDocument, context, template.identity.templateHash)) return null;
+    const chapters = Array.isArray(voiceTemplateDocument?.chapters) ? voiceTemplateDocument.chapters : [];
+    const legacyTexts = Object.fromEntries(chapters.flatMap(chapter =>
+      typeof chapter?.chapterId === 'string' && typeof chapter.text === 'string' ? [[chapter.chapterId, chapter.text]] : []));
+    return { ...cached, ...buildVoiceOutpatientEmrDraftAndDocument(template, voiceTemplateDraft?.fieldValues, undefined, legacyTexts) };
+  }
+
   function writeCache(entry: VoiceConsultationCacheEntry): void {
     persistVoiceConsultationCacheEntry(entry);
     console.log('[VoiceConsultation] Cache persisted', {
@@ -330,15 +342,12 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
           const hash = await hashVoiceOutpatientRecognitionTemplate(session);
           if (!isCurrent() || !matchesVoiceOutpatientRecognitionTemplate(document, session, hash)
             || !matchesVoiceOutpatientRecognitionTemplate(cached.intentResult.voiceTemplateDraft, session, hash)) return false;
-        } else {
-          const prepared = await prepareVoiceOutpatientRecognitionTemplate(session, [], isCurrent);
-          if (!prepared || !isCurrent() || !matchesVoiceOutpatientRecognitionTemplate(
-            cached.intentResult.voiceTemplateDraft, session, prepared.identity.templateHash,
-          )) return false;
-          restored = { ...restored, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(
-            prepared, undefined, restored.voiceTemplateDraft?.fieldValues,
-          ) };
         }
+        const prepared = await prepareVoiceOutpatientRecognitionTemplate(session, [], isCurrent);
+        if (!prepared || !isCurrent()) return false;
+        const current = restoreTemplateFields(restored, prepared, session);
+        if (!current) return false;
+        restored = current;
       } catch {
         return false;
       }
@@ -426,17 +435,11 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
           voiceTemplateError = '本次门诊模板准备失败，已保留语音病历。';
         }
         if (!isCurrent()) return;
-        if (outpatientTemplate && cached?.transcribedText === normalizedText
-          && matchesVoiceOutpatientRecognitionTemplate(cached.intentResult.voiceTemplateDraft, templateContext, outpatientTemplate.identity.templateHash)) {
+        const restored = outpatientTemplate && cached?.transcribedText === normalizedText
+          ? restoreTemplateFields(cached.intentResult, outpatientTemplate, templateContext) : null;
+        if (restored) {
           intentSource.value = 'cache';
-          const previous = cached.intentResult.voiceTemplateDocument;
-          const text = previous && matchesVoiceOutpatientRecognitionTemplate(previous, templateContext, outpatientTemplate.identity.templateHash)
-            ? Object.fromEntries(previous.chapters.map(chapter => [chapter.chapterId, chapter.text])) : undefined;
-          intentResult.value = cloneClinicalResultInput({
-            ...cached.intentResult, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(
-              outpatientTemplate, text, cached.intentResult.voiceTemplateDraft?.fieldValues,
-            ),
-          });
+          intentResult.value = cloneClinicalResultInput(restored);
           isProcessingVoice.value = false;
           timing.finish('cached');
           return;

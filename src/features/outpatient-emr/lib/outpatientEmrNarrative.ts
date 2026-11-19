@@ -1,6 +1,7 @@
 import type { OutpatientEmrRecordField, OutpatientEmrTemplateField, OutpatientEmrTemplateParseResult } from '../types';
 import { resolveOutpatientEmrFinalDictionaryItem } from './outpatientEmrDictionary';
 import { readFieldSourceText } from './outpatientEmrTemplate';
+import { isTemplateObject, readOutpatientEmrChapters } from './outpatientEmrTemplateDefinition';
 import { isAdministrativeTemplateSlot, resolveOutpatientEmrFieldPromptProfile } from './outpatientEmrPromptGenerator';
 
 type TextPart = { kind: 'text'; text: string };
@@ -28,7 +29,7 @@ export interface OutpatientEmrDocumentChapter {
   /** Original data-id of the rendered HIS article. Titles and standard record mappings are not unique. */
   id: string;
   title: string;
-  fields: { field: OutpatientEmrTemplateField; editable: boolean }[];
+  fields: { field: OutpatientEmrTemplateField; editable: boolean; placeholder?: string }[];
   sections: OutpatientEmrNarrativeSection[];
   /** Present only in the model's source-reading pass, never used to derive writable targets. */
   referenceSlots?: Array<{ id: string; name: string; htmlText: string; readonly: boolean }>;
@@ -116,12 +117,33 @@ export function parseOutpatientEmrNarrative(
 }
 
 /** A chapter belongs to the rendered HIS instance, even when it has no standard mapping or shares one. */
-export function buildOutpatientEmrDocument(parsed: OutpatientEmrTemplateParseResult, includeReferenceSlots = false): OutpatientEmrDocumentChapter[] {
+export function buildOutpatientEmrDocument(
+  parsed: OutpatientEmrTemplateParseResult, includeReferenceSlots = false, templateDefinition?: string,
+): OutpatientEmrDocumentChapter[] {
   const chapters: OutpatientEmrDocumentChapter[] = [];
   scanNarrative(parsed.sanitizedHtml, parsed.targetFields, {
     fields: new Map(parsed.fields.map(field => [field.id, field])),
     chapters, includeReferenceSlots,
   });
+  if (templateDefinition) {
+    const declared = new Map<string, string>();
+    for (const article of readOutpatientEmrChapters(templateDefinition).filter(isTemplateObject)) {
+      for (const leaf of Array.isArray(article.eles) ? article.eles.filter(isTemplateObject) : []) {
+        if (typeof leaf.DEFAULTVALUE === 'string' && leaf.DEFAULTVALUE.trim()) {
+          declared.set(JSON.stringify([article.ID, leaf.ID]), leaf.DEFAULTVALUE.trim());
+        }
+      }
+    }
+    for (const chapter of chapters) {
+      for (const slot of chapter.fields) {
+        const defaultValue = declared.get(JSON.stringify([chapter.id, slot.field.id]));
+        if (!slot.placeholder && defaultValue && (defaultValue === slot.field.name || defaultValue === slot.field.id
+          || /^(?:请(?:在此|输入|选择|补录|填写|录入)|如(?:有|需).*(?:输入|填写)|此处.*(?:同步|录入)|内容包括|\{[^{}]+\}$)/u.test(defaultValue))) {
+          slot.placeholder = defaultValue;
+        }
+      }
+    }
+  }
   return chapters;
 }
 
@@ -242,7 +264,8 @@ function scanNarrative(
             metadata.articleName, metadata.articleDefinitionName]);
         const editable = Boolean(paired && field && !field.readonly && element.dataset.readonly !== 'true');
         if (chapter && paired && !chapter.fields.some(item => item.field.id === id)) {
-          chapter.fields.push({ field: metadata, editable });
+          const placeholder = element.querySelector('.placeholder')?.textContent?.trim();
+          chapter.fields.push({ field: metadata, editable, ...(placeholder ? { placeholder } : {}) });
         }
         if (chapter && documentScan?.includeReferenceSlots && !editable
           && !isAdministrativeTemplateSlot(id, element.dataset.name || '', [articleTemplateId, article.dataset.name, article.dataset.article])) {
@@ -320,9 +343,15 @@ export function renderOutpatientEmrNarrative(
     const source = templateParts(section, clause);
     const present = source.filter((part): part is Slot => part.kind === 'field' && Boolean(valueFor(part.field).trim()));
     if (!present.length) continue;
-    // Optional trailing supplements may be absent without changing a preceding history flag.
-    const available = source.filter((part, index) => !(part.kind === 'field' && !valueFor(part.field).trim()
-      && index === source.length - 1 && /(?:补充|备注|说明)$/u.test(part.field.name)));
+    // An empty suffix may be dropped if the remaining literal already names the
+    // subject of its flag (e.g. “否认肝炎史”). Otherwise show each known value with its label.
+    const suffix = source[source.length - 1];
+    const literal = source[source.length - 2];
+    const flag = source[source.length - 3];
+    const completeFlag = suffix?.kind === 'field' && !valueFor(suffix.field).trim()
+      && /(?:补充|备注|说明)$/u.test(suffix.field.name) && flag?.kind === 'field' && flag.field.dictionaryItems.length
+      && literal?.kind === 'text' && literal.text.trim() === fieldLabel(flag.field);
+    const available = completeFlag ? source.slice(0, -1) : source;
     const incomplete = available.some(part => part.kind === 'field' && !valueFor(part.field).trim());
     const unit = incomplete ? sharedPairUnit(source) : '';
     const visible: SourcePart[] = incomplete
@@ -360,6 +389,38 @@ export function renderOutpatientEmrNarrativeSections(
     result.push(...parts);
   }
   return result;
+}
+
+/** A dictionary may legitimately contain a word also used in the paper as a hint. */
+export function isVoiceOutpatientEmrFieldPlaceholder(
+  field: OutpatientEmrTemplateField, value: unknown, placeholder?: string,
+): boolean {
+  if (typeof value !== 'string' || !value.trim() || resolveOutpatientEmrFinalDictionaryItem(field, value)) return false;
+  const text = value.trim();
+  const unwrapped = text.replace(/^\{([^{}]+)\}$/u, '$1');
+  const hint = placeholder?.trim();
+  if (hint && unwrapped === hint) return true;
+  if (['请输入', '请选择'].includes(text)) return true;
+  return [field.id, field.name].some(label => {
+    if (unwrapped === label && (text !== unwrapped || /(?:文本|正文|时长|时间|日期|单位|编码|标志|说明|详情)$/u.test(label)
+      || (field.projectionMode === 'direct' && [field.articleId, field.articleName, field.articleDefinitionName].includes(label)
+        && ['请输入', '请选择'].some(prefix => hint === prefix + label)))) return true;
+    return text === '请输入' + label || text === '请选择' + label;
+  });
+}
+
+export function renderVoiceOutpatientEmrChapter(
+  chapter: OutpatientEmrDocumentChapter, rawValues: Readonly<Record<string, string | null | undefined>>,
+): string {
+  const values: Record<string, string> = Object.create(null);
+  for (const { field, editable, placeholder } of chapter.fields) {
+    if (!editable || !Object.prototype.hasOwnProperty.call(rawValues, field.id)) continue;
+    const value = rawValues[field.id];
+    if (typeof value !== 'string' || isVoiceOutpatientEmrFieldPlaceholder(field, value, placeholder)) continue;
+    if (field.dictionaryItems.length && !resolveOutpatientEmrFinalDictionaryItem(field, value)) continue;
+    values[field.id] = value;
+  }
+  return renderOutpatientEmrNarrativeSections(chapter.sections, values).map(part => part.text).join('');
 }
 
 /** Additional model context describes grammar and exact authorized slot identities, never current values. */

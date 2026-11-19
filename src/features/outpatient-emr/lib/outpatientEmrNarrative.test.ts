@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import html from '@/test/template-parsing/fixtures/his-internal-medicine-template.html?raw';
 import definition from '@/test/template-parsing/fixtures/his-internal-medicine-template.json?raw';
 import { parseOutpatientEmrTemplate, restoreOutpatientEmrTemplateFromSnapshot } from './outpatientEmrTemplate';
-import { buildOutpatientEmrDocument, outpatientEmrChapterTextField, describeOutpatientEmrNarrative, parseOutpatientEmrNarrative, renderOutpatientEmrNarrative, renderOutpatientEmrNarrativeSections } from './outpatientEmrNarrative';
+import { buildOutpatientEmrDocument, isVoiceOutpatientEmrFieldPlaceholder, outpatientEmrChapterTextField, renderVoiceOutpatientEmrChapter, describeOutpatientEmrNarrative, parseOutpatientEmrNarrative, renderOutpatientEmrNarrative, renderOutpatientEmrNarrativeSections } from './outpatientEmrNarrative';
 import type { OutpatientEmrTemplateField } from '../types';
 
 const ids = ['舒张压', '体温', '收缩压', '体格检查-精神', '胃纳', '痰声标志', '呕吐标志', '时间单位', '持续时间', '主诉文本'];
@@ -51,6 +51,19 @@ describe('outpatient clinical narrative', () => {
     expect(idsOf(exam.fields)).toContain('舒张压');
     // The suffix unit alone cannot stand in for a missing duration.
     expect(renderOutpatientEmrNarrative(history, { 时间单位: '天' }).map(part => part.text).join('')).toBe('时间单位：天');
+  });
+
+  it('labels a partial flag when a missing detail would leave a sentence fragment', () => {
+    function flagText(name: string, literal: string, detail: string) {
+      const flag = { ...customField('flag', name), dictionaryItems: [{ value: '0', text: '无' }] };
+      const note = customField('detail', detail);
+      const [section] = parseOutpatientEmrNarrative('<section data-id="custom" data-article="观察">'
+        + '<span data-id="flag" data-type="text"></span>' + literal
+        + '<span data-id="detail" data-type="text"></span>。</section>', [flag, note]);
+      return renderOutpatientEmrNarrative(section, { flag: '0' }).map(part => part.text).join('');
+    }
+    expect(flagText('家族史分类', '家族', '家族史说明')).toBe('家族史分类：无。');
+    expect(flagText('肝炎史标志', '肝炎史', '肝炎史补充')).toBe('无肝炎史。');
   });
 
   it('preserves a custom section with inline prose, same-name slots, original values as text and no paper or action nodes', () => {
@@ -168,6 +181,33 @@ describe('the rendered HIS chapter document', () => {
     expect(outpatientEmrChapterTextField(chapter([full, customField('duration', '持续时间')]))?.id).toBe('body');
     expect(outpatientEmrChapterTextField(chapter([full], '次。'))).toBeUndefined();
     expect(outpatientEmrChapterTextField(chapter([full, customField('other', '观察内容')]))).toBeUndefined();
+  });
+
+  it('isolates exact paper prompts without hiding valid dictionary hits or clinical text containing the label', () => {
+    const note = customField('note', '观察说明');
+    const option = { ...customField('choice', '反应'), dictionaryItems: [{ value: 'C', text: '无' }] };
+    const html = '<section data-id="custom" data-article="观察">'
+      + '<p><span data-id="note" data-type="text"></span></p><p><span data-id="choice" data-type="text"></span></p></section>';
+    const definition = JSON.stringify([{ ID: 'custom', eles: [{ ID: 'note', DEFAULTVALUE: '请补录本次观察' }] }]);
+    const chapter = buildOutpatientEmrDocument({ sanitizedHtml: html, fields: [note, option], targetFields: [note, option] }, false, definition)[0];
+    expect(chapter.fields[0].placeholder).toBe('请补录本次观察');
+    for (const value of ['请补录本次观察', '观察说明', '{观察说明}', '请输入观察说明', '请选择']) {
+      expect(renderVoiceOutpatientEmrChapter(chapter, { note: value })).toBe('');
+    }
+    expect(isVoiceOutpatientEmrFieldPlaceholder(option, '无', '无')).toBe(false);
+    const full = { ...customField('chief', '主诉', 'chiefComplaint'), articleName: '主诉' };
+    expect(isVoiceOutpatientEmrFieldPlaceholder(full, '主诉', '请输入主诉')).toBe(true);
+    const cough = { ...customField('cough', '咳嗽'), articleName: '咳嗽', articleDefinitionName: '咳嗽' };
+    expect(isVoiceOutpatientEmrFieldPlaceholder(cough, '咳嗽')).toBe(false);
+    expect(isVoiceOutpatientEmrFieldPlaceholder(cough, '咳嗽', '请输入咳嗽')).toBe(false);
+    const clinicalDefault = '今晨起反复咳嗽。';
+    const clinical = buildOutpatientEmrDocument({ sanitizedHtml: html, fields: [note], targetFields: [note] }, false,
+      JSON.stringify([{ ID: 'custom', eles: [{ ID: 'note', DEFAULTVALUE: clinicalDefault }] }]))[0];
+    expect(clinical.fields[0].placeholder).toBeUndefined();
+    expect(renderVoiceOutpatientEmrChapter(clinical, {})).toBe('');
+    expect(renderVoiceOutpatientEmrChapter(clinical, { note: clinicalDefault })).toContain(clinicalDefault);
+    expect(renderVoiceOutpatientEmrChapter(chapter, { note: '已查阅观察说明，今晨仍有咳嗽。', choice: 'C' })).toContain('今晨仍有咳嗽。');
+    expect(renderVoiceOutpatientEmrChapter(chapter, { note: null, choice: 'not-a-code' })).toBe('');
   });
 
   it('preserves a single source sentence across standard mappings and omits clinical conclusions from read-only slots', () => {

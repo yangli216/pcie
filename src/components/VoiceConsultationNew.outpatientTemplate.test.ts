@@ -175,7 +175,8 @@ async function mountResult(
     fieldValues?: Record<string, string | null>;
     decoded?: { templateHtml: string; templateDefinition: string };
     streaming?: Ref<boolean>;
-    chapters?: NonNullable<ClinicalResultInput['voiceTemplateDocument']>['chapters'];
+    chapters?: Array<Pick<NonNullable<ClinicalResultInput['voiceTemplateDocument']>['chapters'][number], 'chapterId' | 'title' | 'fieldIds'>>;
+    cachedChapterTexts?: Record<string, string>;
     record?: Partial<ReturnType<typeof buildOutpatientRecord>>;
     diagnoses?: ClinicalResultInput['diagnoses'];
   } = {},
@@ -199,11 +200,13 @@ async function mountResult(
   if (options.chapters && intent.voiceTemplateDraft) {
     const prepared = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
     expect(prepared).toBeDefined();
-    intent.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(prepared!,
-      Object.fromEntries(options.chapters.map(chapter => [chapter.chapterId, chapter.text])), options.fieldValues);
+    intent.voiceTemplateDocument = buildVoiceOutpatientEmrDocument(prepared!, options.fieldValues);
     expect(intent.voiceTemplateDocument.chapters.map(chapter => ({
-      chapterId: chapter.chapterId, title: chapter.title, fieldIds: chapter.editableFieldIds, text: chapter.text,
+      chapterId: chapter.chapterId, title: chapter.title, fieldIds: chapter.editableFieldIds,
     }))).toEqual(expect.arrayContaining(options.chapters));
+    for (const chapter of intent.voiceTemplateDocument.chapters) {
+      if (options.cachedChapterTexts?.[chapter.chapterId]) chapter.text = options.cachedChapterTexts[chapter.chapterId];
+    }
   }
   const streamingIntent: ClinicalResultInput = {
     ...intent, voiceTemplateDraft: undefined, generation: { ...intent.generation!, status: 'streaming' },
@@ -223,7 +226,7 @@ async function mountResult(
     ? h(VoiceCapsule, { onStop: () => { capturing.value = false; } })
     : h(VoiceConsultationNew, {
       initialPatientData: patient, intentResult: factsReady.value ? (options.streaming?.value ? streamingIntent : intent) : null,
-      intentSource: editorSnapshot || options.legacyCache ? 'cache' : 'llm', channel: 'voice',
+      intentSource: editorSnapshot || options.legacyCache || options.cachedChapterTexts ? 'cache' : 'llm', channel: 'voice',
       consultationRoundId: 'SYN-VOICE-TPL-ROUND', voiceOutpatientEmrContext: context, onClose: closed,
     }) }));
   app.use(createPinia());
@@ -387,9 +390,9 @@ describe('voice result with an HIS outpatient template', () => {
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [suggestion], {
       streaming, fieldValues: { 主诉文本: '咳嗽3天', 现病史文本: '受凉后咳嗽3天，无发热。', 家族史分类: '有', 家族史说明: '合成说明' },
       chapters: [
-        { chapterId: 'article-chief', title: '主诉', fieldIds: ['主诉文本'], text: '咳嗽3天' },
-        { chapterId: 'article-history', title: '现病史', fieldIds: ['现病史文本'], text: '受凉后咳嗽3天，无发热。' },
-        { chapterId: 'family', title: '家族史', fieldIds: ['家族史分类', '家族史说明'], text: '有合成家族史说明。' },
+        { chapterId: 'article-chief', title: '主诉', fieldIds: ['主诉文本'] },
+        { chapterId: 'article-history', title: '现病史', fieldIds: ['现病史文本'] },
+        { chapterId: 'family', title: '家族史', fieldIds: ['家族史分类', '家族史说明'] },
       ],
     });
     const lines = () => Array.from(container.querySelectorAll('.record-fields .clinical-record-line'));
@@ -488,14 +491,14 @@ describe('voice result with an HIS outpatient template', () => {
       targetFieldIds: Object.keys(fieldValues),
     });
     const chapters = [
-      { chapterId: '主诉', title: '主诉', fieldIds: ['主诉文本'], text: '合成主诉。' },
-      { chapterId: '现病史', title: '现病史', fieldIds: ['持续时间', '时间单位'], text: '2天前开始咳嗽，无发热。' },
-      { chapterId: '既往史', title: '既往史', fieldIds: ['肝炎史标志'], text: '既往未报告肝炎史。' },
-      { chapterId: '体格检查', title: '体格检查', fieldIds: ['体温'], text: '查体记录体温37.4℃。' },
-      { chapterId: '辅助检查', title: '辅助检查', fieldIds: ['辅助检查结果文本'], text: '检验单尚待补充。' },
-      { chapterId: '门急诊诊断', title: '西医诊断', fieldIds: ['西医诊断'], text: '待查' },
-      { chapterId: '处理', title: '医嘱', fieldIds: ['医嘱其他补充'], text: '合成医嘱。' },
-      { chapterId: '注意事项', title: '注意事项及宣教', fieldIds: ['注意事项文本'], text: '留存报告。' },
+      { chapterId: '主诉', title: '主诉', fieldIds: ['主诉文本'] },
+      { chapterId: '现病史', title: '现病史', fieldIds: ['持续时间', '时间单位'] },
+      { chapterId: '既往史', title: '既往史', fieldIds: ['肝炎史标志'] },
+      { chapterId: '体格检查', title: '体格检查', fieldIds: ['体温'] },
+      { chapterId: '辅助检查', title: '辅助检查', fieldIds: ['辅助检查结果文本'] },
+      { chapterId: '门急诊诊断', title: '西医诊断', fieldIds: ['西医诊断'] },
+      { chapterId: '处理', title: '医嘱', fieldIds: ['医嘱其他补充'] },
+      { chapterId: '注意事项', title: '注意事项及宣教', fieldIds: ['注意事项文本'] },
     ];
     const streaming = ref(true);
     const suggestion = {
@@ -543,23 +546,30 @@ describe('voice result with an HIS outpatient template', () => {
       templateHtml: source.innerHTML, templateDefinition: JSON.stringify(definition),
       targetFieldIds: Object.keys(fieldValues),
     });
-    const history = '合成病例报告有肝炎史。';
-    const exam = '体温37.8℃，脉搏88次/分，血压128/74mmHg。';
+    const cachedHistory = '合成病例报告有肝炎史。';
+    const cachedExam = '体温37.8℃，脉搏88次/分，血压128/74mmHg。';
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [], {
       record: { pastMedicalHistory: '否认肝炎史。', physicalExam: '体温36.1℃，脉搏68次/分，血压104/62mmHg。' },
       fieldValues,
+      cachedChapterTexts: { 既往史: cachedHistory, 体格检查: cachedExam },
       chapters: [
-        { chapterId: '既往史', title: '既往史', fieldIds: ['肝炎史标志'], text: history },
-        { chapterId: '体格检查', title: '体格检查', fieldIds: ['体温', '收缩压'], text: exam },
+        { chapterId: '既往史', title: '既往史', fieldIds: ['肝炎史标志'] },
+        { chapterId: '体格检查', title: '体格检查', fieldIds: ['体温', '收缩压'] },
       ],
     });
     await vi.waitFor(() => expect(submit().disabled).toBe(false));
-    expect(recordText('既往史')).toBe(history);
-    expect(recordText('体格检查')).toBe(exam);
+    const history = recordText('既往史');
+    const exam = recordText('体格检查');
+    expect(history).toBe('有乙肝');
+    expect(exam).toContain('37.8');
+    expect(exam).toContain('128');
+    expect(exam).not.toContain('88');
+    expect(exam).not.toContain('74');
     submit().click();
     await vi.waitFor(() => expect(host.received).toHaveLength(1));
     const payload = host.received[0];
-    expect(payload.outpatientRecord).toMatchObject({ pastMedicalHistory: history, physicalExam: exam });
+    expect(payload.pastMedicalHistory).toBe(history);
+    expect(payload.outpatientRecord).toMatchObject({ pastMedicalHistory: '肝炎史：有', physicalExam: '体温：37.8；收缩压：128' });
     expect(payload.fieldValues).toEqual({ 肝炎史标志: '有', 体温: '37.8', 收缩压: '128' });
     expect(payload.dictionarySelections.肝炎史标志).toEqual({ value: '1', text: '有' });
     expect(payload.emrFieldValues).toMatchObject(fieldValues);
@@ -568,6 +578,35 @@ describe('voice result with an HIS outpatient template', () => {
     expect(payload.emrFieldValues).not.toHaveProperty('结核史标志');
     expect(payload.templateMetadata.fields.map((item: { id: string }) => item.id).sort()).toEqual(Object.keys(fieldValues).sort());
     expect(host.model).not.toHaveBeenCalled();
+  });
+
+  it('restores source field values when cached chapter prose consists of a field name or a template sentence', async () => {
+    const context = familyTemplateContext();
+    await mountResult(context, ref(true), ref(false), [], undefined, '男', [], {
+      fieldValues: { 主诉文本: '咽痛两天', 现病史文本: '{现病史文本}', 家族史分类: '1', 家族史说明: '高血压史' },
+      cachedChapterTexts: { 'article-chief': '主诉文本', 'article-history': '待核实的旧现病史。', family: '自由书写的既往家族情况。' },
+      chapters: [{ chapterId: 'article-chief', title: '主诉', fieldIds: ['主诉文本'] }],
+    });
+    await vi.waitFor(() => expect(recordText('主诉')).toBe('咽痛两天'));
+    expect(recordText('现病史')).toBe('未记录');
+    expect(recordText('家族史')).toBe('有家族高血压史。');
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues).toEqual({ 主诉文本: '咽痛两天', 家族史分类: '有', 家族史说明: '高血压史' });
+    expect(host.received[0].outpatientRecord).not.toHaveProperty('historyOfPresentIllness');
+  });
+
+  it('keeps a doctor-entered placeholder out of the document and the confirmed HIS field set', async () => {
+    await mountResult(templateContext(), ref(true), ref(false), [], undefined, '女', [], {
+      fieldValues: { 主诉文本: '首次记录', 现病史文本: '合成现病史' },
+    });
+    await vi.waitFor(() => expect(recordText('主诉')).toBe('首次记录'));
+    await editField('主诉', '请输入主诉文本');
+    expect(recordText('主诉')).toBe('未记录');
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues).toEqual({ 现病史文本: '合成现病史' });
+    expect(host.received[0].outpatientRecord).not.toHaveProperty('chiefComplaint');
   });
 
   it.each(['诊断', '补录病历字段'] as const)('only submits the reviewed selection (%s) when source prose has empty structured fields', async selection => {
@@ -581,9 +620,10 @@ describe('voice result with an HIS outpatient template', () => {
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [], {
       fieldValues: {},
       diagnoses: selection === '诊断' ? undefined : [],
+      cachedChapterTexts: { 现病史: historyText, 体格检查: examText },
       chapters: [
-        { chapterId: '现病史', title: '现病史', fieldIds: ['持续时间', '时间单位'], text: historyText },
-        { chapterId: '体格检查', title: '体格检查', fieldIds: ['体重'], text: examText },
+        { chapterId: '现病史', title: '现病史', fieldIds: ['持续时间', '时间单位'] },
+        { chapterId: '体格检查', title: '体格检查', fieldIds: ['体重'] },
       ],
     });
     const group = await openSectionEditor('现病史');
@@ -593,13 +633,12 @@ describe('voice result with an HIS outpatient template', () => {
     const exam = scopeRow('体格检查');
     const diagnosis = scopeRow('诊断');
     await vi.waitFor(() => {
-      expect(recordText('现病史')).toBe(historyText);
-      expect(recordText('体格检查')).toBe(examText);
+      expect(recordText('现病史')).toBe('未记录');
+      expect(recordText('体格检查')).toBe('未记录');
       expect(history.disabled).toBe(true);
       expect(exam.disabled).toBe(true);
       expect(history.getAttribute('aria-checked')).toBe('false');
       expect(diagnosis.disabled).toBe(selection !== '诊断');
-      expect(container.querySelector('.template-binding-note')?.textContent).toContain('尚无可回写字段');
     });
     if (diagnosis.getAttribute('aria-checked') === 'true') diagnosis.click();
     await vi.waitFor(() => expect(submit().disabled).toBe(true));
@@ -634,7 +673,8 @@ describe('voice result with an HIS outpatient template', () => {
       expect(payload.emrFieldValues.持续时间).toBe('2');
       expect(payload.emrFieldValues).not.toHaveProperty('时间单位');
       expect(payload.emrFieldValues).not.toHaveProperty('体重');
-      expect(payload.outpatientRecord.historyOfPresentIllness).toBe(historyText);
+      expect(payload.outpatientRecord.historyOfPresentIllness).toContain('2');
+      expect(payload.outpatientRecord.historyOfPresentIllness).not.toContain(historyText);
     } else {
       expect(payload.diagList).toHaveLength(1);
       expect(payload.outpatientRecord).toBeUndefined();
@@ -651,7 +691,7 @@ describe('voice result with an HIS outpatient template', () => {
     const ids = context.template.targetFieldIds;
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [], {
       diagnoses: [], fieldValues: { 肝炎史标志: null, 结核史标志: null },
-      chapters: [{ chapterId: '既往史', title: '既往史', fieldIds: ids, text: '既往史待核对。' }],
+      chapters: [{ chapterId: '既往史', title: '既往史', fieldIds: ids }],
     });
     const group = await openSectionEditor('既往史');
     const defaults = () => [...group.querySelectorAll('button')].filter(button => button.textContent?.trim() === '确认采用此默认项');
@@ -698,13 +738,13 @@ describe('voice result with an HIS outpatient template', () => {
     context.template.targetFieldIds = ['复诊描述', '初诊描述'];
     const fieldValues = { 初诊描述: '初诊时咳嗽。', 复诊描述: '复诊时好转。' };
     const chapters = definitions.map(section => ({
-      chapterId: section.ID, title: section.NAME, fieldIds: [section.field], text: fieldValues[section.field as keyof typeof fieldValues],
+      chapterId: section.ID, title: section.NAME, fieldIds: [section.field],
     }));
     host.model.mockResolvedValue(JSON.stringify({ 复诊描述: '复诊时已无咳嗽。' }));
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [], { fieldValues, chapters });
     await vi.waitFor(() => expect(recordLabels()).toEqual(['首诊主诉：', '复诊主诉：']));
     await editField('复诊主诉', '复诊时已无咳嗽。');
-    expect(recordText('首诊主诉')).toBe('初诊时咳嗽。');
+    expect(recordText('首诊主诉')).toContain('初诊时咳嗽。');
     container.querySelector<HTMLButtonElement>('.writeback-scope-trigger')!.click();
     await nextTick();
     const choices = [...container.querySelectorAll<HTMLButtonElement>('.writeback-scope-check-row.is-field')];
@@ -751,7 +791,7 @@ describe('voice result with an HIS outpatient template', () => {
       dictionarySelections: { 家族史分类: { value: '1', text: '有' } },
       emrFieldValues: { 家族史分类: '1', 家族史说明: '肿瘤史', 家族史文本: '有家族肿瘤史。' },
       familyHistory: '有家族肿瘤史。',
-      outpatientRecord: { familyHistory: '有家族肿瘤史。' },
+      outpatientRecord: { familyHistory: '家族史分类：有；家族史说明：肿瘤史' },
     });
     expect(host.received[0].emrFieldValues).not.toHaveProperty('家族传染病史标志');
     expect(host.received[0].emrFieldValues).not.toHaveProperty('家族精神病史标志');
@@ -977,20 +1017,20 @@ describe('voice result with an HIS outpatient template', () => {
       host.diagnosis.mockResolvedValue(JSON.stringify([{ id: 'SYN-DX', code: 'J06.900', name: '急性上呼吸道感染', rate: '95%' }]));
     }
     host.regenerate.mockResolvedValue(JSON.stringify({ ...(customOnly ? { chiefComplaint: '', historyOfPresentIllness: '' } : {}), chapterTexts: { family: text }, templateFieldValues: {
-      家族史分类: '1', 家族史说明: '母亲高血压',
+      ...(customOnly ? {} : { 主诉文本: '合成补录后新主诉' }), 家族史分类: null, 家族史说明: '高血压史',
     } }));
     await mountResult(context, ref(true), ref(false), [], undefined, '男', [], {
       ...(customOnly ? { record: { chiefComplaint: '', historyOfPresentIllness: '' } } : {}),
-      fieldValues: { ...(customOnly ? {} : { 主诉文本: '咳嗽3天', 现病史文本: '受凉后咳嗽3天' }), 家族史分类: '无', 家族史说明: '' },
+      fieldValues: { ...(customOnly ? {} : { 主诉文本: '咳嗽3天', 现病史文本: '受凉后咳嗽3天' }), 家族史分类: '有', 家族史说明: '肿瘤史' },
       chapters: [
         ...(customOnly ? [] : [
-          { chapterId: 'article-chief', title: '主诉', fieldIds: ['主诉文本'], text: '咳嗽3天' },
-          { chapterId: 'article-history', title: '现病史', fieldIds: ['现病史文本'], text: '受凉后咳嗽3天' },
+          { chapterId: 'article-chief', title: '主诉', fieldIds: ['主诉文本'] },
+          { chapterId: 'article-history', title: '现病史', fieldIds: ['现病史文本'] },
         ]),
-        { chapterId: 'family', title: '随访补记', fieldIds: ['家族史分类', '家族史说明'], text: '家族情况待核对。' },
+        { chapterId: 'family', title: '随访补记', fieldIds: ['家族史分类', '家族史说明'] },
       ],
     });
-    await vi.waitFor(() => expect(recordLine('随访补记')?.textContent).toContain('家族情况待核对'));
+    await vi.waitFor(() => expect(recordText('随访补记')).toBe('有家族肿瘤史。'));
     container.querySelector<HTMLButtonElement>('[aria-label="补充说明并重新生成病历"]')!.click();
     await settle();
     const supplement = document.querySelector<HTMLTextAreaElement>('.supplement-textarea')!;
@@ -998,18 +1038,23 @@ describe('voice result with an HIS outpatient template', () => {
     supplement.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
     document.querySelector<HTMLButtonElement>('.supplement-dialog .primary-button')!.click();
-    const expectedText = mode === 'diagnosis-failure' ? '家族情况待核对。' : text;
+    const expectedText = mode === 'diagnosis-failure' ? '有家族肿瘤史。' : '有家族高血压史。';
     await vi.waitFor(() => expect(host.regenerate).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(recordLine('随访补记')?.textContent).toContain(expectedText));
     if (customOnly) expect(host.diagnosis).not.toHaveBeenCalled();
-    else await vi.waitFor(() => expect(host.diagnosis).toHaveBeenCalledOnce());
+    else {
+      await vi.waitFor(() => expect(host.diagnosis).toHaveBeenCalledOnce());
+      expect(JSON.stringify(host.diagnosis.mock.calls[0][0])).toContain('合成补录后新主诉');
+      expect(recordText('主诉')).toBe(mode === 'diagnosis-failure' ? '咳嗽3天' : '合成补录后新主诉');
+    }
     expect(host.model).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(submit().disabled).toBe(false));
     submit().click();
     await vi.waitFor(() => expect(host.received).toHaveLength(1));
     expect(host.received[0]).toMatchObject({
-      fieldValues: mode === 'diagnosis-failure' ? { 家族史分类: '无' } : { 家族史分类: '有', 家族史说明: '母亲高血压' },
-      outpatientRecord: { familyHistory: expectedText },
+      fieldValues: { 家族史分类: '有', 家族史说明: mode === 'diagnosis-failure' ? '肿瘤史' : '高血压史' },
+      familyHistory: expectedText,
+      outpatientRecord: { familyHistory: '家族史分类：有；家族史说明：' + (mode === 'diagnosis-failure' ? '肿瘤史' : '高血压史') },
     });
   });
 });

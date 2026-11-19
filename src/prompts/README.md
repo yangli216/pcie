@@ -147,7 +147,7 @@ const messages = ref<ChatMessage[]>([
 - **输出**: 按固定顺序逐行返回的 NDJSON 分区事件
 - **特点**:
   - 使用独立版本化编码，避免历史 `voiceIntentRecognition` 纯 JSON override 覆盖新协议
-  - 普通语音绑定 HIS 门诊模板时，在同一条流中按源章节 ID 追加 `template_chapter` 事件，同一事件的 `data.text` 和 `data.fieldValues` 同时提供本章正文和本章原始可写字段 ID／值。兼容读取 `record_extra.data.templateFieldValues`。
+  - 普通语音绑定 HIS 门诊模板时，在同一条流中按源章节 ID 追加 `template_chapter` 事件，每个事件提供 `data.chapterId` 和 `data.fieldValues`，按源字段 ID 返回本章有依据的控件值。客户端按原模板句式、单位和字段顺序生成展示正文。无依据的项可缺省或留空，模型明确报告未提及时可以返回 `null`，由既有规则产生待核默认项。保留完整转写、病历及可用的只读资料作为诊疗和字段生成依据。兼容读取 `record_extra.data.templateFieldValues`。旧 `data.text` 只可补足唯一等价的整章自由文本槽，已有字段值（含空和默认）优先。独立时长槽可以保留单位，已有印刷单位或独立单位槽时，数量槽仅填写数量。
   - `record_suggestions` 与核心病历同次返回，缺失时客户端才走一次稳定态兜底
   - 区分对话明确表达的信息与模型推断结果（`explicit` / `inferred`）
   - `explicit_orders` 只承载医生明确医嘱；AI 治疗推荐继续由实时院内目录与药品定稿链路生成

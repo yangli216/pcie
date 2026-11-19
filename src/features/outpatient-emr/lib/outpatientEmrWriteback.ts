@@ -225,24 +225,19 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     !allowedProjectedRecordFields || allowedProjectedRecordFields.has(recordField)
   ));
   const projectedValues: Partial<Record<OutpatientEmrRecordField, string>> = {};
-  projectedRecordFields.forEach((recordField) => {
-    const reviewed = input.reviewedRecord?.[recordField];
-    if (typeof reviewed === 'string') {
-      projectedValues[recordField] = reviewed;
-      return;
-    }
-    if (input.voiceRecordValues) {
-      projectedValues[recordField] = input.voiceRecordValues[recordField] ?? '';
-      return;
-    }
-    const fields = mappedFields.get(recordField)!;
-    const isSectionComposition = fields.some(
-      (field) => field.projectionMode === 'section-compose',
-    );
-    projectedValues[recordField] = isSectionComposition
-      ? composeOutpatientEmrSectionValue(fields, fieldValues)
-      : fieldValues[fields[0].id];
-  });
+  const reviewedValues: Partial<Record<OutpatientEmrRecordField, string>> = {};
+  for (const recordField of projectedRecordFields) {
+    const fields = mappedFields.get(recordField);
+    const fieldProjection = fields?.length
+      ? (fields.some(field => field.projectionMode === 'section-compose')
+          ? composeOutpatientEmrSectionValue(fields, fieldValues)
+          : fieldValues[fields[0].id])
+      : undefined;
+    const reviewed = input.reviewedRecord?.[recordField] ?? input.voiceRecordValues?.[recordField];
+    // HIS validates the standard projection against the same ordered controls in templateMetadata.
+    projectedValues[recordField] = fieldProjection ?? reviewed ?? '';
+    reviewedValues[recordField] = reviewed ?? fieldProjection ?? '';
+  }
   const baseOutpatientRecord = baseWritebackPayload?.outpatientRecord;
   const outpatientRecord: OutpatientEmrProjectedRecord | undefined = (
     baseOutpatientRecord || projectedRecordFields.length > 0
@@ -276,7 +271,7 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
   const projectedCompatibilityValues = Object.fromEntries(
     projectedRecordFields.flatMap((recordField) => (
       baseWritebackPayload && compatibilityRecordFields.has(recordField)
-        ? [[recordField, projectedValues[recordField] || '']]
+        ? [[recordField, reviewedValues[recordField] || '']]
         : []
     )),
   );
@@ -295,7 +290,7 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     // Rebind only existing compatibility IDs for the selected dynamic sections.
     const selected = new Set(projectedRecordFields);
     const originalBindings = bindStandardSections(baseOutpatientRecord || {}, selected);
-    const reviewedBindings = bindStandardSections(projectedValues, selected);
+    const reviewedBindings = bindStandardSections(reviewedValues, selected);
     for (const id of Object.keys(voiceBindValues)) {
       if (Object.prototype.hasOwnProperty.call(reviewedBindings, id)) voiceBindValues[id] = reviewedBindings[id];
       else if (Object.prototype.hasOwnProperty.call(originalBindings, id)) delete voiceBindValues[id];

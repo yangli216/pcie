@@ -3,7 +3,7 @@ import { prepareOutpatientEmrTemplate, type PreparedOutpatientEmrTemplate } from
 import type {
   OutpatientEmrAnalysisRequest, OutpatientEmrTemplateField, VoiceOutpatientEmrDocument, VoiceOutpatientEmrInitialDraft, VoiceOutpatientEmrStartContext,
 } from '../types';
-import { buildOutpatientEmrDocument, describeOutpatientEmrNarrative, renderOutpatientEmrNarrativeSections } from './outpatientEmrNarrative';
+import { buildOutpatientEmrDocument, describeOutpatientEmrNarrative, isVoiceOutpatientEmrFieldPlaceholder, outpatientEmrChapterTextField, renderVoiceOutpatientEmrChapter } from './outpatientEmrNarrative';
 import { buildOutpatientEmrFieldRules, buildOutpatientEmrPromptFields, isAdministrativeTemplateSlot, resolveOutpatientEmrFieldPromptProfiles } from './outpatientEmrPromptGenerator';
 import { parseOutpatientEmrTemplate, restoreOutpatientEmrTemplateFromSnapshot } from './outpatientEmrTemplate';
 import { isTemplateObject, readOutpatientEmrChapters } from './outpatientEmrTemplateDefinition';
@@ -111,7 +111,7 @@ export async function prepareVoiceOutpatientRecognitionTemplate(
   if (!matchesVoiceOutpatientRecognitionTemplate(identity, context)
     || templateHtml !== context.template.templateHtml || templateDefinition !== context.template.templateDefinition) return;
   boundTemplates.set(toRaw(context), { prepared, identity, templateHtml, templateDefinition });
-  const chapters = buildOutpatientEmrDocument(parsed);
+  const chapters = buildOutpatientEmrDocument(parsed, false, prepared.source.templateDefinition);
   const profiles = resolveOutpatientEmrFieldPromptProfiles(parsed.targetFields);
   return {
     identity: { ...identity, targetFieldIds: [...identity.targetFieldIds] },
@@ -125,25 +125,18 @@ export async function prepareVoiceOutpatientRecognitionTemplate(
   };
 }
 
-/** Only known source IDs shape the document; the model supplies prose, never headings or order. */
+/** The confirmed field map and source document grammar are the only inputs to the displayed chapters. */
 export function buildVoiceOutpatientEmrDocument(
-  template: VoiceOutpatientRecognitionTemplate,
-  chapterTexts?: Record<string, string>,
-  fieldValues?: Record<string, string | null>,
+  template: VoiceOutpatientRecognitionTemplate, fieldValues: Readonly<Record<string, string | null>> = {},
 ): VoiceOutpatientEmrDocument {
-  const values = Object.fromEntries(Object.entries(fieldValues ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   return {
     ...template.identity, targetFieldIds: [...template.identity.targetFieldIds],
-    chapters: template.chapters.map(chapter => {
-      const text = chapterTexts && Object.prototype.hasOwnProperty.call(chapterTexts, chapter.id)
-        ? chapterTexts[chapter.id] : undefined;
-      return {
-        chapterId: chapter.id, title: chapter.title,
-        fieldIds: chapter.fields.map(slot => slot.field.id),
-        editableFieldIds: chapter.fields.filter(slot => slot.editable).map(slot => slot.field.id),
-        text: typeof text === 'string' ? text : renderOutpatientEmrNarrativeSections(chapter.sections, values).map(part => part.text).join(''),
-      };
-    }),
+    chapters: template.chapters.map(chapter => ({
+      chapterId: chapter.id, title: chapter.title,
+      fieldIds: chapter.fields.map(slot => slot.field.id),
+      editableFieldIds: chapter.fields.filter(slot => slot.editable).map(slot => slot.field.id),
+      text: renderVoiceOutpatientEmrChapter(chapter, fieldValues),
+    })),
   };
 }
 
@@ -151,13 +144,19 @@ export function buildVoiceOutpatientEmrInitialDraft(
   template: VoiceOutpatientRecognitionTemplate,
   raw: unknown,
   byChapter?: Readonly<Record<string, Record<string, unknown>>>,
+  legacyTexts?: Readonly<Record<string, string>>,
 ): VoiceOutpatientEmrInitialDraft {
   const values = new Map(Object.entries(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}));
   for (const chapter of template.chapters) {
     const patch = byChapter && Object.prototype.hasOwnProperty.call(byChapter, chapter.id) ? byChapter[chapter.id] : undefined;
-    if (!patch) continue;
-    for (const { field, editable } of chapter.fields) {
-      if (editable && Object.prototype.hasOwnProperty.call(patch, field.id)) values.set(field.id, patch[field.id]);
+    const legacyText = legacyTexts && Object.prototype.hasOwnProperty.call(legacyTexts, chapter.id) ? legacyTexts[chapter.id] : undefined;
+    const whole = typeof legacyText === 'string' && legacyText.trim() && chapter.fields.length === 1
+      ? outpatientEmrChapterTextField(chapter) : undefined;
+    for (const { field, editable, placeholder } of chapter.fields) {
+      if (!editable) continue;
+      if (patch && Object.prototype.hasOwnProperty.call(patch, field.id)) values.set(field.id, patch[field.id]);
+      if (!values.has(field.id) && whole?.id === field.id) values.set(field.id, legacyText);
+      if (isVoiceOutpatientEmrFieldPlaceholder(field, values.get(field.id), placeholder)) values.delete(field.id);
     }
   }
   const present = template.fields.filter(field => values.has(field.id));
@@ -166,6 +165,17 @@ export function buildVoiceOutpatientEmrInitialDraft(
     if (field.topic === 'administrative' && Object.prototype.hasOwnProperty.call(fieldValues, field.id)) fieldValues[field.id] = '';
   }
   return { ...template.identity, targetFieldIds: [...template.identity.targetFieldIds], fieldValues };
+}
+
+/** Build both snapshots from the same approved leaves during streaming, at completion, and on cache restore. */
+export function buildVoiceOutpatientEmrDraftAndDocument(
+  template: VoiceOutpatientRecognitionTemplate,
+  raw: unknown,
+  byChapter?: Readonly<Record<string, Record<string, unknown>>>,
+  legacyTexts?: Readonly<Record<string, string>>,
+) {
+  const voiceTemplateDraft = buildVoiceOutpatientEmrInitialDraft(template, raw, byChapter, legacyTexts);
+  return { voiceTemplateDraft, voiceTemplateDocument: buildVoiceOutpatientEmrDocument(template, voiceTemplateDraft.fieldValues) };
 }
 
 export function matchesVoiceOutpatientRecognitionTemplate(

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useVoiceOutpatientEmrRecord, VoiceOutpatientEmrFieldReview } from '@features/outpatient-emr';
-import { isVoiceOutpatientEmrFieldBound } from '@features/outpatient-emr/lib/outpatientEmrDraftSource';
 import { renderOutpatientEmrNarrativeSections } from '@features/outpatient-emr/lib/outpatientEmrNarrative';
 import { matchesVoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { buildVoiceOutpatientEmrRecordContext } from '@features/outpatient-emr/lib/voiceOutpatientEmr';
@@ -719,9 +718,10 @@ const voiceTemplateRecordContext = computed(() => {
   };
   const document = props.intentResult?.voiceTemplateDocument;
   const draft = props.intentResult?.voiceTemplateDraft;
-  if (document && matchesVoiceOutpatientRecognitionTemplate(document, voiceTemplateContext.value, draft?.templateHash)) {
+  const boundDocument = document && matchesVoiceOutpatientRecognitionTemplate(document, voiceTemplateContext.value, draft?.templateHash);
+  if (boundDocument || matchesVoiceOutpatientRecognitionTemplate(draft, voiceTemplateContext.value)) {
     return {
-      chapters: document.chapters,
+      chapters: boundDocument ? document.chapters : [],
       fieldValues: draft?.fieldValues ?? {},
       compatibilityRecord: record,
       structuredFacts: selection,
@@ -754,6 +754,7 @@ const voiceTemplateDraft = useVoiceOutpatientEmrRecord({
   recordContext: voiceTemplateRecordContext,
   initialDraft: computed(() => props.intentResult?.voiceTemplateDraft),
   document: computed(() => props.intentResult?.voiceTemplateDocument),
+  streaming: computed(() => props.intentSource === 'llm' && props.intentResult?.generation?.status === 'streaming'),
   getLegacyRecord: () => props.intentResult?.outpatientRecord,
   awaitInitialDraft: computed(() => resultChannel.value === 'voice' && props.intentSource === 'llm'
     && !props.intentResult?.voiceTemplateDraft),
@@ -829,7 +830,7 @@ const templateScopeRows = computed(() => {
       key: JSON.stringify(['article', chapter.key]), label: chapter.label, fieldIds: chapter.boundFieldIds,
       available: chapter.available, recordFields, projection,
       directText: chapter.direct && chapter.directText !== undefined
-        ? { [chapter.direct.id]: chapter.text } : {} as Record<string, string>,
+        ? { [chapter.direct.id]: chapter.fields.length === 1 ? chapter.text : chapter.directText } : {} as Record<string, string>,
     };
   });
   // Explicitly authorized fields outside the clinical body retain their own review control (e.g. a signature time).
@@ -838,7 +839,7 @@ const templateScopeRows = computed(() => {
     for (const field of section.fields.filter(item => !inBody.has(item.id))) {
       const value = voiceTemplateDraft.fieldValues.value[field.id] ?? '';
       rows.push({ key: JSON.stringify(['field', field.id]), label: field.name, fieldIds: [field.id],
-        available: isVoiceOutpatientEmrFieldBound(field, value, voiceTemplateDraft.fieldValueSources.value[field.id]),
+        available: Object.prototype.hasOwnProperty.call(voiceTemplateDraft.writebackFieldValues.value, field.id),
         recordFields: field.recordField ? [field.recordField] : [],
         projection: field.recordField ? { [field.recordField]: value } : {}, directText: {} });
     }
@@ -2309,7 +2310,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
         age: patientAge.value,
       },
       currentRecord: regenerationEvidenceRecord,
-      templateFields, templateChapters,
+      templateFields, templateChapters: template ? templateChapters : undefined,
       doctorSupplement,
       consultationId: resolveConsultationId(),
     });
@@ -2321,15 +2322,16 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
       requestSpec.config,
     );
     if (!isCurrent()) return;
-    const { chapterTexts, templateFieldValues, ...regeneratedRecord } = normalizeClinicalResultRegenerationOutput(
+    const { templateFieldValues, ...standardRecord } = normalizeClinicalResultRegenerationOutput(
       parseLLMJson(response),
-      regenerationEvidenceRecord, templateChapters, templateFields,
+      regenerationEvidenceRecord, template ? templateChapters : undefined, templateFields,
     );
+    const regeneratedRecord = { ...standardRecord, ...(templateFieldValues && voiceTemplateDraft.previewSupplementRecord(templateFieldValues)) };
 
     suppressPrecautionsScopeSync.value = true;
     applyRegenerationRecord(regeneratedRecord);
     // A source document can contain only custom chapters, without a chief complaint or present illness.
-    if (!templateChapters.length || canRefreshDiagnosis.value) {
+    if (!template || canRefreshDiagnosis.value) {
       invalidateDiagnosisRequests();
       invalidateTreatmentRequests();
       const diagnosisReady = await fetchAIDiagnosis({
@@ -2360,7 +2362,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
       }
     }
 
-    if (chapterTexts) voiceTemplateDraft.applySupplementChapters(chapterTexts, templateFieldValues);
+    if (templateFieldValues) voiceTemplateDraft.applySupplementFields(templateFieldValues);
     refreshWritebackScope();
 
     setInitialRecordSnapshot({

@@ -128,6 +128,28 @@ function firstVoiceDraft(fieldValues: VoiceOutpatientEmrInitialDraft['fieldValue
 }
 
 describe('useVoiceOutpatientEmrRecord', () => {
+  it('previews and persists sparse supplements using the original fields and preserves individual doctor edits', async () => {
+    const session = compoundHistoryContext();
+    const initialDraft = { ...firstVoiceDraft({ flag: '0', operation: '原记录' }), targetFieldIds: session.template.targetFieldIds };
+    const input = { context: session, initialDraft };
+    const first = setup({}, input);
+    await vi.waitFor(() => expect(first.controller.canSubmit.value).toBe(true));
+    first.controller.updateChapterField('operation', '医生核对的手术');
+    const patch = { flag: '1', operation: '不覆盖医生选定值', other: '模板外' };
+    expect(first.controller.previewSupplementRecord(patch).pastMedicalHistory).toBe('有肝炎史。\n曾行医生核对的手术。');
+    expect(first.controller.fieldValues.value.flag).toBe('否认');
+    first.controller.applySupplementFields(patch);
+    first.controller.applySupplementFields({ flag: '无此字典项', operation: null });
+    expect(first.controller.fieldValues.value).toEqual({ flag: '有', operation: '医生核对的手术' });
+    const snapshot = JSON.parse(JSON.stringify(first.controller.reviewSnapshot.value));
+    first.scope.stop();
+    clearVoiceOutpatientEmrRecordDraftCache();
+    const reopened = setup({}, input);
+    reopened.controller.restoreReviewSnapshot(snapshot);
+    await vi.waitFor(() => expect(reopened.controller.fieldValues.value).toEqual({ flag: '有', operation: '医生核对的手术' }));
+    expect(reopened.controller.chapterRows.value.map(row => row.text)).toEqual(['有肝炎史。', '曾行医生核对的手术。']);
+    expect(reopened.analyzeFields).not.toHaveBeenCalled();
+  });
   it('restores reviewed source chapters and leaves after a fresh launch for the exact template revision', async () => {
     const session = compoundHistoryContext();
     const initialDraft = { ...firstVoiceDraft({ flag: '0', operation: '原记录' }), targetFieldIds: session.template.targetFieldIds };
@@ -371,7 +393,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const payload = controller.buildConfirmedPayload(base);
     expect(controller.recordFieldValues.value).toEqual({ pastMedicalHistory: '有肝炎史。' });
     expect(payload?.pastMedicalHistory).toBe('有肝炎史。');
-    expect(payload?.outpatientRecord).toEqual({ schemaVersion: 'outpatient-record.v1', pastMedicalHistory: '有肝炎史。' });
+    expect(payload?.outpatientRecord).toEqual({ schemaVersion: 'outpatient-record.v1', pastMedicalHistory: '肝炎史：有' });
     expect(payload?.fieldValues).toEqual({ flag: '有', operation: '' });
     expect(payload?.dictionarySelections).toEqual({ flag: { value: '1', text: '有' } });
     expect(payload?.emrFieldValues).toMatchObject({ flag: '1', operation: '' });

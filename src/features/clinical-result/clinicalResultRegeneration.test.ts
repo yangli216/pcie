@@ -88,7 +88,7 @@ describe('clinical result regeneration', () => {
   const templateChapters = [
     { chapterId: 'c1', title: '合成观察', text: '原观察', recordField: 'physicalExam' as const,
       fieldIds: ['f1', 'f2', 'read-only'], editableFieldIds: ['f1', 'f2'], narrative: [{ title: '合成观察句式' }] },
-    { chapterId: 'c2', title: '合成观察', text: '另一观察', recordField: null, fieldIds: ['f3'], editableFieldIds: ['f3'] },
+    { chapterId: 'c2', title: '合成观察', text: '另一观察', recordField: null, directTextFieldId: 'f3', fieldIds: ['f3'], editableFieldIds: ['f3'] },
   ];
 
   it('sends the exact chapter identities, current narrative and dictionary with the supplement', () => {
@@ -101,35 +101,51 @@ describe('clinical result regeneration', () => {
     expect(input.templateChapters).toEqual(templateChapters);
     expect(input.templateFields[0].dictionaryItems[0]).toEqual({ value: 'Y', text: '有' });
     expect(input.patient).toEqual({ age: '30岁' });
-    expect(messages[0].content).toContain('chapterTexts');
+    expect(messages[0].content).not.toContain('chapterTexts');
+    expect(messages[1].content).not.toContain('输出全部字段');
     expect(messages[0].content).toContain('templateFieldValues');
   });
 
-  it('updates only changed source chapters and their writable leaves, preserving explicit clears', () => {
-    const output = normalizeClinicalResultRegenerationOutput({
-      chapterTexts: { c1: '新观察', c2: '另一观察', forged: '外来章' },
-      templateFieldValues: { f1: 'Y', f2: null, f3: '非改写章', 'read-only': '不可采纳', other: '不可采纳' },
+  it('applies a sparse patch across chapters without requiring separate paragraphs', () => {
+    const result = normalizeClinicalResultRegenerationOutput({
+      chiefComplaint: '来自其他段落的说明',
+      templateFieldValues: { f1: 'Y', f2: null, f3: '', 'read-only': '只读', forged: '其他模板' },
     }, currentRecord, templateChapters);
-    expect(output.chapterTexts).toEqual({ c1: '新观察' });
-    expect(output.templateFieldValues).toEqual({ f1: 'Y', f2: null });
-    expect(normalizeClinicalResultRegenerationOutput({ chapterTexts: { c2: '' } }, currentRecord, templateChapters).chapterTexts)
-      .toEqual({ c2: '' });
+    expect(result.templateFieldValues).toEqual({ f1: 'Y', f3: '' });
+    expect(result.chiefComplaint).toBe(currentRecord.chiefComplaint);
     expect(normalizeClinicalResultRegenerationOutput({
-      chapterTexts: { c2: '自定义段也能生成' },
-    }, { ...currentRecord, chiefComplaint: '', historyOfPresentIllness: '' }, templateChapters).chapterTexts)
-      .toEqual({ c2: '自定义段也能生成' });
+      chapterTexts: { c1: '自由段落', c2: '旧描述' }, templateFieldValues: {},
+    }, currentRecord, templateChapters).templateFieldValues).toEqual({});
+    expect(() => normalizeClinicalResultRegenerationOutput({ templateFieldValues: [] }, currentRecord, templateChapters))
+      .toThrow('模板字段格式无效');
   });
 
-  it('accepts an older response only for an expressly returned standard field with one corresponding chapter', () => {
-    expect(normalizeClinicalResultRegenerationOutput({ physicalExam: '新查体' }, currentRecord, templateChapters).chapterTexts)
-      .toEqual({ c1: '新查体' });
-    const sameMapping = templateChapters.map(chapter => ({ ...chapter, recordField: 'physicalExam' as const }));
-    expect(() => normalizeClinicalResultRegenerationOutput({ physicalExam: '歧义章' }, currentRecord, sameMapping))
-      .toThrow('缺少当前模板的章节正文');
-    expect(() => normalizeClinicalResultRegenerationOutput({ chapterTexts: { forged: '外部章' }, physicalExam: '兼容文本' }, currentRecord, templateChapters))
-      .toThrow('缺少当前模板的章节正文');
-    expect(() => normalizeClinicalResultRegenerationOutput({ historyOfPresentIllness: '没有对应源章' }, currentRecord, templateChapters))
-      .toThrow('缺少当前模板的章节正文');
+  it('respects a bound template with no writable chapters', () => {
+    const { messages } = buildClinicalResultRegenerationRequest({
+      channel: 'voice', patient: {}, currentRecord, templateChapters: [], doctorSupplement: '核对本次记录。',
+    });
+    expect(messages[0].content).toContain('templateFieldValues');
+    expect(normalizeClinicalResultRegenerationOutput({
+      templateFieldValues: { f1: '无绑定项' },
+    }, { ...currentRecord, chiefComplaint: '', historyOfPresentIllness: '' }, []).templateFieldValues).toEqual({});
+  });
+
+  it('accepts legacy prose only for the corresponding whole-text control', () => {
+    expect(normalizeClinicalResultRegenerationOutput({
+      chapterTexts: { c1: '不能拆给局部字段', c2: '补充观察' },
+    }, { ...currentRecord, chiefComplaint: '', historyOfPresentIllness: '' }, templateChapters).templateFieldValues)
+      .toEqual({ f3: '补充观察' });
+    expect(() => normalizeClinicalResultRegenerationOutput({ physicalExam: '整篇查体' }, currentRecord, templateChapters))
+      .toThrow('缺少当前模板的填空值');
+    const directChapters = templateChapters.map(chapter => chapter.chapterId === 'c2'
+      ? { ...chapter, recordField: 'historyOfPresentIllness' as const } : chapter);
+    expect(normalizeClinicalResultRegenerationOutput({
+      historyOfPresentIllness: '已核实的详情',
+    }, currentRecord, directChapters).templateFieldValues).toEqual({ f3: '已核实的详情' });
+    const ambiguous = directChapters.map(chapter => ({ ...chapter, recordField: 'historyOfPresentIllness' as const }));
+    expect(() => normalizeClinicalResultRegenerationOutput({
+      historyOfPresentIllness: '存在多个对应源章',
+    }, currentRecord, ambiguous)).toThrow('缺少当前模板的填空值');
   });
 
   it('rejects malformed output instead of replacing the working result', () => {

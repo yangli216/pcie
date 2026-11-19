@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { chat, chatFast, chatStream } from '@/services/llm';
 import * as snapshots from '@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService';
 import {
-  getPreparedVoiceOutpatientTemplate, hashVoiceOutpatientRecognitionTemplate, matchesVoiceOutpatientRecognitionTemplate,
+  buildVoiceOutpatientEmrDraftAndDocument, getPreparedVoiceOutpatientTemplate, hashVoiceOutpatientRecognitionTemplate, matchesVoiceOutpatientRecognitionTemplate,
   prepareVoiceOutpatientRecognitionTemplate,
 } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { loadVoiceOutpatientEmrTemplateSource } from '@features/outpatient-emr/model/useVoiceOutpatientEmrTemplateSource';
@@ -105,12 +105,15 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
 
   it('binds each chapter event to its own writable controls in the original stream, including without record_extra', async () => {
     const context = session();
+    context.template.targetFieldIds.push('持续时间', '主诉文本');
     const template = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    const progress: VoiceIntentProgress[] = [];
     vi.mocked(chatStream).mockImplementation(async (messages, onChunk) => {
       expect(messages[0].content).toContain('"fieldValues":{"本章可写字段的原始ID"');
       const events = [
-        { event: 'template_chapter', data: { chapterId: '现病史', text: '有痰声。', fieldValues: { 痰声标志: '1', 收缩压: '异章值' } } },
-        { event: 'template_chapter', data: { chapterId: '体格检查', text: '血压120/73mmHg。',
+        { event: 'template_chapter', data: { chapterId: '现病史', fieldValues: { 痰声标志: '1', 持续时间: '持续时间', 收缩压: '异章值' } } },
+        { event: 'template_chapter', data: { chapterId: '主诉', text: '旧模型另写的主诉。', fieldValues: { 主诉文本: '请输入主诉' } } },
+        { event: 'template_chapter', data: { chapterId: '体格检查', text: '与模板填值相矛盾的自由段落。',
           fieldValues: { 收缩压: '120', 舒张压: '73', 就诊时间: '异章值', 未授权槽: '丢弃' } } },
         { event: 'template_chapter', data: { chapterId: '未知章', text: '其他资料。', fieldValues: { 痰声标志: '0' } } },
         { event: 'record_core', data: { chiefComplaint: '合成咳嗽' } }, { event: 'diagnoses', data: [] },
@@ -118,15 +121,42 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
       ];
       for (const event of events) onChunk(JSON.stringify(event) + '\n');
     });
-    const result = await useVoiceIntentRecognition().processTranscript('合成咳嗽有痰声，血压120/73mmHg', { outpatientTemplate: template });
+    const result = await useVoiceIntentRecognition().processTranscript('合成咳嗽有痰声，血压120/73mmHg', { outpatientTemplate: template, onProgress: snapshot => progress.push(snapshot) });
     expect(result?.voiceTemplateDraft?.fieldValues).toEqual({ 痰声标志: '有', 收缩压: '120', 舒张压: '73' });
-    expect(result?.voiceTemplateDocument?.chapters.find(chapter => chapter.chapterId === '体格检查')?.text).toBe('血压120/73mmHg。');
+    const chapterText = (document: typeof result, id: string) => document?.voiceTemplateDocument?.chapters.find(chapter => chapter.chapterId === id)?.text;
+    expect(chapterText(progress[0].result, '现病史')).toContain('有痰声');
+    expect(chapterText(progress[0].result, '体格检查')).toBe('');
+    expect(chapterText(progress[2].result, '体格检查')).toBe('血压：120/73mmHg');
+    expect(chapterText(result, '体格检查')).toBe(chapterText(progress[2].result, '体格检查'));
+    expect(chapterText(result, '主诉')).toBe('');
+    expect(JSON.stringify(result?.voiceTemplateDocument)).not.toContain('矛盾的自由段落');
     expect(chatStream).toHaveBeenCalledTimes(1);
     expect(chat).not.toHaveBeenCalled();
     expect(chatFast).not.toHaveBeenCalled();
   });
 
-  it('streams source chapters by identity and retains their order, scoped candidates and explicit empty prose on completion', async () => {
+  it('preserves explicitly empty or unmentioned leaves and drops placeholder-only legacy prose', async () => {
+    const context = session();
+    context.template.targetFieldIds = ['主诉文本', '持续时间', '时间单位'];
+    const template = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    for (const [fieldValues, oldChief, expected] of [
+      [{}, '请输入主诉', {}],
+      [{}, '{主诉文本}', {}],
+      [{}, '主诉文本', {}],
+      [{}, '合成症状持续两日。', { 主诉文本: '合成症状持续两日。' }],
+      [{ 主诉文本: null }, '旧整段正文。', { 主诉文本: null }],
+      [{ 主诉文本: '' }, '旧整段正文。', { 主诉文本: '' }],
+    ] as const) {
+      const result = buildVoiceOutpatientEmrDraftAndDocument(template!, fieldValues, undefined,
+        { 主诉: oldChief, 现病史: '旧复合章节正文。' });
+      expect(result.voiceTemplateDraft.fieldValues).toEqual(expected);
+      expect(result.voiceTemplateDocument.chapters.find(chapter => chapter.chapterId === '主诉')?.text)
+        .toBe('主诉文本' in expected ? expected.主诉文本 || '' : '');
+      expect(result.voiceTemplateDocument.chapters.find(chapter => chapter.chapterId === '现病史')?.text).toBe('');
+    }
+  });
+
+  it('keeps source chapter order and scoped candidates, migrating legacy prose only to the unique full-text control', async () => {
     const context = session();
     const chapters = [
       { id: 'a', title: '家族史', field: '家族肿瘤' },
@@ -168,11 +198,11 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     ]);
     const complete = result!.voiceTemplateDocument!;
     expect(complete.chapters.map(chapter => chapter.chapterId)).toEqual(['a', 'custom', 'b', 'legacy']);
-    expect(complete.chapters.map(chapter => chapter.text).slice(0, 3)).toEqual(['', '计划三天后复核。', '父亲病史待补。']);
+    expect(complete.chapters.map(chapter => chapter.text).slice(0, 3)).toEqual(['家族肿瘤：孤立字段', '计划三天后复核。', '']);
     expect(complete.chapters[3].text).toContain('一周后复诊');
     expect(result!.factSuggestions?.filter(item => item.chapterId).map(item => item.chapterId)).toEqual(['a', 'b']);
     expect(progress[progress.length - 1].result.voiceTemplateDocument).toEqual(complete);
-    expect(result!.voiceTemplateDraft?.fieldValues).toEqual({ 家族肿瘤: '孤立字段', 复诊安排: '一周后复诊' });
+    expect(result!.voiceTemplateDraft?.fieldValues).toEqual({ 家族肿瘤: '孤立字段', 复诊安排: '一周后复诊', 随访观察详情: '计划三天后复核。' });
   });
 
   it('sends read-only and non-target clinical source values and units as reference evidence without enabling their output', async () => {

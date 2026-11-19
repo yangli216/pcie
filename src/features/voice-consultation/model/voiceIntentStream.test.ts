@@ -57,10 +57,10 @@ describe('voiceIntentStream', () => {
     const state = createVoiceIntentStreamAccumulator();
     for (const data of [
       { chapterId: 'history', text: '三天', fieldValues: { duration: '3' } },
-      { chapterId: 'exam', text: '已测量', fieldValues: { weight: '54' } },
+      { chapterId: 'exam', fieldValues: { weight: '54' } },
       { chapterId: 'history', text: '病程待核对。' },
     ]) applyVoiceIntentStreamEvent(state, { event: 'template_chapter', data });
-    expect(state.payload.recordDraft?.templateChapterTexts?.history).toBe('病程待核对。');
+    expect(state.payload.recordDraft?.templateChapterTexts).toEqual({ history: '病程待核对。' });
     expect(state.payload.recordDraft?.templateChapterFieldValues).toEqual({ history: {}, exam: { weight: '54' } });
   });
 

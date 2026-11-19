@@ -265,9 +265,14 @@ export function applyVoiceIntentStreamEvent(
 
   switch (event.event) {
     case 'template_chapter':
-      if (isObject(event.data) && typeof event.data.chapterId === 'string' && typeof event.data.text === 'string') {
+      if (isObject(event.data) && typeof event.data.chapterId === 'string') {
         const { chapterId, text, fieldValues } = event.data;
-        recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, [chapterId]: text };
+        if (typeof text !== 'string' && !isObject(fieldValues)) break;
+        if (typeof text === 'string') {
+          recordDraft.templateChapterTexts = { ...recordDraft.templateChapterTexts, [chapterId]: text };
+        } else if (recordDraft.templateChapterTexts) {
+          delete recordDraft.templateChapterTexts[chapterId];
+        }
         recordDraft.templateChapterFieldValues = { ...recordDraft.templateChapterFieldValues,
           [chapterId]: isObject(fieldValues) ? fieldValues : {} };
       }
