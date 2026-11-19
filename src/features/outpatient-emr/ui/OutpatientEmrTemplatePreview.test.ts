@@ -3,6 +3,9 @@ import { createApp, h, nextTick, reactive, type App } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutpatientEmrFieldValueSource, OutpatientEmrTemplateField } from '../types';
 import OutpatientEmrTemplatePreview from './OutpatientEmrTemplatePreview.vue';
+import { parseOutpatientEmrTemplate } from '../lib/outpatientEmrTemplate';
+import hisHtml from '@/test/template-parsing/fixtures/his-internal-medicine-template.html?raw';
+import hisDefinition from '@/test/template-parsing/fixtures/his-internal-medicine-template.json?raw';
 
 let app: App<Element> | null = null;
 let root: HTMLDivElement | null = null;
@@ -33,6 +36,62 @@ afterEach(() => {
 });
 
 describe('OutpatientEmrTemplatePreview', () => {
+  it('keeps HIS placeholders in the document and restores them when a field is cleared', async () => {
+    const template = parseOutpatientEmrTemplate(hisHtml, hisDefinition, ['主诉文本', '痰声标志']);
+    const fieldValues = reactive<Record<string, string>>({ 主诉文本: '', 痰声标志: '无' });
+    const fieldSources = reactive<Record<string, OutpatientEmrFieldValueSource>>({ 痰声标志: 'unmentioned-default' });
+    const onUpdateField = vi.fn((id: string, value: string) => {
+      fieldValues[id] = value;
+      fieldSources[id] = 'doctor';
+    });
+    root = document.createElement('div');
+    document.body.append(root);
+    app = createApp({ setup: () => () => h(OutpatientEmrTemplatePreview, {
+      sanitizedHtml: template.sanitizedHtml, fields: template.targetFields, fieldValues, fieldSources, onUpdateField,
+    }) });
+    app.mount(root);
+    await nextTick();
+
+    const editor = root.querySelector<HTMLElement>('[role="textbox"][aria-label="主诉文本"]')!;
+    const selector = root.querySelector<HTMLSelectElement>('select[aria-label="痰声标志"]')!;
+    const label = selector.nextElementSibling!;
+    expect(editor.getAttribute('aria-placeholder')).toBe('请输入主诉');
+    expect(editor.textContent).toBe('');
+    expect(editor.closest('.tag-filed')?.textContent).toBe('{}');
+    expect(root.querySelector('header.tag-article')?.textContent).toContain('门(急)诊病历');
+    expect(root.querySelector('header [tabindex]')).toBeNull();
+    expect(label.textContent).toBe('无');
+    expect(selector.title).toContain('本次未提及');
+    expect(selector.options[0]?.text).toBe('留空');
+    expect(selector.options[0]?.disabled).toBe(false);
+
+    selector.value = '有';
+    selector.dispatchEvent(new Event('input', { bubbles: true }));
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onUpdateField).toHaveBeenCalledTimes(1);
+    expect(onUpdateField).toHaveBeenCalledWith('痰声标志', '有');
+    expect(label.textContent).toBe('有');
+    selector.value = '';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onUpdateField).toHaveBeenLastCalledWith('痰声标志', '');
+    await nextTick();
+    await nextTick();
+    expect(label.textContent).toBe('有无');
+    expect(label.classList.contains('placeholder')).toBe(true);
+    expect(selector.title).toBe('医生已修改');
+    fieldValues.主诉文本 = '合成记录';
+    await nextTick();
+    await nextTick();
+    expect(editor.textContent).toBe('合成记录');
+    editor.innerHTML = '<br>';
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    await nextTick();
+    expect(fieldValues.主诉文本).toBe('');
+    expect(editor.childNodes).toHaveLength(0);
+    expect(editor.getAttribute('data-outpatient-emr-placeholder')).toBe('请输入主诉');
+  });
+
   it('updates provenance and clears a resolved conflict without replacing the doctor editor', async () => {
     const state = reactive({
       fieldValues: { personalHistory: '模板草稿' },
@@ -137,7 +196,7 @@ describe('OutpatientEmrTemplatePreview', () => {
     );
     expect(selector?.value).toBe('');
     expect(Array.from(selector?.options || []).map((option) => option.text)).toEqual([
-      '请选择',
+      '留空',
       '否认',
       '有',
     ]);

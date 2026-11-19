@@ -945,7 +945,7 @@ SDK 调用：`sdk.generateInpatientEmr({ admissionId, templateId, templateName, 
 | `htmlContent` | String | 是 | 当前病历模板 HTML，桌面端会解析其中带 `data-id` 的模板字段；会作为原生模板内容保存到后端，供管理端查看源码和 HTML 预览 |
 | `recordTime` | String | 否 | 本次病程记录书写时间，如 `2026-06-10 15:25`；未传时桌面端使用当前系统时间。生成正文会以该日期作为“今日 / 本次查房日期”，避免把历史体温单日期误写成今日 |
 | `doctorSupplement` | String | 否 | 医生补充的本次病历书写要点，通常由桌面端“重新生成”弹窗录入或语音转写得到；AI 生成时作为高优先级补充上下文，但仍不得扩展为未提供事实 |
-| `allowGenerateWithoutExternalBasis` | Boolean | 否 | 桌面端内部重生成控制字段。入院类模板初次自动生成时若缺少补充要点和门诊正文会等待补充；医生点击“直接重新生成”时置为 `true`，表示已确认仅基于住院聚合上下文继续生成 |
+| `allowGenerateWithoutExternalBasis` | Boolean | 否 | 历史桌面端重生成标记，兼容旧请求。住院病历首次及重新生成均可直接使用当前可用资料 |
 | `contextPolicy` | Object | 否 | 住院上下文裁剪策略，如 `maxDays`、`previousNoteLimit`、`labLookbackDays`、`orderLookbackDays`；用于避免长住院全量数据进入 AI 上下文 |
 | `hisContext` | Object | 否 | HIS 直接传入的 AI 上下文包；存在时桌面端优先使用该包中的登记、诊断、体温单、医嘱、检验检查、历史病程摘要等数据，不再强依赖分散住院接口 |
 | `requestId` | String | 否 | HIS 侧请求 ID；未传时桌面端会生成 |
@@ -1093,15 +1093,15 @@ HTTP Bridge 受理响应：
 后续事件：
 
 1. 桌面端打开“住院病历生成”界面，医生可看到“获取住院上下文 / 整理诊疗摘要 / 整理病历依据 / 解析病历 / AI 生成”的步骤状态。PHIS 通过 `api/phis.aiInpatientEmrContextService/buildContext` 一次性返回上下文，桌面端调用该 PHIS RPC 时使用数组入参 `[requestMap]`，界面上仅拆分展示处理阶段。
-2. 若医生对生成结果不满意，可点击“重新生成”，在桌面端弹窗中手动输入或语音转写补充本次查房要点；桌面端会把补充内容作为 `doctorSupplement` 重新进入 AI 生成，不改变 HIS 原始上下文。若医生未补充要点且点击“直接重新生成”，桌面端会设置 `allowGenerateWithoutExternalBasis = true`，AI 继续基于住院聚合上下文生成，不再停留在“等待补充要点或门诊病历依据”状态。
-3. 入院记录场景下，医生可在“重新生成”弹窗里选择一次门诊就诊作为基础资料。门诊历史默认查询近 7 天，并提供近 1 月、近 3 月切换；PHIS `aiAdapterService/queryVisitHistory` 入参在 `params.dtBgn` 中传时间范围，例如 `[{"limit":-1,"params":{"idPi":"患者ID","dtBgn":["2026-06-08 00:00:00","2026-06-15 23:59:59"]}}]`。桌面端只展示同时有有效诊断和门诊病历文书的就诊记录，无诊断或无文书记录会被过滤。当前 PHIS Adapter 会先根据门诊 `idVis` 调用 `api/phis.aiAdapterService/getLookMedList`，入参为 `[{"idApp":"42","idTet":"租户ID","idHospital":"门诊idVis"}]`，并把返回的 `idMedrecdoc / naMed / titleTime / medType / fgCommit` 等映射为门诊病历文书列表；随后按 `idMedrecdoc` 调用 `api/phis.aiAdapterService/getMedContentLook`，入参为 `[{"idApp":"42","idTet":"租户ID","idMedrecdoc":"文书ID","courseShow":0}]`，读取 `body.data.htmlContent` 作为门诊病历正文。正文会用于门诊病历预览，并转换为纯文本作为 AI 参考上下文；若正文接口失败，桌面端才退回只展示文书列表和正文不可用提示。
-4. 医生可在默认“病历阅读”和“原始模板”之间切换、编辑同一份 AI 字段值，核对后点击“一键回写”。视图切换和字段来源标记不进入回写参数；非 AI 字段仍只读，生成及等待回执期间不可编辑。当前回写前质控暂不启用，医生确认后直接产生 `record-confirmed`。同时 `sdk.generateInpatientEmr(...)` 返回的 Promise 会 resolve 这份 payload。其中 `resultType` 固定为 `record-confirmed`，`referenceType/action` 固定为 `batch`，`emrType` 为 `inpatient-emr`。
+2. 若医生对生成结果不满意，可点击“重新生成”，在桌面端弹窗中手动输入或语音转写补充本次查房要点；桌面端会把补充内容作为 `doctorSupplement` 重新进入 AI 生成，不改变 HIS 原始上下文。即使没有医生补充或门诊引用，初次生成和重新生成也会基于当时已有的住院资料发起模型调用。重新生成保留本次已引用的门诊就诊，医生可以更换或取消。
+3. 入院记录场景下，医生可在“重新生成”弹窗里选择一次门诊就诊作为基础资料。门诊历史默认查询近 7 天，并提供近 1 月、近 3 月切换；PHIS `aiAdapterService/queryVisitHistory` 入参在 `params.dtBgn` 中传时间范围，例如 `[{"limit":-1,"params":{"idPi":"患者ID","dtBgn":["2026-06-08 00:00:00","2026-06-15 23:59:59"]}}]`。桌面端只展示同时有有效诊断和门诊病历文书的就诊记录，无诊断或无文书记录会被过滤。当前 PHIS Adapter 会先根据门诊 `idVis` 调用 `api/phis.aiAdapterService/getLookMedList`，入参为 `[{"idApp":"42","idTet":"租户ID","idHospital":"门诊idVis"}]`，并把返回的 `idMedrecdoc / naMed / titleTime / medType / fgCommit` 等映射为门诊病历文书列表；随后按 `idMedrecdoc` 调用 `api/phis.aiAdapterService/getMedContentLook`，入参为 `[{"idApp":"42","idTet":"租户ID","idMedrecdoc":"文书ID","courseShow":0}]`，读取 `body.data.htmlContent` 作为门诊病历正文。正文转换为纯文本供模型参考，和同次就诊已取得的结构化 SOAP 资料一并使用。文书正文暂不可用时仍保留已取得的结构化病史，目录单独标记。
+4. 医生在原始模板上编辑 AI 字段值，核对后点击“一键回写”。字段来源标记仅用于界面展示。非 AI 字段仍只读，生成及等待回执期间不可编辑。当前回写前质控暂不启用，医生确认后直接产生 `record-confirmed`。同时 `sdk.generateInpatientEmr(...)` 返回的 Promise 会 resolve 这份 payload。其中 `resultType` 固定为 `record-confirmed`，`referenceType/action` 固定为 `batch`，`emrType` 为 `inpatient-emr`。
 5. `record-confirmed.payload.fieldValues` 为 `{ [data-id]: value }` 的结构化字段取值；仅包含本次传入 `htmlContent` 中真实存在、且模板解析结果标记为适合 AI 生成的字段，若医生在预览中编辑过 AI 字段，以编辑后的文本为准。
 6. 住院病历回写事件不返回 `htmlContent`；HIS 侧按当前编辑器模板自行用 `data-id` 定位并回填文本。
 7. HIS 完成回填后，建议调用 `POST /api/consultation/reference-feedback`，带回相同 `consultationId` 与 `requestId`。回执时 `referenceType` 可传 `batch`，也可留空由 Bridge 按 `batch` 处理；桌面端收到成功回执后会从病历生成界面收起回小球状态。
 8. 病程正文生成时，`recordTime` 的日期是“今日 / 本次查房日期”的唯一依据；若体温单最新记录早于该日期，只能表述为“最近一次体温单记录（YYYY-MM-DD）”，不得写成“今日（历史日期）查房”。
 9. 历史病历中 `medType=2` 的病案首页不进入 AI 上下文；`medType=0` 入院记录建议提取 `chiefComplaint`、`presentIllness` 和 `structuredSections`，不要只传整篇 HTML 文本。
-10. 正文生成按当前模板字段 ID 和后台最终 AI 开关执行；初次语义分类只是未配置字段的建议，不参与最终模型指令；字段不携带 `presetStatus`，解析结果中的临时未决字段集合不进入模板登记请求。后台最终 `aiSuitable` 是唯一生成开关，显式关闭优先，旧分类属性在兼容响应中被忽略。模型任务保留字段 `type`，其中 `number` 字段的默认及自定义提示词都附带纯数值字符串约束：单位由模板展示，不附单位、字段名、范围或说明；缺少可靠数值时返回空字符串，不自行换算单位。文本字段仍可按正文要求书写单位；`fieldValues` 继续使用字符串值，不做结果去单位或强转。模型只能返回一个完整 JSON 对象，全部 AI 字段必须显式返回字符串；资料不足可显式为空，但空值、占位、漏项、未知项、重复键或错误类型不得显示为完整生成。合法部分只作可编辑预览，失败不自动发出回写事件，不追加非流式请求或临床兜底文本；医生仍按既有流程核对、编辑并确认回写。Bridge 的成功响应只表示入口请求已接收，不表示模型字段或 HIS 回填完成。
+10. 正文生成按当前模板字段 ID 和后台最终 AI 开关执行；初次语义分类只是未配置字段的建议，不参与最终模型指令；字段不携带 `presetStatus`，解析结果中的临时未决字段集合不进入模板登记请求。后台最终 `aiSuitable` 是唯一生成开关，显式关闭优先，旧分类属性在兼容响应中被忽略。模型任务保留字段 `type`，其中 `number` 字段的默认及自定义提示词都附带纯数值字符串约束：单位由模板展示，不附单位、字段名、范围或说明；缺少可靠数值时返回空字符串，不自行换算单位。文本字段仍可按正文要求书写单位；`fieldValues` 继续使用字符串值，不做结果去单位或强转。提示词要求按模板字段 ID 输出 JSON。客户端接收模型实际返回的可映射字段值，数值和布尔标量按原字面文本进入草稿，允许缺键、空串与部分返回；模板范围外的键不参与回填。入院记录可据住院登记和本次诊断在现病史中写明有来源的就诊背景，症状及病程只使用已记录的事实。至少一个目标字段有正文才显示已生成。目标字段全空或模型返回空字段表时，模板进入待补充状态，医生可以直接编辑或补充依据后重新生成。回复无法映射到当前模板时提示核对返回格式并重新生成。传输失败保留已收到的部分并提示失败。医生仍按既有流程核对、编辑并确认回写。Bridge 的成功响应只表示入口请求已接收，不表示模型字段或 HIS 回填完成。
 
 说明：
 
@@ -2561,7 +2561,7 @@ HIS 接入完成后，至少验证以下场景：
 
 住院病历回填重试关联：首次发送保留入口requestId；如果前一次已成功发送给HIS，医生在失败回执后重试或重新生成后再发送时使用新的requestId。HIS必须按本次record-confirmed的requestId回执，不得复用上一条回执标识。SDK生成Promise仍在首次匹配的record-confirmed时resolve，后续回填尝试沿用事件订阅。字段结构保持原契约。
 
-住院日志经签名 `POST /v1/client/user-logs/inpatient-emr/events` 上传，完整模板字段最多500项、单事件最多1MiB，字段顺序与正文保留原样。字段校验拒绝仍为 HTTP 400 / `BIZ-001`，消息追加有界的字段路径、校验类型和长度/项数诊断，不含原值；详细限制见[服务端住院日志契约](../pcie-server/API.md#住院病历日志)。待传事件只在服务端确认后删除，服务端修复后可用原事件补传。
+住院日志经签名 `POST /v1/client/user-logs/inpatient-emr/events` 上传，完整模板字段最多500项、单事件最多1MiB，字段顺序与正文保留原样。字段校验拒绝仍为 HTTP 400 / `BIZ-001`，消息追加有界的字段路径、校验类型和长度/项数诊断，不含原值；详细限制见[服务端住院日志契约](../pcie-server/API.md#住院病历日志)。待传事件只在服务端确认后删除，服务端修复后可用原事件补传。签名补传每条最多等待 30 秒（含注册、签名及读取确认响应），超时或缺少确认时保留原事件 ID 与正文。单条被服务端以 HTTP 400/409/413/422 拒绝、或内存事件未能落盘时，本轮暂缓该生成轮次的后续事件，继续处理同机构和设备下其他轮次的已落盘事件。网络、鉴权或服务不可用则停止本轮并提示原因，支持手动重试及既有 30 秒自动重试。补传提示区分已落盘与仅在本次运行中保留的记录。
 
 ## 分段 ASR 配置
 
@@ -2569,7 +2569,7 @@ bootstrap `speech.transcriptionMode` 为 `batch` / `segmented`（省略按 `batc
 
 ## 语音转写重试边界
 
-停止后的整段转写异常或非法结果必须显示未完成状态，保留当前完整 WAV 和分段草稿；失败时医生可强制编辑文字：改出非空且不同于失败时内容的文字后可直接确认，确认即视为医生核对后的文字；重试整段转写仍可用，成功后以转写结果覆盖当前停录段（含手动编辑），继续采集仍须重试成功；录音保存失败（无可用录音）时可编辑但不可确认。成功返回空文本则单独提示未识别到新增文字，清除当前未核验草稿、保留先前审核文字，允许重试、续采或手动补充；确认仍要求非空文字。重试只发送当前停录段，成功后与先前已审核文字拼接；重试中禁止重复请求与编辑，放弃仍可用。关闭、放弃、续采或卸载须使旧请求失效。录音保存失败时不得用空 Blob 假装可重试。
+停止后的整段转写异常或非法结果必须显示未完成状态，保留当前完整 WAV 和分段草稿；失败时医生可强制编辑文字：改出非空且不同于失败时内容的文字后可直接确认，确认即视为医生核对后的文字；重试整段转写仍可用，成功返回非空文字后以转写结果覆盖当前停录段（含手动编辑），继续采集仍须重试成功；录音保存失败（无可用录音）时允许医生编辑成不同的非空文字，核对后确认。成功返回空文本则单独提示未识别到新增文字，保留当前段草稿和先前审核文字供医生核对，允许重试、续采或手动补充；确认仍要求非空文字。重试只发送当前停录段，成功后与先前已审核文字拼接；重试中禁止重复请求与编辑，放弃仍可用。关闭、放弃、续采或卸载须使旧请求失效。录音保存失败时不得用空 Blob 假装可重试。
 
 重试复用带设备签名的 `/v1/ai/speech/transcribe`，保留 WAV MIME/容器和采样格式；上传文件名由统一音频 payload builder 按 MIME 生成，不把 WAV 标成 WebM 或 PCM。无新增服务端字段或配置。
 

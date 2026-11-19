@@ -34,7 +34,7 @@ describe('server-managed LLM routing', () => {
   it('routes non-stream chat through the signed server endpoint', async () => {
     mocks.regionalPost.mockResolvedValue({ content: 'ok' });
     await expect(chat([{ role: 'user', content: 'hello' }])).resolves.toBe('ok');
-    expect(mocks.regionalPost).toHaveBeenCalledWith('/v1/ai/chat', expect.objectContaining({ stream: false }));
+    expect(mocks.regionalPost).toHaveBeenCalledWith('/v1/ai/chat', expect.objectContaining({ stream: false }), undefined);
   });
 
   it('routes streaming chat through the signed SSE endpoint', async () => {
@@ -77,6 +77,7 @@ describe('server-managed LLM routing', () => {
         operationAction: 'assess_medication_with_current_information',
         operationTitle: '医生主动基于现有信息评估用药',
       }),
+      undefined,
     );
   });
 

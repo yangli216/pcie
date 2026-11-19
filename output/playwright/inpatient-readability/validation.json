@@ -1,0 +1,58 @@
+{
+  "date": "2026-11-17",
+  "branch": "白云",
+  "scope": "Current mixed working tree. Other active tasks also changed shared workspace styles and outpatient UI. No claim of isolated commit validation.",
+  "checks": {
+    "yarn type-check": "passed",
+    "yarn test:unit": {
+      "status": "passed",
+      "files": 230,
+      "tests": 1663
+    },
+    "yarn build": "passed",
+    "git diff --check": "passed"
+  },
+  "browser": {
+    "data": "synthetic only, production InpatientEmrPage and preview; service/model/native boundaries replaced in development-only aliases",
+    "viewports": [
+      [
+        1080,
+        760
+      ],
+      [
+        520,
+        760
+      ]
+    ],
+    "observed": [
+      "No document horizontal overflow at either viewport",
+      "15px body text with 26.25px line height",
+      "Multiline reading-view edits preserved in original template",
+      "HIS name/hospital number readonly in original template",
+      "Pending state locks fields and writeback, with visible receipt status",
+      "Generating state expands process details and locks fields without collapsing preview",
+      "Blue primary button rgb(37,99,235)"
+    ],
+    "screenshots": [
+      "01-reading-wide.png",
+      "02-template-wide.png",
+      "03-pending-narrow.png",
+      "04-reading-narrow.png",
+      "05-generating-wide.png"
+    ]
+  },
+  "not_run": [
+    "Real AI",
+    "Native Tauri desktop",
+    "Real HIS/PHIS writeback"
+  ],
+  "sources_sha256": {
+    "src/features/inpatient-emr/ui/InpatientEmrPage.vue": "1022683e4e08e2b83be65a33d5555c73cc1e7f6d75484e6fda5e0e54acd91867",
+    "src/features/inpatient-emr/ui/InpatientEmrTemplatePreview.vue": "6c262d6398050a098657e197a1e6c3f1c8022793142b55d0a1e531f35956d5a3",
+    "src/features/inpatient-emr/ui/InpatientEmrTemplatePreview.test.ts": "3dfb50c3e1646d50f84d288be372e514c7aa235bc8f870767c5162319aa4dba0",
+    "src/features/inpatient-emr/ui/InpatientEmrPage.integration.test.ts": "89a67834372f4976c402232a58f5602c01f15f5c1b4b6ec4a7c4b3c96e370831",
+    "src/features/inpatient-emr/model/useInpatientEmrGeneration.ts": "e8a244b2a9cb1dc1840eceee1c15160b04a6d9b77421db70353395a5dd3f317b",
+    "src/features/inpatient-emr/model/useInpatientEmrGeneration.test.ts": "bcd2129da31304236cea2a17494db75fe8e4bafc36ca8729cf9b22b9d42e167b",
+    "src/shared/styles/workspace-page.css": "eb039bf9d6dfbb9ca4e0e6a96e7f770f4e25fa22d6c4418cb31c31f96c599251"
+  }
+}

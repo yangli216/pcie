@@ -22,6 +22,8 @@ export interface VoiceOutpatientEmrTemplateInput {
 export interface VoiceOutpatientEmrStartContext {
   visitId: string;
   template: VoiceOutpatientEmrTemplateInput;
+  /** Local page header from the HIS handshake at startVoice. */
+  displayOrgName?: string;
 }
 
 export interface VoiceOutpatientEmrTemplateIdentity {

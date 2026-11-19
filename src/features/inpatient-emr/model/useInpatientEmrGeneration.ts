@@ -86,6 +86,7 @@ export function useInpatientEmrGeneration() {
   const pendingWritebackRequestId = ref('');
   const dispatchedRequestIds = new Set<string>();
   let requestSequence = 0;
+  let doctorEdits = new Map<string, string>();
   let logSession: InpatientLogSession | null = null;
   let pendingSnapshot: InpatientEmrGenerationResult | null = null;
   void retryInpatientLogs();
@@ -107,6 +108,7 @@ export function useInpatientEmrGeneration() {
     logSession = null;
     pendingSnapshot = null;
     currentRequest.value = null;
+    doctorEdits.clear();
     result.value = null;
     errorMessage.value = '';
     writebackMessage.value = '';
@@ -125,7 +127,7 @@ export function useInpatientEmrGeneration() {
     ));
   }
 
-  async function start(request: InpatientEmrGenerationRequest): Promise<void> {
+  async function start(request: InpatientEmrGenerationRequest, edits = new Map<string, string>()): Promise<void> {
     if (pendingWritebackRequestId.value && currentRequest.value?.admissionId === request.admissionId) {
       errorMessage.value = '正在等待HIS回执，请先处理当前回填请求';
       return;
@@ -134,6 +136,7 @@ export function useInpatientEmrGeneration() {
       void logSession.record('superseded', result.value, undefined, result.value?.fieldValues);
     const token = ++requestSequence;
     currentRequest.value = request;
+    doctorEdits = edits;
     result.value = null;
     pendingSnapshot = null;
     logSession = null;
@@ -163,7 +166,7 @@ export function useInpatientEmrGeneration() {
         if (acceptGenerationUpdates && token === requestSequence) updateStep(progress);
       }, partial => {
         if (acceptGenerationUpdates && token === requestSequence) result.value = partial;
-      }, generationTrace);
+      }, generationTrace, Object.fromEntries(edits));
       if (token !== requestSequence) return;
       result.value = generated;
       const status = generated.evidenceSummary.aiGeneration.status;
@@ -193,11 +196,16 @@ export function useInpatientEmrGeneration() {
     return true;
   }
 
+  function regenerate(changes: Pick<InpatientEmrGenerationRequest, 'doctorSupplement' | 'outpatientVisitId'>): void {
+    if (currentRequest.value) void start({ ...currentRequest.value, ...changes }, new Map(doctorEdits));
+  }
+
   function updateFieldValue(fieldId: string, content: string): void {
     if (!result.value || isGenerating.value || isWritingBack.value
       || pendingWritebackRequestId.value || writebackStatus.value === 'pending'
       || writebackStatus.value === 'success') return;
     if (!result.value.template.fields.some((field) => field.id === fieldId && field.aiSuitable)) return;
+    doctorEdits.set(fieldId, content);
     const fieldValues = {
       ...result.value.fieldValues,
       [fieldId]: content,
@@ -348,6 +356,7 @@ export function useInpatientEmrGeneration() {
     activeStepKey,
     completedStepCount,
     start,
+    regenerate,
     abandon,
     pendingWritebackRequestId,
     updateFieldValue,

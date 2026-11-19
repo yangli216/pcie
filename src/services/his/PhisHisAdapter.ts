@@ -14,6 +14,7 @@
  * 适配器层对此无感。
  */
 
+import { stripHtmlToText } from '@shared/lib/stripHtmlToText';
 import { HisService } from '../hisService';
 import type {
   HisDiagnosisCatalogItem,
@@ -115,22 +116,6 @@ const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
-
-const stripHtmlToText = (html: string): string => html
-  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-  .replace(/<\/(p|div|section|article|br|tr|li|h[1-6])>/gi, '\n')
-  .replace(/<[^>]+>/g, ' ')
-  .replace(/&nbsp;/gi, ' ')
-  .replace(/&lt;/gi, '<')
-  .replace(/&gt;/gi, '>')
-  .replace(/&amp;/gi, '&')
-  .replace(/&quot;/gi, '"')
-  .replace(/&#39;/g, "'")
-  .replace(/[ \t\f\v]+/g, ' ')
-  .replace(/\n\s+/g, '\n')
-  .replace(/\n{3,}/g, '\n\n')
-  .trim();
 
 /** PHIS 业务类型编码 ↔ 中性枚举 */
 const PHIS_BUSINESS_TYPE_MAP: Record<InventoryCheckRequest['businessType'], '1' | '2' | '3'> = {
@@ -590,7 +575,7 @@ function mapOutpatientVisitHistoryItem(
 ): HisOutpatientVisit | null {
   const raw = item as Record<string, unknown>;
   const visitId = firstTrim(raw, ['idVis', 'visitId']);
-  if (!visitId) return null;
+  if (!visitId || !matchesOutpatientScope(raw, visitId, fallbackPatientId)) return null;
 
   return {
     visitId,
@@ -630,6 +615,14 @@ function hasEffectiveOutpatientDiagnosis(visit: HisOutpatientVisit): boolean {
   return Boolean(visit.diagnoses?.some((item) => item.trim()));
 }
 
+function matchesOutpatientScope(record: Record<string, unknown>, visitId: string, patientId?: string): boolean {
+  const matches = (keys: string[], expected?: string) => !expected || keys.every(key => {
+    const supplied = trim(record[key]);
+    return !supplied || supplied === expected;
+  });
+  return matches(['idHospital', 'idVis', 'visitId'], visitId) && matches(['idPatient', 'idPi', 'patientId'], patientId);
+}
+
 function mapOutpatientMedicalRecordDocument(
   item: HisOutpatientMedicalRecordDocumentBody,
   fallbackVisitId: string,
@@ -638,7 +631,7 @@ function mapOutpatientMedicalRecordDocument(
   const documentId = firstTrim(raw, ['idMedrecdoc', 'documentId', 'id']);
   const title = firstTrim(raw, ['naMed', 'title', 'name']) ?? '未命名门诊病历';
   const visitId = firstTrim(raw, ['idHospital', 'visitId', 'idVis']) ?? fallbackVisitId;
-  if (!documentId || !visitId) return null;
+  if (!documentId || visitId !== fallbackVisitId) return null;
 
   return {
     documentId,
@@ -700,17 +693,93 @@ function chooseOutpatientRecordDocument(
     ?? documents[0];
 }
 
+const outpatientSoapFields = [
+  'chiefComplaint', 'presentIllness', 'historyOfPresentIllness', 'pastHistory', 'pastMedicalHistory',
+  'physicalExam', 'physicalExamination', 'auxiliaryExam', 'auxiliaryExamination', 'vitlSigns',
+];
+
+const outpatientVitalFields = [
+  'bph', 'BPH', 'bpl', 'BPL', 'healthRate', 'HEALTH_RATE', 'pulseRate', 'PULSE_RATE',
+  'breathRate', 'BREATH_RATE', 'temp', 'TEMP', 'sdTemp', 'SD_TEMP', 'height', 'HEIGHT',
+  'weight', 'WEIGHT', 'waist', 'WAIST', 'bloodFlag', 'BLOOD_FLAG', 'insertTime', 'INSERT_TIME',
+  'updateTime', 'UPDATE_TIME', 'spo2', 'SPO2',
+];
+
+const outpatientPrivateKeys = new Set([
+  'idPi', 'patientId', 'idPatient', 'idVis', 'visitId', 'idHospital', 'idOrg', 'idTet', 'tenantId',
+  'idUser', 'insertUser', 'updateUser', 'idDoc', 'patientName', 'naPi', 'idCard', 'identityNo',
+  'token', 'accessToken', 'refreshToken', 'apiKey', 'clientSecret', 'secret', 'password', 'authorization', 'cookie',
+].map(key => key.toLowerCase()));
+
+function readClinicalSource(value: unknown, keys: readonly string[] | null, visitId: string, patientId?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => readClinicalSource(item, keys, visitId, patientId)).filter(item => item !== undefined);
+  }
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  if (!matchesOutpatientScope(record, visitId, patientId)) return undefined;
+  const entries = Object.entries(record)
+    .filter(([key]) => keys ? keys.includes(key) : !outpatientPrivateKeys.has(key.toLowerCase()))
+    .map(([key, raw]) => [key, readClinicalSource(raw, key === 'vitlSigns' ? outpatientVitalFields : null, visitId, patientId)] as const)
+    .filter(([, item]) => item !== undefined);
+  return Object.fromEntries(entries);
+}
+
+function clinicalRows(source: unknown): Record<string, unknown>[] {
+  return (Array.isArray(source) ? source : [source])
+    .filter((row): row is Record<string, unknown> => row != null && typeof row === 'object' && !Array.isArray(row));
+}
+
+function mapOutpatientVisitFacts(detail: HisVisitDetailBody | null, visitId: string, patientId?: string): Pick<HisOutpatientMedicalRecord,
+  'chiefComplaint' | 'historyOfPresentIllness' | 'pastHistory' | 'physicalExamination' |
+  'auxiliaryExamination' | 'diagnosis' | 'treatmentPlan' | 'vitalSigns' | 'sourceFacts'> {
+  if (!detail) return {};
+  const fields: Record<string, unknown> = {};
+  const soap = detail.soapData ?? {};
+  if (detail.soapData !== undefined) {
+    const soapFields = readClinicalSource(detail.soapData, outpatientSoapFields, visitId, patientId);
+    if (soapFields !== undefined) fields.soapData = soapFields;
+  }
+  if (detail.diagList !== undefined) {
+    fields.diagList = readClinicalSource(detail.diagList, ['naDiag', 'naIcd10', 'sdDiag', 'cdIcd10', 'fgMain'], visitId, patientId);
+  }
+  if (detail.orderList !== undefined) {
+    fields.orderList = readClinicalSource(detail.orderList, ['naOrd', 'desOrd', 'amount', 'unitOrd', 'sdOrd', 'sdSrv', 'fgDrug'], visitId, patientId);
+  }
+  const diagnoses = clinicalRows(fields.diagList).map((item) => trim(item.naDiag) ?? trim(item.naIcd10)).filter(Boolean);
+  const orders = clinicalRows(fields.orderList).map((order) => {
+    const name = trim(order.naOrd) ?? '';
+    const description = trim(order.desOrd);
+    return description ? `${name}（${description}）` : name;
+  }).filter(Boolean);
+  return {
+    chiefComplaint: trim(soap.chiefComplaint),
+    historyOfPresentIllness: firstTrim(soap, ['presentIllness', 'historyOfPresentIllness']),
+    pastHistory: firstTrim(soap, ['pastHistory', 'pastMedicalHistory']),
+    physicalExamination: firstTrim(soap, ['physicalExam', 'physicalExamination']),
+    auxiliaryExamination: firstTrim(soap, ['auxiliaryExam', 'auxiliaryExamination']),
+    diagnosis: diagnoses.join(', ') || undefined,
+    treatmentPlan: orders.join('; ') || undefined,
+    vitalSigns: mapVisitVitalSigns(detail),
+    sourceFacts: Object.keys(fields).length ? { source: 'loadClinicMedicalRecord', fields } : undefined,
+  };
+}
+
 function mapOutpatientMedicalRecordContent(
   visitId: string,
   document: HisOutpatientMedicalRecordDocument,
   documents: HisOutpatientMedicalRecordDocument[],
   content: HisOutpatientMedicalRecordContentBody,
+  detail: HisVisitDetailBody | null,
+  patientId?: string,
 ): HisOutpatientMedicalRecord | null {
   const htmlContent = trim(content.htmlContent);
-  if (!htmlContent) return null;
+  const contentId = trim(content.idMedrecdoc);
+  if (!htmlContent || (contentId && contentId !== document.documentId)) return null;
 
   return {
     visitId,
+    ...mapOutpatientVisitFacts(detail, visitId, patientId),
     documentId: document.documentId,
     documentTitle: document.title,
     htmlContent,
@@ -718,6 +787,7 @@ function mapOutpatientMedicalRecordContent(
     documents,
     raw: {
       source: 'getMedContentLook',
+      detail,
       document: document.raw || document,
       content: content as unknown as Record<string, unknown>,
       documents: documents.map((doc) => doc.raw || doc),
@@ -1081,20 +1151,30 @@ export class PhisHisAdapter implements HisAdapter {
     if (!idVis) return null;
 
     const idPi = this.visitPatientMap.get(idVis) ?? this.lastPatientId;
-    let detail: HisVisitDetailBody | null = null;
-    if (idPi) {
-      try {
-        detail = await this.service.loadClinicMedicalRecord(idVis, idPi);
-      } catch {
-        console.warn('[PhisHisAdapter] Failed to load clinic medical record for raw merge', {
-          hasPatient: true,
-        });
+    const loadSelectedDetail = async () => {
+      if (!idPi) return null;
+      const detail = await this.service.loadClinicMedicalRecord(idVis, idPi);
+      if (!detail || !matchesOutpatientScope(detail, idVis, idPi)) return null;
+      const soap = detail.soapData;
+      if (soap && !matchesOutpatientScope(soap, idVis, idPi)) return { ...detail, soapData: undefined };
+      const vitals = soap?.vitlSigns;
+      if (vitals && !matchesOutpatientScope(vitals, idVis, idPi)) {
+        return { ...detail, soapData: { ...soap, vitlSigns: undefined } };
       }
+      return detail;
+    };
+    let detail: HisVisitDetailBody | null = null;
+    try {
+      detail = await loadSelectedDetail();
+    } catch {
+      console.warn('[PhisHisAdapter] Failed to load clinic medical record for raw merge');
     }
-
-    const documents = await this.fetchOutpatientMedicalRecordDocuments(idVis);
-    if (documents.length > 0) {
-      const document = chooseOutpatientRecordDocument(documents);
+    const eligibleDocuments = (await this.fetchOutpatientMedicalRecordDocuments(idVis))
+      .filter(document => matchesOutpatientScope(document.raw || {}, idVis, idPi));
+    if (eligibleDocuments.length > 0) {
+      const document = chooseOutpatientRecordDocument(eligibleDocuments);
+      const documentPatient = idPi || firstTrim(document?.raw || {}, ['idPatient', 'idPi', 'patientId']);
+      const documents = eligibleDocuments.filter(item => matchesOutpatientScope(item.raw || {}, idVis, documentPatient));
       const idTet = (document?.tenantId || this.visitTenantMap.get(idVis) || this.service.getTenantId()).trim();
       if (document) {
         try {
@@ -1103,17 +1183,10 @@ export class PhisHisAdapter implements HisAdapter {
             idApp: document.appId || '42',
             courseShow: 0,
           });
-          const record = content ? mapOutpatientMedicalRecordContent(idVis, document, documents, content) : null;
-          if (record) {
-            const vitalSigns = mapVisitVitalSigns(detail);
-            record.raw = {
-              ...(record.raw || {}),
-              detail,
-            };
-            if (vitalSigns) {
-              record.vitalSigns = vitalSigns;
-            }
-            return record;
+          if (content && matchesOutpatientScope(content, idVis, documentPatient)) {
+            const patientId = documentPatient || firstTrim(content, ['idPatient', 'idPi', 'patientId']);
+            const record = mapOutpatientMedicalRecordContent(idVis, document, documents, content, detail, patientId);
+            if (record) return { ...record, patientId };
           }
         } catch {
           console.error('[PhisHisAdapter] fetchOutpatientMedicalRecord content failed', {
@@ -1125,11 +1198,11 @@ export class PhisHisAdapter implements HisAdapter {
 
       return {
         visitId: idVis,
+        patientId: documentPatient,
         documents,
         contentPending: true,
-        vitalSigns: mapVisitVitalSigns(detail),
+        ...mapOutpatientVisitFacts(detail, idVis, idPi),
         htmlContent: buildOutpatientDocumentListHtml(idVis, documents),
-        plainText: documents.map((doc) => [doc.title, doc.titleTime || doc.createdAt].filter(Boolean).join(' / ')).join('\n'),
         raw: {
           source: 'getLookMedList',
           documents: documents.map((doc) => doc.raw || doc),
@@ -1145,34 +1218,17 @@ export class PhisHisAdapter implements HisAdapter {
 
     try {
       if (!detail) {
-        detail = await this.service.loadClinicMedicalRecord(idVis, idPi);
+        detail = await loadSelectedDetail();
       }
       if (!detail) return null;
 
-      const soapRaw = (detail.soapData ?? {}) as Record<string, unknown>;
-      const chiefComplaint = trim(soapRaw.chiefComplaint as string);
-      const historyOfPresentIllness = trim(soapRaw.presentIllness as string) ?? trim(soapRaw.historyOfPresentIllness as string);
-      const pastHistory = trim(soapRaw.pastHistory as string) ?? trim(soapRaw.pastMedicalHistory as string);
-      const physicalExamination = trim(soapRaw.physicalExam as string) ?? trim(soapRaw.physicalExamination as string);
-      const auxiliaryExamination = trim(soapRaw.auxiliaryExam as string) ?? trim(soapRaw.auxiliaryExamination as string);
-
-      const diagnoses = (detail.diagList ?? [])
-        .map((d) => trim(d.naDiag) ?? trim(d.naIcd10))
-        .filter((value): value is string => Boolean(value));
-      const diagnosis = diagnoses.join(', ') || undefined;
-
-      const treatmentPlan = (detail.orderList ?? [])
-        .map((o) => {
-          const name = trim(o.naOrd) ?? '';
-          const des = trim(o.desOrd) ? `（${trim(o.desOrd)}）` : '';
-          return `${name}${des}`;
-        })
-        .filter(Boolean)
-        .join('; ') || undefined;
-
+      const facts = mapOutpatientVisitFacts(detail, idVis, idPi);
+      const {
+        chiefComplaint, historyOfPresentIllness, pastHistory, physicalExamination,
+        auxiliaryExamination, diagnosis, treatmentPlan,
+      } = facts;
       const deptName = trim(detail.deptName as string) ?? trim(detail.naDept as string) ?? '未知科室';
       const visitDate = trim(detail.visitTime as string) ?? trim(detail.dtVis as string) ?? new Date().toISOString().split('T')[0];
-      const vitalSigns = mapVisitVitalSigns(detail);
 
       // 生成精美的 HTML 病历
       const htmlContent = `
@@ -1246,17 +1302,13 @@ export class PhisHisAdapter implements HisAdapter {
 
       return {
         visitId,
-        chiefComplaint,
-        historyOfPresentIllness,
-        pastHistory,
-        physicalExamination,
-        auxiliaryExamination,
-        diagnosis,
-        treatmentPlan,
-        vitalSigns,
+        patientId: idPi,
+        ...facts,
         htmlContent,
+        // This HTML renders visit facts locally; no clinical document body was returned.
+        plainText: '',
         raw: {
-          ...(detail as unknown as Record<string, unknown>),
+          ...detail,
           detail,
         },
       };

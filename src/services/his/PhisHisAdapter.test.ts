@@ -487,3 +487,91 @@ describe('PhisHisAdapter console privacy boundary', () => {
     expect(output).toContain('hasDocument');
   });
 });
+
+describe('PHIS selected outpatient record', () => {
+  const patientId = 'SYN-SOAP-P';
+  const visitId = 'SYN-SOAP-V';
+  const documentId = 'SYN-SOAP-D';
+  const document = { idMedrecdoc: documentId, idHospital: visitId, naMed: '合成文书标题', medType: '0' };
+  const body = { idMedrecdoc: documentId, htmlContent: '<p>合成文书正文</p>' };
+  const detail = {
+    soapData: {
+      chiefComplaint: ' 合成主诉 ', historyOfPresentIllness: '合成病史', pastMedicalHistory: '合成既往史',
+      physicalExam: '合成查体', auxiliaryExamination: '合成辅助检查', vitlSigns: { temp: 36.5 },
+    },
+    diagList: [{ naDiag: '合成诊断' }],
+    orderList: [{ naOrd: '合成医嘱', desOrd: '合成说明' }],
+  };
+  const facts = {
+    chiefComplaint: '合成主诉', historyOfPresentIllness: '合成病史', pastHistory: '合成既往史',
+    physicalExamination: '合成查体', auxiliaryExamination: '合成辅助检查', diagnosis: '合成诊断',
+    treatmentPlan: '合成医嘱（合成说明）', vitalSigns: expect.objectContaining({ temperature: 36.5 }),
+  };
+
+  async function readSelectedRecord(
+    selectedDetail: Partial<typeof detail>, selectedBody: typeof body | null, documents = [document],
+  ) {
+    const service = {
+      getTenantId: () => 'SYN-TENANT',
+      queryPatientVisitHistory: vi.fn().mockResolvedValue([{ idPi: patientId, idVis: visitId }]),
+      loadClinicMedicalRecord: vi.fn().mockResolvedValue(selectedDetail),
+      queryOutpatientMedicalRecordDocuments: vi.fn().mockResolvedValue(documents),
+      queryOutpatientMedicalRecordContent: vi.fn().mockResolvedValue(selectedBody),
+    };
+    const adapter = new PhisHisAdapter(service as unknown as HisService);
+    await adapter.fetchOutpatientVisitHistory(patientId);
+    const record = await adapter.fetchOutpatientMedicalRecord(visitId);
+    expect(service.loadClinicMedicalRecord).toHaveBeenCalledExactlyOnceWith(visitId, patientId);
+    expect(service.queryOutpatientMedicalRecordDocuments).toHaveBeenCalledTimes(1);
+    return { record, service };
+  }
+
+  it('preserves SOAP alongside the selected clinical document and its source', async () => {
+    const otherVisit = { ...document, idMedrecdoc: 'SYN-OTHER-D', idHospital: 'SYN-OTHER-V' };
+    const { record, service } = await readSelectedRecord(detail, body, [otherVisit, document]);
+    expect(service.queryOutpatientMedicalRecordContent).toHaveBeenCalledExactlyOnceWith(documentId, {
+      idTet: 'SYN-TENANT', idApp: '42', courseShow: 0,
+    });
+    expect(record).toMatchObject({
+      ...facts, visitId, documentId, plainText: '合成文书正文', htmlContent: body.htmlContent,
+      documents: [expect.objectContaining({ documentId, visitId })], raw: { source: 'getMedContentLook', detail },
+    });
+    expect(record?.contentPending).toBeUndefined();
+  });
+
+  it.each([null, { ...body, idMedrecdoc: 'SYN-OTHER-D' }])('retains SOAP when document text is unavailable or mismatched', async (content) => {
+    const { record } = await readSelectedRecord(detail, content);
+    expect(record).toMatchObject({ ...facts, contentPending: true, raw: { source: 'getLookMedList', detail } });
+    expect(record?.documents?.[0].title).toBe(document.naMed);
+    expect(record?.htmlContent).toContain(document.naMed);
+    expect(record?.plainText).toBeUndefined();
+  });
+
+  it('keeps a document directory without SOAP or body as metadata only', async () => {
+    const { record } = await readSelectedRecord({}, null);
+    expect(record?.contentPending).toBe(true);
+    expect(record?.plainText).toBeUndefined();
+    expect(record?.chiefComplaint).toBeUndefined();
+    expect(record?.historyOfPresentIllness).toBeUndefined();
+    expect(record?.documents?.[0].title).toBe(document.naMed);
+  });
+
+  it('distinguishes generated preview HTML from a document when the visit has no clinical facts', async () => {
+    const { record, service } = await readSelectedRecord({}, null, []);
+    expect(record?.htmlContent).toContain('门急诊病历记录');
+    expect(record?.plainText).toBe('');
+    expect(record?.chiefComplaint).toBeUndefined();
+    expect(record?.historyOfPresentIllness).toBeUndefined();
+    expect(service.queryOutpatientMedicalRecordContent).not.toHaveBeenCalled();
+  });
+
+  it('retains the document without SOAP and preserves the documentless visit fallback', async () => {
+    const noSoap = await readSelectedRecord({}, body);
+    expect(noSoap.record?.plainText).toBe('合成文书正文');
+    expect(noSoap.record?.chiefComplaint).toBeUndefined();
+    const noDocument = await readSelectedRecord(detail, null, []);
+    expect(noDocument.record).toMatchObject({ ...facts, plainText: '' });
+    expect(noDocument.record?.htmlContent).toContain('合成查体');
+    expect(noDocument.service.queryOutpatientMedicalRecordContent).not.toHaveBeenCalled();
+  });
+});

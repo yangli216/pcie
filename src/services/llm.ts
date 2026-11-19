@@ -188,7 +188,7 @@ export async function chat(
     updateAiTraceRequestPayload(trace.traceId, requestPayload, requestSummary);
     try {
       const content = await retryWithBackoff(async () => {
-        const resp = await regionalPost<{ content: string }>('/v1/ai/chat', requestPayload);
+        const resp = await regionalPost<{ content: string }>('/v1/ai/chat', requestPayload, customConfig?.nonStreamTimeoutMs);
         return resp.content;
       }, retryConfig || DEFAULT_RETRY_CONFIG, onRetry);
       finishAiTrace(trace.traceId, {

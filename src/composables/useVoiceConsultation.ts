@@ -273,7 +273,7 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
    * 2. 保存意图识别结果
    * 3. 切换到语音问诊视图并调整窗口大小
    *
-   * @param audioBlob - 录音音频数据（当前未使用）
+   * @param audioBlob - 录音音频数据；无可用录音时允许空 Blob，仅提交医生核对后的文字
    * @param transcribedText - 转写后的文本
    */
   /**
@@ -395,8 +395,9 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
         patient: currentPatient.value,
         speech: {
           text: normalizedText,
-          audioBlob,
-          mimeType: audioBlob?.type || 'audio/wav',
+          ...(audioBlob?.size > 0
+            ? { audioBlob, mimeType: audioBlob.type || 'audio/wav' }
+            : {}),
         },
       });
       const cached = readCache(consultationId);

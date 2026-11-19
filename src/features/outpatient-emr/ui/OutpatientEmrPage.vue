@@ -198,7 +198,7 @@ async function handleCancel(): Promise<void> {
           role="alert"
         >{{ dictionaryValidationMessage }}</span>
         <button
-          v-if="analysisStatus === 'error'"
+          v-if="analysisStatus === 'error' || analysisStatus === 'draft'"
           class="secondary-button workspace-button"
           type="button"
           :disabled="!canRetry"

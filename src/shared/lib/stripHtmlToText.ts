@@ -1,0 +1,16 @@
+export const stripHtmlToText = (html: string): string => html
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<\/(p|div|section|article|tr|li|h[1-6])>/gi, '\n')
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/gi, ' ')
+  .replace(/&lt;/gi, '<')
+  .replace(/&gt;/gi, '>')
+  .replace(/&amp;/gi, '&')
+  .replace(/&quot;/gi, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/[ \t\f\v]+/g, ' ')
+  .replace(/\n\s+/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();

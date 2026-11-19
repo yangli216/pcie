@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateInpatientEmrPreviewStream } from './inpatientEmrService';
+import { PhisHisAdapter } from '@/services/his/PhisHisAdapter';
+import type { HisService } from '@/services/hisService';
 import type { InpatientEmrGenerationRequest, InpatientEmrGenerationResult, InpatientEmrTemplateField } from '../types';
 
 const boundary = vi.hoisted(() => ({
@@ -8,6 +10,7 @@ const boundary = vi.hoisted(() => ({
   sse: vi.fn(),
   finishTrace: vi.fn(),
   failTrace: vi.fn(),
+  hisAdapter: vi.fn(),
 }));
 
 // Keep the production service, prompts, final/partial parsers, llm.ts payload
@@ -29,7 +32,7 @@ vi.mock('@/services/llm/config', () => ({
   getLLMConfig: () => ({ model: 'SYN-MANAGED', fastModel: 'SYN-FAST' }),
   getReviewerLLMConfig: () => ({ configProfile: 'reviewer' }),
 }));
-vi.mock('@/services/his', () => ({ getHisAdapter: () => null }));
+vi.mock('@/services/his', () => ({ getHisAdapter: boundary.hisAdapter }));
 
 const aiIds = ['诊断依据文本', '鉴别诊断文本'];
 const request: InpatientEmrGenerationRequest = {
@@ -63,6 +66,7 @@ beforeEach(() => {
   boundary.sse.mockReset();
   boundary.finishTrace.mockClear();
   boundary.failTrace.mockClear();
+  boundary.hisAdapter.mockReset().mockReturnValue(null);
 });
 
 function assertSingleStreamingRequest() {
@@ -92,6 +96,116 @@ function assertSingleStreamingRequest() {
 }
 
 describe('inpatient production service → real LLM client → regional network boundary', () => {
+  it('sends both template sources and only the selected visit’s original clinical facts to the model', async () => {
+    const visitId = 'SYN-SELECTED';
+    const service = {
+      getTenantId: () => 'SYN-PRIVATE-TENANT',
+      queryPatientVisitHistory: vi.fn().mockResolvedValue([{ idVis: visitId, idPi: 'SYN-PATIENT' }]),
+      loadClinicMedicalRecord: vi.fn().mockResolvedValue({
+        soapData: {
+          presentIllness: '合成病史甲', historyOfPresentIllness: '合成病史乙',
+          pastHistory: { value: '嵌套病史原文', idPi: 'SYN-PATIENT', idUser: 'SYN-PRIVATE-NESTED',
+            unrelated: { patientId: 'SYN-OTHER', value: '其他患者嵌套原文' } },
+          vitlSigns: { temp: '38℃（腋温）', TEMP: 37.6, idOrg: 'SYN-PRIVATE-ORG' },
+          idUser: 'SYN-PRIVATE-OPERATOR',
+        },
+        diagList: [null, { naDiag: '合成诊断名甲', naIcd10: '合成诊断名乙' }, { idPi: 'SYN-OTHER', naDiag: '其他患者诊断' }],
+        orderList: '合成医嘱自由原文，首日 0.5 片',
+      }),
+      queryOutpatientMedicalRecordDocuments: vi.fn().mockResolvedValue([
+        { idHospital: 'OTHER-VISIT', idMedrecdoc: 'OTHER-DOC', naMed: '其他就诊文书' },
+        { idHospital: visitId, idMedrecdoc: 'SYN-DOC', naMed: '本次就诊文书' },
+      ]),
+      queryOutpatientMedicalRecordContent: vi.fn().mockResolvedValue({
+        idMedrecdoc: 'SYN-DOC', htmlContent: '<p>所选文书原文</p>',
+      }),
+    };
+    const adapter = new PhisHisAdapter(service as unknown as HisService);
+    await adapter.fetchOutpatientVisitHistory('SYN-PATIENT');
+    boundary.hisAdapter.mockReturnValue(adapter);
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"诊断依据文本":"合成草稿"}'));
+    await generateInpatientEmrPreviewStream({
+      ...request, outpatientVisitId: visitId,
+      htmlContent: '<span data-id="诊断依据文本" data-type="text" data-default="合成预置病史甲"><span class="tag-value">请填写查体，已测左上肢温度37.6℃</span></span>',
+    });
+    expect(service.loadClinicMedicalRecord).toHaveBeenCalledWith(visitId, 'SYN-PATIENT');
+    const prompt = boundary.sse.mock.calls[0][1].messages[1].content as string;
+    const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(tasks[0].templateText).toEqual({ rendered: '请填写查体，已测左上肢温度37.6℃', attributeDefault: '合成预置病史甲' });
+    const facts = JSON.parse(prompt.split('【所选门诊就诊原始临床资料】')[1].split('\n')[0]);
+    expect(facts).toEqual({ source: 'loadClinicMedicalRecord', fields: {
+      soapData: { presentIllness: '合成病史甲', historyOfPresentIllness: '合成病史乙', pastHistory: { value: '嵌套病史原文' },
+        vitlSigns: { temp: '38℃（腋温）', TEMP: 37.6 } },
+      diagList: [null, { naDiag: '合成诊断名甲', naIcd10: '合成诊断名乙' }],
+      orderList: '合成医嘱自由原文，首日 0.5 片',
+    } });
+    expect(prompt).toContain('所选文书原文');
+    expect(prompt).not.toMatch(/SYN-PRIVATE-|其他就诊文书|其他患者嵌套原文|其他患者诊断|OTHER-DOC/);
+  });
+
+  it('isolates an explicitly different patient or visit without losing the current admission facts', async () => {
+    const visitId = 'SYN-SELECTED';
+    boundary.hisAdapter.mockReturnValue({ fetchOutpatientMedicalRecord: vi.fn()
+      .mockResolvedValueOnce({ visitId, patientId: 'SYN-OTHER-PATIENT', plainText: '其他患者专属原文' })
+      .mockResolvedValueOnce({ visitId: 'SYN-OTHER-VISIT', patientId: 'SYN-PATIENT', plainText: '其他就诊专属原文' }) });
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"诊断依据文本":"本次草稿"}'));
+    for (let i = 0; i < 2; i++) await generateInpatientEmrPreviewStream({ ...request, outpatientVisitId: visitId });
+    for (const [, payload] of boundary.sse.mock.calls) {
+      const prompt = payload.messages[1].content;
+      expect(prompt).not.toMatch(/其他患者专属原文|其他就诊专属原文/);
+      expect(prompt).toContain(request.doctorSupplement);
+    }
+    expect(boundary.sse).toHaveBeenCalledTimes(2);
+  });
+
+  it('generates each clearly authorized field even when neighboring remote rules are invalid', async () => {
+    const fieldIds = ['allowed', 'missing', 'duplicate', 'bad-rule', 'disabled'];
+    boundary.post.mockResolvedValue({ fields: [
+      { id: 'allowed', aiSuitable: true }, null, { id: 'unexpected', aiSuitable: true },
+      { id: 'duplicate', aiSuitable: true }, { id: 'duplicate', aiSuitable: false },
+      { id: 'bad-rule', aiSuitable: true, rule: { constraints: [42] } }, { id: 'disabled', aiSuitable: false },
+    ] });
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"allowed":"有效草稿","duplicate":"越界正文"}'));
+    const result = await generateInpatientEmrPreviewStream({
+      ...request, htmlContent: fieldIds.map(id => `<span data-id="${id}" data-name="主诉" data-type="text"></span>`).join(''),
+    });
+    const prompt = boundary.sse.mock.calls[0][1].messages[1].content as string;
+    const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(tasks.map((field: { id: string }) => field.id)).toEqual(['allowed']);
+    expect(prompt).toContain(request.doctorSupplement);
+    expect(result.fieldValues).toEqual({ allowed: '有效草稿', missing: '', duplicate: '', 'bad-rule': '', disabled: '' });
+    expect(boundary.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a good classification alongside malformed, duplicate and unrelated classifier replies', async () => {
+    boundary.post.mockImplementation(async (path: string) => path.endsWith('/resolve') ? { fields: [] } : { content: JSON.stringify([
+      { id: 'a', aiSuitable: true }, { id: 'b', aiSuitable: 'true' }, { id: 'c', aiSuitable: true },
+      { id: 'elsewhere', aiSuitable: true }, { id: 'c', aiSuitable: false }, null,
+    ]) });
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"a":"合成正文"}'));
+    await generateInpatientEmrPreviewStream({
+      ...request, htmlContent: ['a', 'b', 'c'].map(id => `<span data-id="${id}" data-name="扩展栏" data-type="text"></span>`).join(''),
+    });
+    const prompt = boundary.sse.mock.calls[0][1].messages[1].content as string;
+    const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
+    expect(tasks.map((field: { id: string }) => field.id)).toEqual(['a']);
+    expect(boundary.post.mock.calls.map(([path]) => path)).toEqual(['/v1/client/inpatient-emr/templates/resolve', '/v1/ai/chat']);
+  });
+
+  it('finishes a successful stream with one returned field and keeps the omitted field blank', async () => {
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => {
+      onChunk('{"fieldValues":{"诊断依据文本":"合成');
+      onChunk('模型正文"}}');
+    });
+    const result = await generateInpatientEmrPreviewStream(request);
+    assertSingleStreamingRequest();
+    expect(result.evidenceSummary.aiGeneration.status).toBe('used');
+    expect(result.fieldValues).toEqual({
+      页眉住院号: 'SYN-HOSPITAL', 诊断依据文本: '合成模型正文', 鉴别诊断文本: '',
+    });
+    expect(boundary.finishTrace).toHaveBeenCalledTimes(1);
+  });
+
   it('sends one managed streaming request and fills every configured AI field from the accepted final response', async () => {
     boundary.sse.mockImplementation(async (_path, _body, onChunk) => {
       onChunk('{"诊断依据文本":"合成诊断依据",');
@@ -110,6 +224,25 @@ describe('inpatient production service → real LLM client → regional network 
     expect(JSON.stringify(result.template.fields)).not.toContain('presetStatus');
     expect(boundary.finishTrace).toHaveBeenCalledTimes(1);
     expect(boundary.failTrace).not.toHaveBeenCalled();
+  });
+
+  it('bounds both template requests, classifies once on cache failure, and surfaces local rules', async () => {
+    boundary.post.mockRejectedValue(Object.assign(new Error('SYN service unavailable'), { status: 503 }));
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"诊断依据文本":"合成诊断依据","鉴别诊断文本":"合成鉴别依据"}'));
+    const progress = vi.fn();
+    const result = await generateInpatientEmrPreviewStream({
+      ...request,
+      htmlContent: request.htmlContent + '<span data-id="syn-extra" data-type="text" data-name="合成自定义字段"></span>',
+    }, progress);
+
+    expect(boundary.post.mock.calls.map(([path, , timeout]) => [path, timeout])).toEqual([
+      ['/v1/client/inpatient-emr/templates/resolve', 30_000], ['/v1/ai/chat', 30_000],
+    ]);
+    expect(result.template.fields.find(field => field.id === 'syn-extra')?.aiSuitable).toBe(false);
+    expect(result.trace.stages.find(stage => stage.key === 'templateResolve')?.detail).toContain('使用本地模板');
+    const details = progress.mock.calls.map(([step]) => step.detail).join(' ');
+    expect(details).toContain('正在读取后台字段配置');
+    expect(details).toContain('正在分析 1 个待确认字段');
   });
 
   it('keeps an explicit backend opt-out despite the local clinical suggestion and stale AI source', async () => {
@@ -178,7 +311,8 @@ describe('inpatient production service → real LLM client → regional network 
   });
 
   it('keeps a pre-output retryable failure to one request and leaves AI fields blank', async () => {
-    boundary.sse.mockRejectedValue(Object.assign(new Error('SYN overloaded'), { status: 503 }));
+    const requestId = '88bbaf2d-d6a0-4d71-8ba9-9807d46fb6a4';
+    boundary.sse.mockRejectedValue(Object.assign(new Error('SYN private upstream body'), { status: 503, requestId }));
     const snapshots: InpatientEmrGenerationResult[] = [];
     await expect(generateInpatientEmrPreviewStream(request, undefined, (snapshot) => snapshots.push(snapshot)))
       .rejects.toThrow('生成未完成');
@@ -189,6 +323,10 @@ describe('inpatient production service → real LLM client → regional network 
     expect(last.fieldValues.诊断依据文本).toBe('');
     expect(last.fieldValues.鉴别诊断文本).toBe('');
     expect(last.emrContent).toBe('');
+    expect(last.evidenceSummary.aiGeneration.detail).toContain('HTTP 503');
+    expect(last.evidenceSummary.aiGeneration.detail).toContain(requestId);
+    expect(last.evidenceSummary.aiGeneration.detail).toContain('未收到可用字段正文');
+    expect(last.evidenceSummary.aiGeneration.detail).not.toContain('private upstream body');
     expect(boundary.failTrace).toHaveBeenCalledTimes(1);
   });
 });

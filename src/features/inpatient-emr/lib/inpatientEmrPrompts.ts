@@ -1,5 +1,6 @@
 import type { InpatientEmrContext, InpatientEmrTemplateField } from '../types';
 import type { HisOutpatientMedicalRecord } from '@/services/his';
+import { stripHtmlToText } from '@shared/lib/stripHtmlToText';
 import { isAdmissionTemplate } from './inpatientEmrTemplate';
 
 export const INPATIENT_EMR_TEMPLATE_PARSE_PROMPT = [
@@ -20,7 +21,12 @@ export function formatOutpatientRecordForAi(record: HisOutpatientMedicalRecord |
   if (record.auxiliaryExamination) parts.push(`【门诊辅助检查】${record.auxiliaryExamination}`);
   if (record.diagnosis) parts.push(`【门诊诊断】${record.diagnosis}`);
   if (record.treatmentPlan) parts.push(`【门诊处置/医嘱】${record.treatmentPlan}`);
-  if (record.plainText) parts.push(`【门诊病历正文】${record.plainText}`);
+  if (record.vitalSigns) parts.push(`【门诊生命体征】${JSON.stringify(record.vitalSigns)}`);
+  if (record.sourceFacts) parts.push(`【所选门诊就诊原始临床资料】${JSON.stringify(record.sourceFacts)}`);
+  if (!record.contentPending) {
+    const body = record.plainText?.trim() ?? stripHtmlToText(record.htmlContent || '');
+    if (body) parts.push(`【门诊病历正文】${body}`);
+  }
   if (record.documents?.length) {
     parts.push(`【门诊病历文书列表】${record.documents.map((doc) => [
       doc.title,
@@ -162,6 +168,9 @@ export function buildInpatientEmrGeneratePrompt(
     type: field.type.trim().toLowerCase(),
     meaning: field.meaning,
     article: field.article || '',
+    templateText: field.templateText ?? field.defaultValue,
+    doctorEdit: context.doctorEdits && Object.prototype.hasOwnProperty.call(context.doctorEdits, field.id)
+      ? context.doctorEdits[field.id] : undefined,
     rule: { prompt: buildInpatientEmrFieldPrompt(field, context) },
   }));
   const doctorSupplement = context.doctorSupplement?.trim();
@@ -172,11 +181,10 @@ export function buildInpatientEmrGeneratePrompt(
     '你是一名住院电子病历辅助书写助手。',
     '任务：根据 AI 生成字段、HIS 住院数据和字段规则，生成字段取值 JSON。',
     '输出必须是 JSON 对象，key 为 AI 字段 data-id，value 为该字段应回填的文本。',
-    'AI_FIELDS 是已经确定的生成范围，不得根据字段名称、旧分类或正文规则重新剔除其中的字段。',
-    '必须为 AI_FIELDS 中的每一个 id 显式返回字符串值；不得省略、改用 name、返回 null、对象或数组，也不得新增字段。',
-    '资料不足时显式返回空字符串，不编造事实，不返回“请输入/待补充”等模板或过程占位。空值只表示该字段尚无可靠正文，不表示整份病历已完整完成。',
+    'AI_FIELDS 是本次模板可填写的字段。综合住院资料、所选门诊记录和医生补充，自行判断每个字段能写哪些内容，保留已有事实。缺乏依据的字段可以留空或省略。',
+    'templateText 保留本次模板可见文字（rendered）和属性预置文字（attributeDefault）。它们可能含提示或已有病史。结合病例判断各项内容及冲突，模板中的提示文字只作为来源资料。',
+    'doctorEdit 是医生在当前病历预览中作出的最新字段修订，空字符串表示主动清空。结合本轮补充要点优先采用医生修订，并在相关字段保持一致。',
     '字段规则只约束对应字符串中的正文内容，不改变本次整体 JSON 对象输出协议。数值字段的回填格式约束优先于叙述要求，只生成纯数值字符串；单位由模板展示，不能把“暂无记录”等说明写入数值槽位。',
-    ...aiFields.map((field) => `必填响应键 ${JSON.stringify(field.id)}：必须显式返回字符串。`),
     `当前模板：${context.documentContext.templateName || '住院病历模板'}`,
     `当前记录类型：${context.documentContext.recordType || '日常病历记录'}`,
     `本次病历记录书写时间：${context.documentContext.recordTime}`,

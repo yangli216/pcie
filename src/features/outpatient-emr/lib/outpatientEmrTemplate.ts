@@ -152,8 +152,9 @@ function readFieldValue(element: HTMLElement): string {
 }
 
 function normalizeTemplateForPreview(template: HTMLTemplateElement): void {
-  template.content.querySelectorAll('[contenteditable]').forEach((element) => {
+  template.content.querySelectorAll('[contenteditable], [tabindex]').forEach((element) => {
     element.removeAttribute('contenteditable');
+    element.removeAttribute('tabindex');
   });
   template.content.querySelectorAll('[data-outpatient-emr-field-id]').forEach((element) => {
     element.removeAttribute('data-outpatient-emr-field-id');
@@ -736,12 +737,19 @@ export function buildEditableOutpatientEmrPreviewHtml(
   normalizeTemplateForPreview(template);
   const editableFieldsById = new Map(editableFields.map((field) => [field.id, field]));
 
+  // The HIS editor draws braces around field values using its own stylesheet.
+  template.content.querySelectorAll('.tag-filed > .tag-marker').forEach((marker) => {
+    if (marker.textContent === '[') marker.textContent = '{';
+    else if (marker.textContent === ']') marker.textContent = '}';
+  });
   template.content.querySelectorAll<HTMLElement>('[data-id][data-type]').forEach((element) => {
     const fieldId = element.getAttribute('data-id') || '';
     const field = editableFieldsById.get(fieldId);
     if (!field) return;
 
     const valueElement = resolveFieldValueElement(element);
+    const prompt = valueElement.querySelector('.placeholder')?.textContent?.trim()
+      || element.getAttribute('data-default')?.trim();
     if (field.dictionaryItems.length > 0) {
       const dictionaryItem = resolveOutpatientEmrFinalDictionaryItem(
         field,
@@ -749,6 +757,8 @@ export function buildEditableOutpatientEmrPreviewHtml(
       );
       valueElement.textContent = '';
       valueElement.removeAttribute('contenteditable');
+      const control = document.createElement('span');
+      control.className = 'outpatient-emr-dictionary';
       const select = document.createElement('select');
       select.className = 'outpatient-emr-dictionary-select';
       select.setAttribute('data-outpatient-emr-field-id', fieldId);
@@ -756,15 +766,12 @@ export function buildEditableOutpatientEmrPreviewHtml(
       select.disabled = !editable;
       applyOutpatientEmrFieldSource(select, fieldSources[fieldId], conflictFieldIds.has(fieldId));
 
-      if (!dictionaryItem) {
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = '请选择';
-        placeholder.disabled = true;
-        placeholder.selected = true;
-        placeholder.setAttribute('selected', '');
-        select.appendChild(placeholder);
-      }
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '留空';
+      select.dataset.placeholder = prompt || '请选择';
+      if (!dictionaryItem) placeholder.defaultSelected = true;
+      select.appendChild(placeholder);
       field.dictionaryItems.forEach((item) => {
         const option = document.createElement('option');
         option.value = item.text;
@@ -776,13 +783,22 @@ export function buildEditableOutpatientEmrPreviewHtml(
         }
         select.appendChild(option);
       });
-      valueElement.appendChild(select);
+      const label = document.createElement('span');
+      label.className = 'outpatient-emr-dictionary-label';
+      label.setAttribute('aria-hidden', 'true');
+      label.textContent = dictionaryItem?.text || select.dataset.placeholder;
+      label.classList.toggle('placeholder', !dictionaryItem);
+      control.append(select, label);
+      valueElement.appendChild(control);
       return;
     }
 
     if (Object.prototype.hasOwnProperty.call(fieldValues, fieldId)) {
       valueElement.textContent = fieldValues[fieldId];
+    } else if (valueElement.querySelector('.placeholder')) {
+      valueElement.textContent = readFieldValue(element);
     }
+    valueElement.setAttribute('data-outpatient-emr-placeholder', prompt || field.name);
     valueElement.setAttribute('data-outpatient-emr-field-id', fieldId);
     applyOutpatientEmrFieldSource(valueElement, fieldSources[fieldId], conflictFieldIds.has(fieldId));
     if (editable) {
@@ -790,6 +806,7 @@ export function buildEditableOutpatientEmrPreviewHtml(
       valueElement.setAttribute('role', 'textbox');
       valueElement.setAttribute('tabindex', '0');
       valueElement.setAttribute('aria-label', field.name || fieldId);
+      valueElement.setAttribute('aria-placeholder', prompt || field.name);
     }
   });
 

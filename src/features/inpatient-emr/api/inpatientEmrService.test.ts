@@ -55,36 +55,45 @@ describe('template → final field policy → prompt → stream → accepted pre
     const prompt = boundary.stream.mock.calls[0][0][1].content as string;
     expect(prompt).toContain('"id": "诊断依据文本"');
     expect(prompt).toContain('"id": "鉴别诊断文本"');
-    for (const internal of ['presetStatus', 'defaultValue', 'promptGeneratorInstruction', 'FIELD_PROMPTS=', '输出 JSON 数组', '请输入诊断依据']) expect(prompt).not.toContain(internal);
+    expect(prompt).toContain('请输入诊断依据');
+    for (const internal of ['presetStatus', 'defaultValue', 'promptGeneratorInstruction', 'FIELD_PROMPTS=', '输出 JSON 数组']) expect(prompt).not.toContain(internal);
     expect(boundary.stream.mock.calls[0][3]).toMatchObject({ maxRetries: 0 });
     expect(boundary.stream).toHaveBeenCalledTimes(1);
     expect(boundary.classify).not.toHaveBeenCalled();
   });
 
-  it('marks the real 11/13 missing-key case failed, keeps usable partials, and leaves missing fields blank', async () => {
-    const missing = { ...values };
-    delete missing.诊断依据文本;
-    delete missing.鉴别诊断文本;
-    boundary.stream.mockImplementation(async (_messages, onChunk) => onChunk(JSON.stringify(missing)));
-    const snapshots: InpatientEmrGenerationResult[] = [];
+  it('finishes a partial field reply and keeps all recognized model text', async () => {
+    const partial = { ...values };
+    delete partial.诊断依据文本;
+    delete partial.鉴别诊断文本;
+    boundary.stream.mockImplementation(async (_messages, onChunk) => onChunk(JSON.stringify(partial)));
     const progress = vi.fn();
-    await expect(generateInpatientEmrPreviewStream(request, progress, (value) => snapshots.push(value))).rejects.toThrow('诊断依据文本');
-    const last = snapshots[snapshots.length - 1]!;
-    expect(last.evidenceSummary.aiGeneration.status).toBe('failed');
-    expect(last.fieldValues.诊断依据文本).toBe('');
-    expect(last.fieldValues.鉴别诊断文本).toBe('');
-    expect(last.fieldValues.现病史).toBe(values.现病史);
-    expect(last.htmlContent).not.toContain('请输入');
-    expect(progress.mock.calls.some(([value]) => value.key === 'generate' && value.status === 'done')).toBe(false);
-    expect(last.trace.stages.find((stage) => stage.key === 'aiGenerate')?.status).toBe('error');
+    const result = await generateInpatientEmrPreviewStream(request, progress);
+    expect(result.evidenceSummary.aiGeneration.status).toBe('used');
+    expect(result.fieldValues).toMatchObject({ ...partial, 诊断依据文本: '', 鉴别诊断文本: '' });
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ key: 'generate', status: 'done' }));
+    expect(result.trace.stages.find((stage) => stage.key === 'aiGenerate')).toMatchObject({ status: 'success', meta: { generatedFieldCount: 11 } });
     expect(boundary.stream).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['', '请输入诊断依据', '诊断依据文本'])('does not complete or retain process/default text: %s', async (text) => {
-    boundary.stream.mockImplementation(async (_messages, onChunk) => onChunk(JSON.stringify({ ...values, 诊断依据文本: text })));
-    const snapshots: InpatientEmrGenerationResult[] = [];
-    await expect(generateInpatientEmrPreviewStream(request, undefined, (value) => snapshots.push(value))).rejects.toThrow('缺少可用内容');
-    expect(snapshots[snapshots.length - 1]!.fieldValues.诊断依据文本).toBe('');
+  it.each([
+    { response: '{"主诉":"","现病史":""}', chief: '', history: '' },
+    { response: '{"主诉":"主诉","现病史":"待补充","unknown":"忽略"}', chief: '主诉', history: '待补充' },
+    { response: '说明：{"fieldValues":{"主诉":"合成主诉","现病史":"合成病史', chief: '合成主诉', history: '合成病史' },
+    { response: '{"主诉":"旧主诉","现病史":42,"主诉":"修订主诉"}', chief: '修订主诉', history: '42' },
+    { response: '{"error":{"主诉":"诊断信息"}}', chief: '', history: '' },
+  ])('uses the successful model reply for the current fields: $response', async ({ response, chief, history }) => {
+    const admission: InpatientEmrGenerationRequest = {
+      ...request, templateId: 'SYN-ADMISSION-RECORD', templateName: '入院记录',
+      htmlContent: '<section><span data-id="主诉" data-name="主诉" data-type="text"></span>'
+        + '<span data-id="现病史" data-name="现病史" data-type="text"></span></section>',
+    };
+    boundary.stream.mockImplementationOnce(async (_messages, onChunk) => onChunk(response));
+    const progress = vi.fn();
+    const result = await generateInpatientEmrPreviewStream(admission, progress);
+    expect(result.fieldValues).toEqual({ 主诉: chief, 现病史: history });
+    expect(result.evidenceSummary.aiGeneration.status).toBe('used');
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ key: 'generate', status: 'done' }));
     expect(boundary.stream).toHaveBeenCalledTimes(1);
   });
 
@@ -112,12 +121,9 @@ describe('template → final field policy → prompt → stream → accepted pre
   });
 
   it.each([
-    ['missing', (fields: InpatientEmrTemplateField[]) => fields.slice(1)],
-    ['unknown', (fields: InpatientEmrTemplateField[]) => [...fields, { ...fields[0], id: 'not-in-html' }]],
-    ['duplicate', (fields: InpatientEmrTemplateField[]) => fields.map((field, index) => index === 1 ? fields[0] : field)],
     ['string boolean', (fields: InpatientEmrTemplateField[]) => fields.map((field) => ({ ...field, aiSuitable: 'false' }))],
     ['nonarray', () => ({ fields: [] })],
-  ])('rejects malformed nonempty remote config (%s) before any model call', async (_name, transform) => {
+  ])('does not generate when the remote config grants no unambiguous permission (%s)', async (_name, transform) => {
     configureRemote(transform);
     await expect(generateInpatientEmrPreviewStream(request)).rejects.toThrow(/模板|字段/);
     expect(boundary.stream).not.toHaveBeenCalled();
@@ -172,9 +178,9 @@ describe('stream preview string boundaries', () => {
     expect(parsePartialJson('{"\\u0062asis":"\\u5408\\u6210\\n\\\"引号\\\"\\\\路径\\u53', ['basis']))
       .toEqual({ basis: '合成\n"引号"\\路径' });
   });
-  it('ignores nested fields, text outside the object and duplicate overwrite attempts', () => {
+  it('ignores unrelated nested fields and uses the latest recognized field in the response', () => {
     expect(parsePartialJson('{"wrapper":{"basis":"嵌套值"},"basis":"第一稿","basis":"第二稿"}', ['basis']))
-      .toEqual({ basis: '第一稿' });
-    expect(parsePartialJson('说明 {"basis":"合成依据"}', ['basis'])).toEqual({});
+      .toEqual({ basis: '第二稿' });
+    expect(parsePartialJson('说明 {"basis":"合成依据"}', ['basis'])).toEqual({ basis: '合成依据' });
   });
 });

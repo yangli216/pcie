@@ -32,6 +32,9 @@ const presentation = computed(() => {
       tone: 'error',
     };
   }
+  if (props.analysisStatus === 'draft') {
+    return { icon: 'lucide:file-text', title: '当前病历草稿', detail: '', tone: 'idle' };
+  }
   if (props.analysisStatus === 'ready') {
     return {
       icon: 'lucide:circle-check',
@@ -64,7 +67,7 @@ const writebackLabel = computed(() => {
     </div>
     <div class="analysis-copy">
       <strong>{{ presentation.title }}</strong>
-      <span>{{ presentation.detail }}</span>
+      <span v-if="presentation.detail">{{ presentation.detail }}</span>
       <span
         v-if="writebackLabel"
         class="writeback-status"

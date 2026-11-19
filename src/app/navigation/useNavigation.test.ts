@@ -9,21 +9,22 @@ vi.mock('@/services/operationTracker', () => ({
   trackViewChange: vi.fn(),
 }));
 
-function createNavigation(currentViewValue: ViewType) {
+function createNavigation(currentViewValue: ViewType, isWorking = true) {
   const currentView = ref<ViewType>(currentViewValue);
   const transitionToView = vi.fn(async () => undefined);
+  const enterWorkMode = vi.fn(async () => undefined);
   const navigation = useNavigation({
     currentView,
-    isWorking: ref(true),
+    isWorking: ref(isWorking),
     currentPatient: ref<AppPatient | null>({ patientId: 'patient-1' } as AppPatient),
     windowTransition: {
       transitionToView,
     } as unknown as ReturnType<typeof useWindowTransitionCoordinator>,
     workMode: {
-      enterWorkMode: vi.fn(async () => undefined),
+      enterWorkMode,
     },
   });
-  return { navigation, transitionToView };
+  return { navigation, transitionToView, enterWorkMode };
 }
 
 describe('useNavigation voice entry', () => {
@@ -46,6 +47,18 @@ describe('useNavigation voice entry', () => {
     expect(transitionToView).toHaveBeenCalledWith('voice-interaction', expect.objectContaining({
       fade: true,
     }));
+  });
+
+  it('opens the compact recording window from reception or the ball', async () => {
+    const reception = createNavigation('reception-capsule');
+    await reception.navigation.startVoiceInteraction();
+    expect(reception.transitionToView).toHaveBeenCalledWith('voice-interaction', {
+      size: { width: 360, height: 80 }, resizable: false, fade: false,
+    });
+
+    const ball = createNavigation('chat', false);
+    await ball.navigation.startVoiceInteraction();
+    expect(ball.enterWorkMode).toHaveBeenCalledWith(360, 80);
   });
 });
 

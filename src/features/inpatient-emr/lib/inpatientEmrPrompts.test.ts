@@ -48,15 +48,41 @@ describe('inpatient generation task contract', () => {
     const tasks = JSON.parse(prompt.split('AI_FIELDS=')[1].split('\nHIS_AI_CONTEXT=')[0]);
     expect(tasks).toEqual([{
       id: 'diagnostic-basis', name: '诊断依据', type: 'text', meaning: '诊断的支持证据', article: '首次病程记录',
+      templateText: '请输入诊断依据',
       rule: { prompt: custom },
     }]);
     expect(prompt.split(custom)).toHaveLength(2);
-    for (const excluded of ['presetStatus', 'readonly', 'defaultValue', 'promptGeneratorInstruction', 'resolvedPrompt', 'FIELD_PROMPTS=', '请输入诊断依据', 'system-diagnosis']) {
+    for (const excluded of ['presetStatus', 'readonly', 'defaultValue', 'promptGeneratorInstruction', 'resolvedPrompt', 'FIELD_PROMPTS=', 'system-diagnosis']) {
       expect(prompt).not.toContain(excluded);
     }
-    expect(prompt).toContain('必填响应键 "diagnostic-basis"：必须显式返回字符串');
-    expect(prompt).toContain('资料不足时显式返回空字符串');
+    expect(prompt).toContain('自行判断每个字段能写哪些内容');
+    expect(prompt).not.toContain('必填响应键');
     expect(prompt).toContain('未提供结果不等于患者未做检查');
+  });
+
+  it('passes the current template text, inpatient context and selected outpatient facts to the same generation request', () => {
+    const prompt = buildInpatientEmrGeneratePrompt([field({ defaultValue: '本次模板中的合成文字' })], {
+      ...context,
+      aiContext: { admission: { chiefComplaint: '合成登记主诉' } },
+      doctorSupplement: '合成补充要点',
+      outpatientRecord: {
+        visitId: 'SYN-OUT', chiefComplaint: '合成门诊主诉',
+        htmlContent: '<p>合成门诊病史</p><script>排除脚本内容</script>',
+        vitalSigns: { temperature: 37.2 },
+      },
+    });
+    for (const fact of ['本次模板中的合成文字', '合成登记主诉', '合成补充要点', '合成门诊主诉', '【门诊病历正文】合成门诊病史', '"temperature":37.2']) {
+      expect(prompt).toContain(fact);
+    }
+    expect(prompt).not.toContain('排除脚本内容');
+  });
+
+  it.each([{ contentPending: true }, { plainText: '' }])('keeps structured history without treating preview HTML as a document', (flags) => {
+    const prompt = buildInpatientEmrGeneratePrompt([field()], { ...context,
+      outpatientRecord: { visitId: 'SYN-OUT', htmlContent: '<p>合成列表预览</p>', historyOfPresentIllness: '合成结构化病史', ...flags },
+    });
+    expect(prompt).toContain('【门诊现病史】合成结构化病史');
+    expect(prompt).not.toContain('合成列表预览');
   });
 
   it('unwraps the exact historical default draft into a body-generation rule', () => {

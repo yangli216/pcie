@@ -2,7 +2,7 @@
   <section class="process-panel">
     <div class="process-heading">
       <Icon icon="lucide:workflow" :size="17" />
-      <span>生成过程</span>
+      <span>生成过程与依据</span>
       <strong>{{ completedStepCount }}/{{ steps.length }}</strong>
     </div>
 

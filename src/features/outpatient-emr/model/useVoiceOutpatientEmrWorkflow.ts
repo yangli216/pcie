@@ -1,6 +1,7 @@
 import { computed, shallowRef, watch, type Ref } from 'vue';
 import type { AppPatient } from '@/types/appState';
 import { getPatientContextAnchorId } from '@/utils/patientContext';
+import { getFeedbackActor } from '@/services/feedbackContext';
 import { resolveVoiceOutpatientEmrStartContext } from '../lib/voiceOutpatientEmr';
 import { clearVoiceOutpatientEmrRecordDraftCache } from '../lib/voiceOutpatientEmrDraftCache';
 import type { VoiceOutpatientEmrStartContext } from '../types';
@@ -37,7 +38,11 @@ export function useVoiceOutpatientEmrWorkflow(
       options.notify?.('动态门诊模板与当前接诊就诊不一致，已拒绝启动语音问诊。', 'error');
       return false;
     }
-    startContext.value = resolution.context;
+    const displayOrgName = getFeedbackActor().orgName;
+    startContext.value = {
+      ...resolution.context,
+      ...(displayOrgName ? { displayOrgName } : {}),
+    };
     return true;
   }
 

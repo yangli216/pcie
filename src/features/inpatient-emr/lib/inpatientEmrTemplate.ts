@@ -113,16 +113,6 @@ function suggestInitialField(id: string, name: string): InitialFieldSuggestion {
   return { aiSuitable: null, source: 'manual_or_his', meaning: '模板字段，需结合模板上下文和 HIS 字段映射确认含义' };
 }
 
-/** Whole-field entry hints are not generated clinical content. */
-export function isInpatientEmrPlaceholderValue(value: string): boolean {
-  const trimmed = value.trim();
-  const wrapper = [['[', ']'], ['【', '】'], ['(', ')'], ['（', '）']]
-    .find(([open, close]) => trimmed.startsWith(open) && trimmed.endsWith(close));
-  const text = wrapper ? trimmed.slice(wrapper[0].length, -wrapper[1].length).trim() : trimmed;
-  return /^(?:请输入|请填写|请录入)[^。！？；;!?\r\n]*[。.…]*$/u.test(text)
-    || /^(?:待填写|待补充)[。.…]*$/u.test(text);
-}
-
 function buildFieldRule(field: Pick<InpatientEmrTemplateField, 'id' | 'name'>, suggestion: InitialFieldSuggestion): InpatientEmrFieldRule {
   if (suggestion.aiSuitable === true) {
     const isDischarge = /出院/u.test(`${field.id} ${field.name}`) || /^discharge[_ -]/iu.test(field.id);
@@ -167,7 +157,10 @@ export function parseInpatientEmrTemplate(htmlContent: string): InpatientEmrTemp
       if (!id || seen.has(id)) return [];
       seen.add(id);
       const name = node.getAttribute('data-name') || node.getAttribute('title') || id;
-      const defaultValue = node.getAttribute('data-default') || normalizeText(node.textContent);
+      const tagValue = node.querySelector('.tag-value');
+      const rendered = (tagValue || node).textContent ?? undefined;
+      const attributeDefault = node.getAttribute('data-default') ?? undefined;
+      const defaultValue = normalizeText(tagValue?.textContent) || attributeDefault || normalizeText(node.textContent);
       const suggestion = suggestInitialField(id, name);
       if (suggestion.aiSuitable === null) unknownFieldIds.add(id);
       const base = {
@@ -178,6 +171,7 @@ export function parseInpatientEmrTemplate(htmlContent: string): InpatientEmrTemp
         readonly: node.getAttribute('data-readonly') === 'true',
         key: node.getAttribute('data-key') === 'true',
         defaultValue,
+        templateText: { rendered, attributeDefault },
         meaning: suggestion.meaning,
         aiSuitable: suggestion.aiSuitable === true,
       };

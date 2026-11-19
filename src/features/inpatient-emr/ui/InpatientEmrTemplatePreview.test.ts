@@ -49,13 +49,6 @@ function field(id: string): HTMLElement {
   return element;
 }
 
-async function switchView(label: string): Promise<void> {
-  const button = Array.from(root!.querySelectorAll('button')).find((item) => item.textContent === label);
-  if (!button) throw new Error(`missing view ${label}`);
-  button.click();
-  await nextTick();
-}
-
 function selectContents(element: HTMLElement): void {
   const range = document.createRange();
   range.selectNodeContents(element);
@@ -82,28 +75,21 @@ afterEach(() => {
 });
 
 describe('InpatientEmrTemplatePreview', () => {
-  it('defaults to readable named AI fields and shares edits with the original template', async () => {
+  it('renders the original HIS layout and edits AI fields in place', async () => {
     const { state, onUpdateField } = mountPreview();
-    expect(root!.querySelector('button[aria-pressed="true"]')?.textContent).toBe('病历阅读');
-    expect(root!.querySelector('.reading-field-title')?.textContent).toBe('现病史');
-    expect(root!.querySelector('[data-inpatient-emr-field-id="hospitalNo"]')).toBeNull();
-    const readingField = field('hpi');
-    readingField.textContent = '医生补充的合成病史';
-    readingField.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    await nextTick();
-    expect(onUpdateField).toHaveBeenCalledWith('hpi', '医生补充的合成病史');
-    expect(root!.querySelector('[data-field-badge="hpi"]')?.textContent).toBe('已编辑');
-
-    await switchView('原始模板');
-    expect(field('hpi').textContent).toBe('医生补充的合成病史');
+    expect(root!.textContent).not.toContain('病历阅读');
+    expect(root!.querySelector('button')).toBeNull();
     expect(field('hospitalNo').textContent).toBe('SYN-HOSPITAL');
     expect(field('hospitalNo').getAttribute('contenteditable')).toBe('false');
-    field('hpi').textContent = '原模板继续修改';
-    field('hpi').dispatchEvent(new InputEvent('input', { bubbles: true }));
+    const editor = field('hpi');
+    expect(editor.parentElement?.dataset.id).toBe('hpi');
+    editor.textContent = '医生补充的合成病史';
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
     await nextTick();
-    await switchView('病历阅读');
-    expect(field('hpi').textContent).toBe('原模板继续修改');
-    expect(state.fieldValues.hpi).toBe('原模板继续修改');
+    expect(onUpdateField).toHaveBeenCalledWith('hpi', '医生补充的合成病史');
+    expect(state.fieldValues.hpi).toBe('医生补充的合成病史');
+    expect(editor.dataset.fieldState).toBe('edited');
+    expect(field('hpi')).toBe(editor);
   });
 
   it('preserves the editor node and cursor while values, provenance and editability update', async () => {
@@ -140,22 +126,22 @@ describe('InpatientEmrTemplatePreview', () => {
     const { state } = mountPreview({ initialFieldValues: {}, fieldValues: { hpi: '', assessment: '部分流式草稿' } });
     expect(field('hpi').textContent).toBe('');
     expect(field('hpi').getAttribute('data-placeholder')).toContain('点击补充');
-    expect(root!.querySelector('[data-field-badge="assessment"]')?.textContent).toBe('AI 草稿');
+    expect(field('assessment').dataset.fieldState).toBe('ai');
     state.fieldValues.assessment = '完整流式草稿';
     await nextTick();
-    expect(root!.querySelector('[data-field-badge="assessment"]')?.textContent).toBe('AI 草稿');
+    expect(field('assessment').dataset.fieldState).toBe('ai');
     state.initialFieldValues.assessment = '完整流式草稿';
     state.fieldValues.assessment = '医生修改';
     await nextTick();
-    expect(root!.querySelector('[data-field-badge="assessment"]')?.textContent).toBe('已编辑');
+    expect(field('assessment').dataset.fieldState).toBe('edited');
     state.fieldValues.assessment = '完整流式草稿';
     await nextTick();
-    expect(root!.querySelector('[data-field-badge="assessment"]')?.textContent).toBe('AI 草稿');
+    expect(field('assessment').dataset.fieldState).toBe('ai');
   });
 
   it('blocks edits during generation or readonly status, including synthetic input and paste', async () => {
     const { state, onUpdateField } = mountPreview({ isGenerating: true });
-    expect(root!.querySelector('[role="status"]')?.textContent).toContain('正在生成');
+    expect(root!.querySelector('[aria-busy="true"]')).not.toBeNull();
     const editor = field('hpi');
     expect(editor.getAttribute('contenteditable')).toBe('false');
     editor.textContent = '不应保存';
@@ -165,7 +151,7 @@ describe('InpatientEmrTemplatePreview', () => {
     state.isGenerating = false;
     state.editable = false;
     await nextTick();
-    expect(root!.querySelector('[role="status"]')?.textContent).toContain('只读');
+    expect(editor.getAttribute('aria-readonly')).toBe('true');
     selectContents(editor);
     expect(paste(editor, '不可写入').defaultPrevented).toBe(true);
     expect(editor.textContent).toBe('合成病史');
@@ -183,8 +169,6 @@ describe('InpatientEmrTemplatePreview', () => {
     expect(editor.textContent).toBe('第一行\n<b>纯文字</b>');
     expect(editor.querySelector('b, img')).toBeNull();
     expect(onUpdateField).toHaveBeenCalledWith('hpi', '第一行\n<b>纯文字</b>');
-    await switchView('原始模板');
-    expect(field('hpi').textContent).toBe('第一行\n<b>纯文字</b>');
   });
 
   it('rejects cross-field paste and beforeinput selections without changing either field', () => {
@@ -205,13 +189,12 @@ describe('InpatientEmrTemplatePreview', () => {
     expect(onUpdateField).not.toHaveBeenCalled();
   });
 
-  it('sanitizes the original template and never inherits external editability or emits non-AI changes', async () => {
+  it('sanitizes the original template and never inherits external editability or emits non-AI changes', () => {
     const { onUpdateField } = mountPreview({
       htmlContent: `<script>alert(1)</script>${templateHtml}<div onclick="alert(1)" contenteditable="true">外部文字</div>`,
       fieldValues: { hpi: '<img src=x onerror=alert(1)>', assessment: '', hospitalNo: 'SYN-HOSPITAL' },
     });
     expect(field('hpi').querySelector('img')).toBeNull();
-    await switchView('原始模板');
     expect(root!.querySelector('script, [onclick], img')).toBeNull();
     const preview = root!.querySelector('.html-preview')!;
     expect(preview.querySelector('section')?.getAttribute('contenteditable')).not.toBe('true');
@@ -223,10 +206,9 @@ describe('InpatientEmrTemplatePreview', () => {
     expect(onUpdateField).not.toHaveBeenCalled();
   });
 
-  it('shows an empty reading state while retaining the full original template', async () => {
+  it('retains the full original template when no fields are AI-editable', () => {
     mountPreview({ fields: [fields[2]], fieldValues: { hospitalNo: 'SYN-HOSPITAL' } });
-    expect(root!.querySelector('.reading-empty')?.textContent).toContain('没有 AI 生成字段');
-    await switchView('原始模板');
+    expect(root!.querySelector('[contenteditable="true"]')).toBeNull();
     expect(field('hospitalNo').textContent).toBe('SYN-HOSPITAL');
     expect(field('hpi').getAttribute('contenteditable')).toBe('false');
   });

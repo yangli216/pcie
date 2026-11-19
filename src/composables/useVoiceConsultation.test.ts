@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   persistCache: vi.fn(),
   clearCache: vi.fn(),
   invoke: vi.fn(),
+  submitUserLog: vi.fn().mockResolvedValue(undefined),
   timing: { mark: vi.fn(), span: vi.fn(), finish: vi.fn() },
   getPatientContextPersonalHistory: vi.fn(() => '吸烟20年。'),
   getPatientContextFamilyHistory: vi.fn(() => '父亲有高血压病史。'),
@@ -22,7 +23,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@services/operationTracker', () => ({
   trackClick: vi.fn(), trackError: vi.fn(), trackRecommendationAction: vi.fn(),
 }));
-vi.mock('@services/consultationUserLog', () => ({ submitConsultationUserLog: vi.fn() }));
+vi.mock('@services/consultationUserLog', () => ({ submitConsultationUserLog: mocks.submitUserLog }));
 vi.mock('@/utils/patientContext', () => ({
   getPatientContextAllergyHistory: vi.fn(() => ''),
   getPatientContextAgeText: mocks.getPatientContextAgeText,
@@ -99,7 +100,8 @@ describe('useVoiceConsultation result navigation ordering', () => {
       workMode: { exitWork: vi.fn(async () => undefined) },
     });
 
-    await api.handleVoiceStop(new Blob(['voice']), '真实语音文本');
+    const recordedAudio = new Blob(['voice']);
+    await api.handleVoiceStop(recordedAudio, '真实语音文本');
 
     expect(openVoiceConsultation).toHaveBeenCalledTimes(1);
     expect(mocks.processTranscript).toHaveBeenCalledTimes(1);
@@ -118,6 +120,9 @@ describe('useVoiceConsultation result navigation ordering', () => {
     expect(mocks.processTranscript.mock.calls[0][1].timing).toBe(mocks.timing);
     expect(mocks.timing.mark).toHaveBeenCalledWith('window_and_skeleton_ready');
     expect(mocks.timing.finish).not.toHaveBeenCalled();
+    expect(mocks.submitUserLog).toHaveBeenCalledWith(expect.objectContaining({
+      speech: { text: '真实语音文本', audioBlob: recordedAudio, mimeType: 'audio/wav' },
+    }));
   });
 
   it('creates a user-log round for a non-voice generated clinical result', async () => {
@@ -132,6 +137,32 @@ describe('useVoiceConsultation result navigation ordering', () => {
 
     expect(api.consultationRoundId.value).toMatch(/[0-9a-f-]{36}/u);
     expect(api.intentResult.value?.chiefComplaint).toBe('咳嗽2天');
+  });
+
+  it('generates a result from doctor-confirmed text without uploading unavailable audio', async () => {
+    const previousLogCalls = mocks.submitUserLog.mock.calls.length;
+    const previousProcessCalls = mocks.processTranscript.mock.calls.length;
+    mocks.processTranscript.mockResolvedValueOnce(result);
+    const openVoiceConsultation = vi.fn(async () => undefined);
+    const api = useVoiceConsultation({
+      currentPatient: ref({ idPi: 'SYN-PATIENT' } as never),
+      showToast: vi.fn(),
+      openVoiceConsultation,
+      workMode: { exitWork: vi.fn(async () => undefined) },
+    });
+    const confirmedText = '医生核对后手动填写的合成文字';
+    await api.handleVoiceStop(new Blob([], { type: 'audio/wav' }), confirmedText);
+
+    expect(mocks.processTranscript).toHaveBeenCalledTimes(previousProcessCalls + 1);
+    expect(mocks.processTranscript).toHaveBeenLastCalledWith(confirmedText, expect.any(Object));
+    expect(openVoiceConsultation).toHaveBeenCalledTimes(1);
+    expect(api.intentResult.value?.chiefComplaint).toBe('咳嗽2天');
+    expect(api.isProcessingVoice.value).toBe(false);
+    expect(mocks.submitUserLog).toHaveBeenCalledTimes(previousLogCalls + 1);
+    const log = mocks.submitUserLog.mock.calls[previousLogCalls][0];
+    expect(log.speech).toEqual({ text: confirmedText });
+    expect(log.speech).not.toHaveProperty('audioBlob');
+    expect(log.speech).not.toHaveProperty('mimeType');
   });
 
   it('does not expose or cache a late result after a different patient reuses the visit', async () => {

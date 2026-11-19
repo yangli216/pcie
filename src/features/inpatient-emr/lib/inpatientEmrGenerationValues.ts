@@ -1,94 +1,105 @@
-import type { InpatientEmrTemplateField } from '../types';
-import { isInpatientEmrPlaceholderValue } from './inpatientEmrTemplate';
+const scalarToken = /^(?:true|false|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/u;
+const escapes: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
-export class InpatientEmrGenerationValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'InpatientEmrGenerationValidationError';
-  }
-}
-
-export function usableInpatientEmrGeneratedText(
-  field: InpatientEmrTemplateField,
-  value: unknown,
-): string {
-  if (typeof value !== 'string') return '';
-  const text = value.trim();
-  if (!text || isInpatientEmrPlaceholderValue(text)) return '';
-  // A copied template label (e.g. “体温”) is not a generated clinical value.
-  if (text === field.name.trim() || text === field.id.trim()) return '';
-  return text;
-}
-
-function rejectDuplicateKeys(json: string): void {
-  const keys = new Set<string>();
-  let depth = 0;
-  let start = -1;
-  let escaped = false;
-  for (let index = 0; index < json.length; index += 1) {
-    const character = json[index];
-    if (start >= 0) {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === '"') {
-        let next = index + 1;
-        while (/\s/u.test(json[next] || '') && next < json.length) next += 1;
-        if (depth === 1 && json[next] === ':') {
-          const key = JSON.parse(json.slice(start, index + 1)) as string;
-          if (keys.has(key)) throw new InpatientEmrGenerationValidationError('AI 结果包含重复字段，生成未完成，请重新生成或核对当前草稿。');
-          keys.add(key);
-        }
-        start = -1;
-      }
-    } else if (character === '"') start = index;
-    else if (character === '{' || character === '[') depth += 1;
-    else if (character === '}' || character === ']') depth -= 1;
-  }
-}
-
-/** Partial JSON is for preview only. Final acceptance requires the entire response. */
-export function parseCompleteInpatientEmrValues(
-  response: string,
-  fields: InpatientEmrTemplateField[],
-): Record<string, string> {
-  let json = response.replace(/^\uFEFF/u, '').trim();
-  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/iu.exec(json);
-  if (fenced) json = fenced[1].trim();
-  let parsed: unknown;
+/** Omitting every optional field is a valid empty answer. Unrelated text or keys are not. */
+export function isEmptyInpatientEmrFieldMap(reply: string): boolean {
+  const text = reply.trim();
+  const fenced = /^\x60\x60\x60(?:json)?\s*([\s\S]*?)\s*\x60\x60\x60$/iu.exec(text);
   try {
-    parsed = JSON.parse(json);
+    const parsed: unknown = JSON.parse(fenced?.[1] ?? text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const fields = 'fieldValues' in parsed ? parsed.fieldValues : parsed;
+    return fields !== null && typeof fields === 'object' && !Array.isArray(fields)
+      && Object.keys(fields).length === 0;
   } catch {
-    throw new InpatientEmrGenerationValidationError('AI 未返回完整的字段 JSON，已保留收到的草稿，请重新生成或核对补充。');
+    return false;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new InpatientEmrGenerationValidationError('AI 结果必须是单个字段对象，当前生成未完成。');
+}
+
+/** Read the same template fields from a complete reply or a stream interrupted mid-string. */
+export function readInpatientEmrFieldValues(reply: string, fieldIds: readonly string[]): Record<string, string> {
+  const values: Record<string, string> = Object.create(null);
+  const selected = new Set(fieldIds);
+  let cursor = reply.indexOf('{');
+
+  function skipWhitespace(): void {
+    while (cursor < reply.length && /\s/u.test(reply[cursor])) cursor++;
   }
-  rejectDuplicateKeys(json);
-  const source = parsed as Record<string, unknown>;
-  const aiFields = fields.filter((field) => field.aiSuitable);
-  const expectedIds = new Set(aiFields.map((field) => field.id));
-  if (Object.keys(source).some((id) => !expectedIds.has(id))) {
-    throw new InpatientEmrGenerationValidationError('AI 返回了模板范围外的字段，当前生成未完成，请核对字段配置后重新生成。');
+
+  function readString(): { text: string; complete: boolean } {
+    let text = '';
+    cursor++;
+    while (cursor < reply.length) {
+      const character = reply[cursor++];
+      if (character === '"') return { text, complete: true };
+      if (character.charCodeAt(0) < 0x20) break;
+      if (character !== '\\') {
+        text += character;
+        continue;
+      }
+      const escape = reply[cursor++];
+      if (escape === 'u') {
+        const digits = reply.slice(cursor, cursor + 4);
+        if (!/^[0-9a-f]{4}$/iu.test(digits)) break;
+        text += String.fromCharCode(parseInt(digits, 16));
+        cursor += 4;
+      } else {
+        if (!Object.prototype.hasOwnProperty.call(escapes, escape)) break;
+        text += escapes[escape];
+      }
+    }
+    return { text, complete: false };
   }
-  const missing: string[] = [];
-  const invalid: string[] = [];
-  const empty: string[] = [];
-  const values = aiFields.map((field): [string, string] => {
-    const label = field.name || field.id;
-    if (!Object.prototype.hasOwnProperty.call(source, field.id)) missing.push(label);
-    else if (typeof source[field.id] !== 'string') invalid.push(label);
-    const text = usableInpatientEmrGeneratedText(field, source[field.id]);
-    if (Object.prototype.hasOwnProperty.call(source, field.id) && typeof source[field.id] === 'string' && !text) empty.push(label);
-    return [field.id, text];
-  });
-  const describe = (labels: string[]) => `${labels.slice(0, 8).join('、')}${labels.length > 8 ? `等 ${labels.length} 项` : ''}`;
-  const issues = [
-    missing.length ? `缺少字段：${describe(missing)}` : '',
-    invalid.length ? `字段值不是文本：${describe(invalid)}` : '',
-    empty.length ? `以下字段缺少可用内容：${describe(empty)}` : '',
-  ].filter(Boolean);
-  if (issues.length) {
-    throw new InpatientEmrGenerationValidationError(`AI 未完整生成。${issues.join('；')}。请补充资料重新生成，或在预览中核对填写。`);
+
+  function readNonStringValue(): string {
+    const start = cursor;
+    let depth = 0;
+    while (cursor < reply.length) {
+      const character = reply[cursor];
+      if (character === '"') {
+        if (!readString().complete) break;
+        continue;
+      }
+      if (depth === 0 && (character === ',' || character === '}')) break;
+      if (character === '[' || character === '{') depth++;
+      if (character === ']' || character === '}') depth--;
+      cursor++;
+    }
+    return reply.slice(start, cursor).trim();
   }
-  return Object.fromEntries(values);
+
+  function readFields(allowEnvelope: boolean): void {
+    cursor++;
+    while (cursor < reply.length) {
+      skipWhitespace();
+      if (reply[cursor] !== '"') break;
+      const key = readString();
+      if (!key.complete) break;
+      skipWhitespace();
+      if (reply[cursor++] !== ':') break;
+      skipWhitespace();
+
+      if (reply[cursor] === '"') {
+        const value = readString();
+        if (selected.has(key.text)) values[key.text] = value.text;
+        if (!value.complete) break;
+      } else if (allowEnvelope && key.text === 'fieldValues' && reply[cursor] === '{') {
+        readFields(false);
+      } else {
+        const token = readNonStringValue();
+        if (selected.has(key.text) && scalarToken.test(token)) values[key.text] = token;
+      }
+      skipWhitespace();
+      if (reply[cursor] !== ',') break;
+      cursor++;
+    }
+    if (reply[cursor] === '}') cursor++;
+  }
+
+  // Model text may wrap the field map in prose or split it into adjacent objects.
+  while (cursor >= 0) {
+    readFields(true);
+    cursor = reply.indexOf('{', cursor);
+  }
+  return values;
 }

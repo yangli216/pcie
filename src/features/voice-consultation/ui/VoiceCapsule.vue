@@ -81,7 +81,7 @@
       <VoiceTranscriptionStatus
         v-if="transcriptionStatus === 'failed' || transcriptionStatus === 'empty'"
         :kind="transcriptionStatus === 'failed' ? 'error' : 'info'"
-        :message="transcriptionStatus === 'empty' ? '本段未识别到文字，可重试、继续采集或手动补充。' : transcriptionError"
+        :message="transcriptionStatus === 'empty' ? '整段转写未识别到新增文字。可核对已有文字、手动补充或重试。' : transcriptionError"
         :can-retry="canRetryTranscription && !confirmingAbandon && !isFinalizing"
         @retry="transcriptionReview.retry"
       />
@@ -191,7 +191,9 @@ const stoppedLabel = computed(() => isTranscribing.value
   : transcriptionStatus.value === 'empty' ? '未识别到新增文字' : '音频采集完成');
 const transcriptionPlaceholder = computed(() => {
   if (canContinueRecording.value) return '可审核并编辑转写文字';
-  if (transcriptionStatus.value === 'failed' && canRetryTranscription.value) return '整段转写未完成，可重试或手动填写后确认';
+  if (transcriptionStatus.value === 'failed') return canRetryTranscription.value
+    ? '整段转写未完成，可重试或手动填写后确认'
+    : '录音不可用，可手动填写后确认';
   return '整段转写尚未完成';
 });
 const isFinalizing = ref(false);
@@ -546,9 +548,11 @@ const handleConfirm = async () => {
 
   emit('stop', finalBlob, editableText.value.trim());
   // 审计音频落盘不参与病历生成关键路径；失败只记录日志，不能阻塞结果页打开。
-  void saveAudioForDebug(finalBlob, editableText.value.trim()).catch((error) => {
-    console.warn('[VoiceCapsule] saveAudioForDebug failed', error);
-  });
+  if (finalBlob.size > 0) {
+    void saveAudioForDebug(finalBlob, editableText.value.trim()).catch((error) => {
+      console.warn('[VoiceCapsule] saveAudioForDebug failed', error);
+    });
+  }
 };
 
 const handleContinue = async () => {

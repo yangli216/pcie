@@ -210,6 +210,19 @@ describe('useWindowTransitionCoordinator', () => {
     expect(coordinator.contentVisible.value).toBe(true);
   });
 
+  it('ignores capture stage changes after the result page opens', async () => {
+    const windowMgmt = createWindowManagementMock();
+    const coordinator = useWindowTransitionCoordinator({
+      currentView: ref<ViewType>('voice-consultation'),
+      isWorking: ref(true),
+      transitioning: ref(false),
+      windowMgmt,
+    });
+
+    await coordinator.resizeVoiceInteractionStage('processing');
+    expect(windowMgmt.resizeWorkWindow).not.toHaveBeenCalled();
+  });
+
   it('serializes the terminal ball geometry after an in-flight view resize', async () => {
     const currentView = ref<ViewType>('reception-capsule');
     const isWorking = ref(true);

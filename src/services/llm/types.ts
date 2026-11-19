@@ -35,6 +35,8 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 };
 
 export interface LLMConfigOverride {
+  /** End-to-end deadline per non-streaming signed POST, including response body. */
+  nonStreamTimeoutMs?: number;
   configProfile?: 'default' | 'fast' | 'reviewer';
   enableWebSearch?: boolean;
   /** Optional upstream sampling temperature; omit to keep provider defaults. */

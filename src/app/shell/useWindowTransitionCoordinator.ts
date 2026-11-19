@@ -174,10 +174,13 @@ export function useWindowTransitionCoordinator(options: WindowTransitionCoordina
 
   const resizeVoiceInteractionStage = (
     stage: VoiceInteractionWindowStage,
-  ): Promise<void> => resizeCurrentView(getVoiceInteractionWindowSize(stage), {
-    resizable: false,
-    fade: false,
-  });
+  ): Promise<void> => {
+    if (currentView.value !== 'voice-interaction') return Promise.resolve();
+    return resizeCurrentView(getVoiceInteractionWindowSize(stage), {
+      resizable: false,
+      fade: false,
+    });
+  };
 
   return {
     contentVisible,

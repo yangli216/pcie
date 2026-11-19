@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   },
   sessions: [] as Array<{ onText?: (text: string, isFinal: boolean) => void }>,
   finish: vi.fn(),
+  chatStream: vi.fn(),
   transcribeAudio: vi.fn(),
   saveVoiceRecording: vi.fn(),
   trackClick: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('@/services/audioRecorder', () => ({
   getMicrophoneErrorMessage: () => '录音失败',
 }));
 vi.mock('@/services/aliyunSpeech', () => ({
+  isTestModeEnabled: () => false,
   RealtimeSpeechService: class {
     onText?: (text: string, isFinal: boolean) => void;
     constructor() { mocks.sessions.push(this); }
@@ -31,13 +33,20 @@ vi.mock('@/services/aliyunSpeech', () => ({
     sendAudio() {}
   },
 }));
-vi.mock('@/services/llm', () => ({ transcribeAudio: mocks.transcribeAudio }));
+vi.mock('@/services/llm', async original => ({
+  ...await original<typeof import('@/services/llm')>(),
+  transcribeAudio: mocks.transcribeAudio, chatStream: mocks.chatStream, chat: vi.fn(),
+}));
+vi.mock('@/services/medicalData', () => ({
+  medicalDataService: { ensureDiagnosisCatalogReady: async () => {}, getAllDiagnoses: () => [] },
+}));
 vi.mock('@/services/voiceRecordingStorage', () => ({ saveVoiceRecording: mocks.saveVoiceRecording }));
 vi.mock('@/services/operationTracker', () => ({ trackClick: mocks.trackClick, trackError: mocks.trackError }));
 vi.mock('../model/voiceTimingTracker', () => ({ voiceTimingTracker: { confirm: mocks.confirm } }));
 vi.mock('@shared/ui/Icon.vue', () => ({ default: { template: '<span aria-hidden="true"></span>' } }));
 
 import VoiceCapsule from './VoiceCapsule.vue';
+import { useVoiceIntentRecognition } from '../model/useVoiceIntentRecognition';
 
 // jsdom's Blob lacks arrayBuffer; keep browser Blob/FileReader semantics for WAV merging.
 class ReadableBlob extends Blob {
@@ -217,22 +226,24 @@ describe('voice capsule full-recording transcription recovery', () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it('clears an unverified draft after an empty final result and allows manual input or continued recording', async () => {
+  it('passes the retained segment draft to the consultation only after doctor confirmation', async () => {
     mocks.finish.mockResolvedValueOnce('');
+    const intent = useVoiceIntentRecognition();
+    onStop.mockImplementationOnce((_audio: Blob, text: string) => intent.processTranscript(text));
     await mount(); await preview(); await stop();
     expect(host.textContent).toContain('未识别到新增文字');
     const field = await editor();
-    expect(field.value).toBe('');
+    expect(field.value).toBe('合成分段草稿');
     expect(field.readOnly).toBe(false);
-    expect(button('确认').disabled).toBe(true);
+    expect(button('确认').disabled).toBe(false);
     expect(button('继续采集').disabled).toBe(false);
     expect(button('重试整段转写').disabled).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
-    field.value = '医生手动补充的合成文字';
-    field.dispatchEvent(new Event('input', { bubbles: true })); await settle();
-    expect(button('确认').disabled).toBe(false);
     button('确认').click(); await settle();
-    expect(onStop).toHaveBeenCalledExactlyOnceWith(audio, '医生手动补充的合成文字');
+    expect(onStop).toHaveBeenCalledExactlyOnceWith(audio, '合成分段草稿');
+    await vi.waitFor(() => expect(mocks.chatStream).toHaveBeenCalledTimes(1));
+    const messages = mocks.chatStream.mock.calls[0][0];
+    expect(messages[1]).toMatchObject({ role: 'user', content: expect.stringContaining('合成分段草稿') });
   });
 
   it('keeps an empty retry distinct from a successful transcript and can retry the same full audio again', async () => {
@@ -240,8 +251,8 @@ describe('voice capsule full-recording transcription recovery', () => {
     mocks.transcribeAudio.mockResolvedValueOnce('  ').mockResolvedValueOnce('第二次重试的完整正文');
     button('重试整段转写').click(); await settle();
     expect(host.textContent).toContain('未识别到新增文字');
-    expect((await editor()).value).toBe('');
-    expect(button('确认').disabled).toBe(true);
+    expect((await editor()).value).toBe('合成分段草稿');
+    expect(button('确认').disabled).toBe(false);
     expect(button('继续采集').disabled).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
     button('重试整段转写').click(); await settle();
@@ -307,26 +318,26 @@ describe('voice capsule full-recording transcription recovery', () => {
     const silentAudio = wav([0, 0, 0, 0]);
     mocks.recorder.stop.mockResolvedValue(silentAudio);
     button('继续采集').click(); await settle();
-    await preview('应清除的第二段预览'); await stop();
+    await preview('待核对的第二段预览'); await stop();
     expect(host.textContent).toContain('未识别到新增文字');
-    expect((await editor()).value).toBe('医生修订的前段');
+    expect((await editor()).value).toBe('医生修订的前段\n待核对的第二段预览');
     expect((await editor()).readOnly).toBe(false);
     expect(button('确认').disabled).toBe(false);
     expect(button('继续采集').disabled).toBe(false);
     mocks.transcribeAudio.mockResolvedValueOnce('');
     button('重试整段转写').click(); await settle();
     expect(mocks.transcribeAudio.mock.calls[0][0]).toBe(silentAudio);
-    expect((await editor()).value).toBe('医生修订的前段');
+    expect((await editor()).value).toBe('医生修订的前段\n待核对的第二段预览');
     if (action === '确认') {
       button(action).click();
       await vi.waitFor(() => expect(onStop).toHaveBeenCalledTimes(1));
-      expect(onStop.mock.calls[0][1]).toBe('医生修订的前段');
+      expect(onStop.mock.calls[0][1]).toBe('医生修订的前段\n待核对的第二段预览');
       return;
     }
     button('继续采集').click(); await settle();
     expect(mocks.recorder.start).toHaveBeenCalledTimes(3);
     await preview('第三段预览'); await stop();
-    expect((await editor()).value).toBe('医生修订的前段\n第三段完整转写');
+    expect((await editor()).value).toBe('医生修订的前段\n待核对的第二段预览\n第三段完整转写');
     expect(button('确认').disabled).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
   });
@@ -346,7 +357,7 @@ describe('voice capsule full-recording transcription recovery', () => {
     expect(onStageChange).toHaveBeenCalledTimes(stageChanges);
   });
 
-  it('does not offer a successful confirmation when recording storage fails before transcription', async () => {
+  it('allows doctor-edited confirmation when recording storage fails without saving empty audio', async () => {
     await mount(); await preview();
     mocks.recorder.stop.mockRejectedValueOnce(new Error('recorder failed'));
     await stop();
@@ -356,6 +367,23 @@ describe('voice capsule full-recording transcription recovery', () => {
       .find(candidate => candidate.textContent?.trim() === '重试整段转写');
     expect(!retry || retry.disabled).toBe(true);
     expect(mocks.transcribeAudio).not.toHaveBeenCalled();
+    expect(mocks.finish).not.toHaveBeenCalled();
     expect(onStop).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('编辑并核对文字后确认');
+    const field = await editor();
+    expect(field.readOnly).toBe(false);
+    expect(field.placeholder).toContain('手动填写后确认');
+    field.value = '  医生核对后补全的文字  ';
+    field.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(button('确认').disabled).toBe(false);
+    expect(button('继续采集').disabled).toBe(true);
+    const confirm = button('确认');
+    confirm.click(); await settle();
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onStop.mock.calls[0][0].size).toBe(0);
+    expect(onStop.mock.calls[0][1]).toBe('医生核对后补全的文字');
+    expect(mocks.saveVoiceRecording).not.toHaveBeenCalled();
+    confirm.click(); await settle();
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 });

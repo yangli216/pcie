@@ -411,6 +411,10 @@ export function useEventListeners(options: EventListenersOptions) {
     });
 
     const success = await ensureReceptionContext(event.payload);
+    if (isWorking.value && currentView.value === 'voice-interaction') {
+      console.info('[EventListeners] Duplicate start voice request ignored while voice interaction is already active');
+      return;
+    }
     if (!success) {
       clearVoiceOutpatientEmr?.();
       return;
@@ -420,11 +424,6 @@ export function useEventListeners(options: EventListenersOptions) {
     mergeCurrentPatient(event.payload);
 
     if (prepareVoiceOutpatientEmr && !prepareVoiceOutpatientEmr(event.payload)) {
-      return;
-    }
-
-    if (isWorking.value && currentView.value === 'voice-interaction') {
-      console.info('[EventListeners] Duplicate start voice request ignored while voice interaction is already active');
       return;
     }
 

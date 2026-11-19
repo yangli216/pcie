@@ -65,26 +65,35 @@ function resolveRegionalRequestTimeout(path: string): number {
   return REGIONAL_DEFAULT_TIMEOUT_MS;
 }
 
+function checkDeadline(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason || new Error('后台请求超时');
+}
+
 export async function regionalFetch<T>(
   path: string,
   options: RequestInit = {},
   allowAuthRetry = true,
-  allowClockRetry = true
+  allowClockRetry = true,
+  deadline?: AbortSignal,
 ): Promise<T> {
+  checkDeadline(deadline);
   const baseUrl = getRegionalBaseUrl();
   if (!baseUrl) throw new Error('区域化服务地址未配置');
 
   const deviceCode = await getDeviceCode();
 
+  checkDeadline(deadline);
   let token = getDeviceToken();
   if (!token && path !== '/v1/client/register') {
     await restoreCachedDeviceRegistration(deviceCode);
     token = getDeviceToken();
+    checkDeadline(deadline);
   }
   if (!token && path !== '/v1/client/register') {
     await ensureRegisteredDevice();
     token = getDeviceToken();
   }
+  checkDeadline(deadline);
   const clientVersion = await getCurrentClientVersion();
   const updateChannel = getActiveUpdateChannel();
   const requestId = crypto.randomUUID();
@@ -95,6 +104,7 @@ export async function regionalFetch<T>(
     signatureHeaders = await signRequest(options.method || 'GET', path, body);
   }
 
+  checkDeadline(deadline);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Tenant-Id': getOrgCode(),
@@ -114,9 +124,11 @@ export async function regionalFetch<T>(
       {
         ...options,
         headers,
+        ...(deadline && { signal: deadline }),
       },
       {
-        timeoutMs,
+        // The POST deadline owns this signal through body consumption as well as headers.
+        timeoutMs: deadline ? 0 : timeoutMs,
         timeoutMessage: `区域化服务请求超时（超过 ${Math.round(timeoutMs / 1000)} 秒），请检查后台服务地址和网络后重试`,
       }
     );
@@ -129,8 +141,10 @@ export async function regionalFetch<T>(
     );
   }
 
+  checkDeadline(deadline);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    checkDeadline(deadline);
     const errorInfo = parseRegionalError(text, `区域化服务请求失败（${res.status}）`);
     if (
       res.status === 401
@@ -139,7 +153,7 @@ export async function regionalFetch<T>(
       && path !== '/v1/client/register'
       && updateSignatureClockOffset(errorInfo.timestamp)
     ) {
-      return regionalFetch<T>(path, options, allowAuthRetry, false);
+      return regionalFetch<T>(path, options, allowAuthRetry, false, deadline);
     }
     if (
       res.status === 401
@@ -150,13 +164,13 @@ export async function regionalFetch<T>(
     ) {
       setRegionalInitialized(false);
       await refreshRegisteredDevice(token);
-      return regionalFetch<T>(path, options, false, allowClockRetry);
+      return regionalFetch<T>(path, options, false, allowClockRetry, deadline);
     }
     if (res.status === 401 && allowAuthRetry && path !== '/v1/client/register') {
       clearDeviceRegistration();
       setRegionalInitialized(false);
       await ensureRegisteredDevice();
-      return regionalFetch<T>(path, options, false, allowClockRetry);
+      return regionalFetch<T>(path, options, false, allowClockRetry, deadline);
     }
     if (res.status === 426 || isUpdateRequiredCode(errorInfo.code)) {
       notifyForceUpdateRequired({
@@ -179,6 +193,7 @@ export async function regionalFetch<T>(
       requestId
     );
   }
+  checkDeadline(deadline);
   updateSignatureClockOffset(body.timestamp);
   if (body.code !== '0') {
     if (isUpdateRequiredCode(body.code)) {
@@ -206,9 +221,24 @@ export async function regionalGet<T>(path: string): Promise<T> {
   return regionalFetch<T>(path);
 }
 
-export async function regionalPost<T>(path: string, body: unknown): Promise<T> {
-  return regionalFetch<T>(path, {
-    method: 'POST',
-    body: JSON.stringify(body),
+export async function regionalPost<T>(path: string, body: unknown, timeoutMs?: number): Promise<T> {
+  const options = { method: 'POST', body: JSON.stringify(body) };
+  if (timeoutMs === undefined) return regionalFetch<T>(path, options);
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`后台请求超时（超过 ${Math.round(timeoutMs / 1000)} 秒），请检查连接后重试`);
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
   });
+  try {
+    // Native device lookup/signing may not observe an abort. Settle the caller
+    // on time and check the signal before any subsequent network attempt.
+    return await Promise.race([regionalFetch<T>(path, options, true, true, controller.signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

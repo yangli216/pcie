@@ -32,9 +32,8 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
   const canEdit = computed(() => canContinue.value || status.value === 'failed');
   const isFailedTextEdited = computed(() => (
     status.value === 'failed'
-    && Boolean(audio?.size)
     && Boolean(text.value.trim())
-    && text.value !== failedText.value
+    && text.value.trim() !== failedText.value.trim()
   ));
   const canConfirm = computed(() => (canContinue.value && Boolean(text.value.trim())) || isFailedTextEdited.value);
   const canRetry = computed(() => (status.value === 'failed' || status.value === 'empty') && Boolean(audio?.size));
@@ -70,8 +69,12 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
         markFailed('转写结果异常，录音已保留。请重试，或手动编辑文字后确认。');
         return;
       }
-      text.value = appendVoiceTranscript(prefix, result);
-      status.value = result.trim() ? 'ready' : 'empty';
+      if (result.trim()) {
+        text.value = appendVoiceTranscript(prefix, result);
+        status.value = 'ready';
+      } else {
+        status.value = 'empty';
+      }
     } catch {
       if (currentRequest !== requestId) return;
       markFailed('整段转写失败，录音已保留。请重试，或手动编辑文字后确认。');
@@ -84,7 +87,7 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
     prefix = recording.prefix;
     text.value = appendVoiceTranscript(prefix, recording.draft);
     if (!audio.size) {
-      markFailed('录音保存失败，无法重试。请放弃后重新采集。');
+      markFailed('录音保存失败，无法重试。请编辑并核对文字后确认，或放弃后重新采集。');
       return;
     }
     await resolveTranscription(recording.finish);

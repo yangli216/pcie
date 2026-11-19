@@ -18,13 +18,9 @@ import {
   fillInpatientEmrTemplateHtml,
   formatInpatientEmrDateMinute,
   parseInpatientEmrTemplate,
-  isAdmissionTemplate,
 } from '../lib/inpatientEmrTemplate';
-import {
-  InpatientEmrGenerationValidationError,
-  parseCompleteInpatientEmrValues,
-  usableInpatientEmrGeneratedText,
-} from '../lib/inpatientEmrGenerationValues';
+import { readInpatientEmrFieldValues } from '../lib/inpatientEmrGenerationValues';
+export { readInpatientEmrFieldValues as parsePartialJson } from '../lib/inpatientEmrGenerationValues';
 import {
   cloneInpatientEmrTrace,
   createInpatientEmrTrace,
@@ -64,19 +60,9 @@ function hasUsableOutpatientRecordReference(record: HisOutpatientMedicalRecord |
     record.diagnosis,
     record.treatmentPlan,
   ].some((value) => Boolean(value?.trim()));
-  if (hasStructuredHistory) return true;
+  if (hasStructuredHistory || record.vitalSigns || record.sourceFacts) return true;
   if (record.contentPending) return false;
-  return Boolean(record.plainText?.trim() || record.htmlContent?.trim());
-}
-
-function shouldWaitForAdmissionGeneration(
-  request: InpatientEmrGenerationRequest,
-  outpatientRecord: HisOutpatientMedicalRecord | null | undefined,
-): boolean {
-  if (!isAdmissionTemplate(request.templateName || '')) return false;
-  if (request.allowGenerateWithoutExternalBasis) return false;
-  if (request.doctorSupplement?.trim()) return false;
-  return !hasUsableOutpatientRecordReference(outpatientRecord);
+  return Boolean(record.plainText?.trim() ?? record.htmlContent?.trim());
 }
 
 function extractDatePart(value: string | undefined): string {
@@ -232,13 +218,13 @@ function buildTemperatureChartFromAiContext(
 function mergeGeneratedValues(
   fields: InpatientEmrTemplateField[],
   context: InpatientEmrContext,
-  generatedValues: Record<string, unknown>,
+  generatedValues: Record<string, string>,
 ): Record<string, string> {
   const defaults = buildDefaultFieldValues(fields, context);
   return Object.fromEntries(fields.map((field) => [
     field.id,
     field.aiSuitable
-      ? usableInpatientEmrGeneratedText(field, generatedValues[field.id])
+      ? generatedValues[field.id] ?? ''
       : defaults[field.id] || '',
   ]));
 }
@@ -258,9 +244,21 @@ interface RemoteInpatientEmrTemplateCache {
   fields?: unknown;
 }
 
+class InpatientEmrTemplateConfigurationError extends Error {}
+
 function objectValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : null;
+}
+
+/** A duplicate leaves only that ID undecided. Callers look up current HTML fields exclusively. */
+function indexUniqueFieldRules(rows: unknown[]): Map<string, Record<string, unknown> | null> {
+  const byId = new Map<string, Record<string, unknown> | null>();
+  for (const row of rows) {
+    const field = objectValue(row);
+    if (field && typeof field.id === 'string') byId.set(field.id, byId.has(field.id) ? null : field);
+  }
+  return byId;
 }
 
 function normalizeTemplateField(
@@ -273,7 +271,11 @@ function normalizeTemplateField(
     || (rule.prompt !== undefined && typeof rule.prompt !== 'string')
     || ['constraints', 'dependencies'].some((key) => rule[key] !== undefined
       && (!Array.isArray(rule[key]) || (rule[key] as unknown[]).some((item) => typeof item !== 'string')))) {
-    throw new InpatientEmrGenerationValidationError('模板字段配置格式不正确，请核对后台字段配置后重新生成。');
+    return {
+      ...local,
+      aiSuitable: false,
+      rule: { ...local.rule, source: local.aiSuitable ? 'manual_or_his' : local.rule.source },
+    };
   }
   const aiSuitable = field.aiSuitable;
   const source = aiSuitable ? 'ai'
@@ -296,6 +298,8 @@ function normalizeTemplateField(
     },
   };
 }
+
+const TEMPLATE_REQUEST_TIMEOUT_MS = 30_000;
 
 const defaultAiConstraints = [
   '仅依据已提供资料生成，不补充未出现的检查结果或症状',
@@ -321,15 +325,16 @@ async function classifyUnknownFieldsWithLLM(
     '输出格式：必须是严格的 JSON 数组，每一项结构如下：',
     '[{ "id": "字段ID", "aiSuitable": true, "meaning": "医疗含义详细说明", "source": "ai" }]',
     '请勿输出任何 Markdown 标记、JSON 外的解释说明或免责申明。',
-    `待分析字段列表：\n${JSON.stringify(unknownFields.map(f => ({ id: f.id, name: f.name, defaultValue: f.defaultValue || '' })), null, 2)}`
+    `待分析字段列表：\n${JSON.stringify(unknownFields.map(f => ({ id: f.id, name: f.name, templateText: f.templateText ?? f.defaultValue })), null, 2)}`
   ].filter(Boolean).join('\n');
 
   try {
     const response = await chatFast([
       { role: 'system', content: '你只输出 JSON 数组，不包含 markdown 格式标记。' },
       { role: 'user', content: prompt }
-    ], undefined, undefined, undefined, {
+    ], undefined, { ...DEFAULT_RETRY_CONFIG, maxRetries: 0 }, undefined, {
       configProfile: 'fast',
+      nonStreamTimeoutMs: TEMPLATE_REQUEST_TIMEOUT_MS,
       traceContext: {
         scene: 'inpatient-emr-template-resolve',
         sourceModule: 'inpatient-emr',
@@ -341,16 +346,13 @@ async function classifyUnknownFieldsWithLLM(
 
     const parsed = parseLLMJson<unknown>(response);
     if (!Array.isArray(parsed)) return [];
-    const expected = new Set(unknownFields.map((field) => field.id));
-    const seen = new Set<string>();
+    const byId = indexUniqueFieldRules(parsed);
     const classified: Array<{ id: string; aiSuitable: boolean; meaning: string; source: InpatientEmrTemplateField['rule']['source'] }> = [];
-    for (const value of parsed) {
-      const item = objectValue(value);
-      if (!item || typeof item.id !== 'string' || !expected.has(item.id)
-        || seen.has(item.id) || typeof item.aiSuitable !== 'boolean') return [];
-      seen.add(item.id);
+    for (const { id } of unknownFields) {
+      const item = byId.get(id);
+      if (!item || typeof item.aiSuitable !== 'boolean') continue;
       classified.push({
-        id: item.id,
+        id,
         aiSuitable: item.aiSuitable,
         meaning: typeof item.meaning === 'string' ? item.meaning : '',
         source: item.aiSuitable ? 'ai' : item.source === 'his_or_system' ? 'his_or_system' : 'manual_or_his',
@@ -403,49 +405,56 @@ async function enrichUnknownFieldsWithLocalLLM(
 
 async function resolveInpatientEmrTemplate(
   request: InpatientEmrGenerationRequest,
-  registration?: HisInpatientRegistrationInfo | null,
-): Promise<InpatientEmrTemplateParseResult> {
+  registration: HisInpatientRegistrationInfo | null | undefined,
+  onProgress?: InpatientEmrProgressHandler,
+): Promise<{ template: InpatientEmrTemplateParseResult; source: string }> {
   const localTemplate = parseInpatientEmrTemplate(request.htmlContent);
+  report(onProgress, {
+    key: 'template', status: 'running',
+    detail: `已识别 ${localTemplate.fields.length} 个模板字段，正在读取后台字段配置`,
+  });
   let remote: RemoteInpatientEmrTemplateCache | undefined;
+  let source = '后台未返回字段，使用本地模板';
   try {
-      remote = await regionalPost<RemoteInpatientEmrTemplateCache>(
-        '/v1/client/inpatient-emr/templates/resolve',
-        {
-          templateId: request.templateId,
-          templateHash: localTemplate.cacheKey,
-          templateName: request.templateName || '',
-          htmlContent: request.htmlContent,
-          fields: localTemplate.fields,
-        },
-      );
+    remote = await regionalPost<RemoteInpatientEmrTemplateCache>(
+      '/v1/client/inpatient-emr/templates/resolve',
+      {
+        templateId: request.templateId,
+        templateHash: localTemplate.cacheKey,
+        templateName: request.templateName || '',
+        htmlContent: request.htmlContent,
+        fields: localTemplate.fields.map(({ templateText: _localText, ...field }) => field),
+      },
+      TEMPLATE_REQUEST_TIMEOUT_MS,
+    );
   } catch (error) {
+    source = '后台配置未取得，使用本地模板';
     console.warn('[InpatientEmr] remote template cache unavailable, using local parse result', error);
   }
 
   if (remote?.fields !== undefined && !Array.isArray(remote.fields)) {
-    throw new InpatientEmrGenerationValidationError('模板字段配置格式不正确，请核对后台字段配置后重新生成。');
+    throw new InpatientEmrTemplateConfigurationError('模板字段配置格式不正确，请核对后台字段配置后重新生成。');
   }
   if (Array.isArray(remote?.fields) && remote.fields.length > 0) {
-    const byId = new Map<string, unknown>();
-    for (const value of remote.fields) {
-      const id = objectValue(value)?.id;
-      if (typeof id !== 'string' || byId.has(id)) {
-        throw new InpatientEmrGenerationValidationError('模板字段配置包含无效或重复 ID，请核对后台字段配置。');
-      }
-      byId.set(id, value);
-    }
-    if (byId.size !== localTemplate.fields.length || localTemplate.fields.some((field) => !byId.has(field.id))) {
-      throw new InpatientEmrGenerationValidationError('后台字段配置与当前模板不一致，请重新解析并核对字段后生成。');
-    }
+    const byId = indexUniqueFieldRules(remote.fields);
     return {
-      cacheKey: remote.templateHash || localTemplate.cacheKey,
-      cacheHit: remote.cacheHit === true,
-      fields: localTemplate.fields.map((field) => normalizeTemplateField(byId.get(field.id), field)),
+      source: remote.cacheHit ? '后台字段配置缓存命中' : '后台字段配置已读取',
+      template: {
+        cacheKey: remote.templateHash || localTemplate.cacheKey,
+        cacheHit: remote.cacheHit === true,
+        fields: localTemplate.fields.map((field) => normalizeTemplateField(byId.get(field.id), field)),
+      },
     };
   }
 
+  if (localTemplate.unknownFieldIds?.length) {
+    report(onProgress, {
+      key: 'template', status: 'running',
+      detail: `${source}，正在分析 ${localTemplate.unknownFieldIds.length} 个待确认字段`,
+    });
+  }
   await enrichUnknownFieldsWithLocalLLM(localTemplate, request, registration);
-  return localTemplate;
+  return { template: localTemplate, source };
 }
 
 interface LoadedInpatientHisContext {
@@ -456,10 +465,15 @@ interface LoadedInpatientHisContext {
   outpatientRecord?: HisOutpatientMedicalRecord | null;
 }
 
+function matchReferencePatient(record: HisOutpatientMedicalRecord | null, patientId?: string) {
+  return record?.patientId && patientId && record.patientId !== patientId ? null : record;
+}
+
 async function fetchSelectedOutpatientRecord(
   adapter: ReturnType<typeof getHisAdapter>,
   visitId?: string,
   trace?: InpatientEmrGenerationTrace,
+  patientId?: string,
 ): Promise<HisOutpatientMedicalRecord | null> {
   if (!visitId) {
     if (trace) {
@@ -478,7 +492,8 @@ async function fetchSelectedOutpatientRecord(
     startInpatientEmrTraceStage(trace, 'outpatientRecord', '正在拉取门诊病历正文', { visitId });
   }
   try {
-    const record = await adapter.fetchOutpatientMedicalRecord(visitId);
+    const fetched = await adapter.fetchOutpatientMedicalRecord(visitId);
+    const record = fetched?.visitId === visitId ? matchReferencePatient(fetched, patientId) : null;
     if (trace) {
       finishInpatientEmrTraceStage(
         trace,
@@ -696,7 +711,7 @@ async function loadInpatientEmrHisContext(
   const requestContext = mergeDocumentContextIntoHisContext(request.hisContext, documentContext, request.admissionId);
   if (requestContext) {
     startInpatientEmrTraceStage(trace, 'hisContext', '使用入口已携带 HIS 上下文包');
-    const outpatientRecord = await fetchSelectedOutpatientRecord(adapter, request.outpatientVisitId, trace);
+    const outpatientRecord = await fetchSelectedOutpatientRecord(adapter, request.outpatientVisitId, trace, requestContext.patient?.patientId);
     const registration = buildRegistrationFromAiContext(requestContext, query);
     const orders = buildOrdersFromAiContext(requestContext);
     const temperatureChart = buildTemperatureChartFromAiContext(requestContext, query);
@@ -799,70 +814,10 @@ async function loadInpatientEmrHisContext(
     orders,
     temperatureChart,
     aiContext,
-    outpatientRecord,
+    outpatientRecord: matchReferencePatient(outpatientRecord, aiContext.patient?.patientId),
   };
 }
 
-/** Decode only top-level field strings; incomplete escapes stay pending until the next chunk. */
-export function parsePartialJson(jsonStr: string, fieldKeys: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  const expected = new Set(fieldKeys);
-  const json = jsonStr.replace(/^\uFEFF/u, '').trimStart().replace(/^```(?:json)?[ \t]*\r?\n/iu, '').trimStart();
-  let cursor = 0;
-  const whitespace = () => { while (cursor < json.length && /\s/u.test(json[cursor])) cursor += 1; };
-  const readString = (): { text: string; complete: boolean } => {
-    let text = '';
-    cursor += 1;
-    while (cursor < json.length) {
-      const character = json[cursor++];
-      if (character === '"') return { text, complete: true };
-      if (character.charCodeAt(0) < 0x20) return { text, complete: false };
-      if (character !== '\\') { text += character; continue; }
-      if (cursor >= json.length) break;
-      const escape = json[cursor++];
-      if (escape === 'u') {
-        const digits = json.slice(cursor, cursor + 4);
-        if (!/^[0-9a-f]{4}$/iu.test(digits)) break;
-        text += String.fromCharCode(parseInt(digits, 16));
-        cursor += 4;
-      } else {
-        const decoded: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
-        if (!(escape in decoded)) break;
-        text += decoded[escape];
-      }
-    }
-    return { text, complete: false };
-  };
-  if (json[cursor++] !== '{') return result;
-  while (cursor < json.length) {
-    whitespace();
-    if (json[cursor] !== '"') break;
-    const key = readString();
-    if (!key.complete) break;
-    whitespace();
-    if (json[cursor++] !== ':') break;
-    whitespace();
-    if (json[cursor] === '"') {
-      const value = readString();
-      if (expected.has(key.text) && !Object.prototype.hasOwnProperty.call(result, key.text)) result[key.text] = value.text;
-      if (!value.complete) break;
-    } else {
-      // Skip a non-string value without treating its nested keys as top-level fields.
-      let depth = 0;
-      while (cursor < json.length) {
-        const character = json[cursor];
-        if (character === '"') { if (!readString().complete) return result; continue; }
-        if (depth === 0 && (character === ',' || character === '}')) break;
-        if (character === '[' || character === '{') depth += 1;
-        if (character === ']' || character === '}') depth -= 1;
-        cursor += 1;
-      }
-    }
-    whitespace();
-    if (json[cursor++] !== ',') break;
-  }
-  return result;
-}
 
 function buildGenerationResult(
   request: InpatientEmrGenerationRequest,
@@ -897,6 +852,7 @@ export async function generateInpatientEmrPreviewStream(
   onProgress?: InpatientEmrProgressHandler,
   onStreamResult?: (partialResult: InpatientEmrGenerationResult) => void,
   activeTrace?: InpatientEmrGenerationTrace,
+  doctorEdits?: Record<string, string>,
 ): Promise<InpatientEmrGenerationResult> {
   const trace = activeTrace || createInpatientEmrTrace(request.requestId);
   const documentContext = buildDocumentContext(request);
@@ -914,8 +870,11 @@ export async function generateInpatientEmrPreviewStream(
     templateName: request.templateName || '',
   });
   let template: InpatientEmrTemplateParseResult;
+  let templateSource: string;
   try {
-    template = await resolveInpatientEmrTemplate(request, registration);
+    const resolved = await resolveInpatientEmrTemplate(request, registration, onProgress);
+    template = resolved.template;
+    templateSource = resolved.source;
   } catch (error) {
     finishInpatientEmrTraceStage(
       trace,
@@ -933,7 +892,7 @@ export async function generateInpatientEmrPreviewStream(
     trace,
     'templateResolve',
     'success',
-    `${template.cacheHit ? '服务端缓存命中' : '模板已解析'}，字段 ${template.fields.length} 个`,
+    `${templateSource}，字段 ${template.fields.length} 个`,
     {
       cacheHit: template.cacheHit,
       fieldCount: template.fields.length,
@@ -943,11 +902,12 @@ export async function generateInpatientEmrPreviewStream(
   report(onProgress, {
     key: 'template',
     status: 'done',
-    detail: `${template.cacheHit ? '服务端缓存命中' : '模板已解析'}，字段 ${template.fields.length} 个`,
+    detail: `${templateSource}，字段 ${template.fields.length} 个`,
   });
 
   const context: InpatientEmrContext = {
     documentContext,
+    doctorEdits,
     doctorSupplement: request.doctorSupplement?.trim() || undefined,
     aiContext,
     registration,
@@ -973,34 +933,6 @@ export async function generateInpatientEmrPreviewStream(
   );
   onStreamResult?.(initialResult);
 
-  // 1.5 智能拦截逻辑：入院模板需要医生补充要点或可用门诊病历正文，避免空上下文生成。
-  if (shouldWaitForAdmissionGeneration(request, outpatientRecord)) {
-    finishInpatientEmrTraceStage(trace, 'aiFirstToken', 'skipped', '等待补充要点或门诊病历依据');
-    finishInpatientEmrTraceStage(trace, 'aiGenerate', 'skipped', '等待补充要点或门诊病历依据');
-    finishInpatientEmrTrace(trace);
-    const waitingEvidenceSummary = buildEvidenceSummary(context, template, {
-      aiStatus: 'waiting',
-      aiDetail: '等待补充要点或门诊病历依据后启动生成',
-      waitingForInput: true,
-    });
-    report(onProgress, {
-      key: 'generate',
-      status: 'pending',
-      detail: '等待补充要点或门诊病历依据（主诉、现病史）以启动生成'
-    });
-    const waitingResult = buildGenerationResult(
-      request,
-      context,
-      template,
-      initialFieldValues,
-      initialFieldValues,
-      trace,
-      waitingEvidenceSummary,
-    );
-    onStreamResult?.(waitingResult);
-    return waitingResult;
-  }
-
   // One signed streaming request owns this generation. A partial response is
   // never replayed or replaced with a non-streaming or local clinical draft.
   const aiFieldKeys = template.fields.filter((field) => field.aiSuitable).map((field) => field.id);
@@ -1016,7 +948,7 @@ export async function generateInpatientEmrPreviewStream(
 
   try {
     if (aiFieldKeys.length === 0) {
-      throw new InpatientEmrGenerationValidationError('当前模板没有开启 AI 生成的字段，请先核对模板字段配置。');
+      throw new InpatientEmrTemplateConfigurationError('当前模板没有开启 AI 生成的字段，请先核对模板字段配置。');
     }
     report(onProgress, { key: 'generate', status: 'running', detail: '正在生成病历草稿' });
     startInpatientEmrTraceStage(trace, 'aiFirstToken', '等待 AI 首段返回');
@@ -1025,7 +957,7 @@ export async function generateInpatientEmrPreviewStream(
     requested = true;
     await chatStream(
       [
-        { role: 'system', content: '你是严谨的住院病历辅助书写助手，按给定字段 ID 返回单个完整 JSON 对象，所有字段值必须是字符串。' },
+        { role: 'system', content: '你是住院病历辅助书写助手。请综合本次提供的资料，按模板字段 ID 返回 JSON 病历草稿。' },
         { role: 'user', content: prompt },
       ],
       (chunk) => {
@@ -1036,7 +968,7 @@ export async function generateInpatientEmrPreviewStream(
             firstChunkLength: chunk.length,
           });
         }
-        const partialValues = parsePartialJson(accumulatedResponse, aiFieldKeys);
+        const partialValues = readInpatientEmrFieldValues(accumulatedResponse, aiFieldKeys);
         const currentFieldValues = mergeGeneratedValues(template.fields, context, partialValues);
         publish(buildGenerationResult(
           request, context, template, currentFieldValues, currentFieldValues, trace,
@@ -1056,34 +988,45 @@ export async function generateInpatientEmrPreviewStream(
       },
     );
 
-    const generatedValues = parseCompleteInpatientEmrValues(accumulatedResponse, template.fields);
+    const generatedValues = readInpatientEmrFieldValues(accumulatedResponse, aiFieldKeys);
     const finalFieldValues = mergeGeneratedValues(template.fields, context, generatedValues);
-    finishInpatientEmrTraceStage(trace, 'aiGenerate', 'success', '全部 AI 字段已生成并通过格式校验', {
-      responseLength: accumulatedResponse.length, generatedFieldCount: aiFieldKeys.length,
+    const detail = '已收到 AI 回复，请医生核对病历草稿';
+    finishInpatientEmrTraceStage(trace, 'aiGenerate', 'success', detail, {
+      responseLength: accumulatedResponse.length,
+      generatedFieldCount: Object.values(generatedValues).filter(value => value.trim()).length,
     });
     finishInpatientEmrTrace(trace);
     const finalResult = buildGenerationResult(
       request, context, template, finalFieldValues, finalFieldValues, trace,
-      buildEvidenceSummary(context, template, { aiStatus: 'used', aiDetail: '全部 AI 字段已生成，请医生核对' }),
+      buildEvidenceSummary(context, template, { aiStatus: 'used', aiDetail: detail }),
     );
     publish(finalResult);
-    report(onProgress, { key: 'generate', status: 'done', detail: '全部 AI 字段已生成，请医生核对' });
+    report(onProgress, { key: 'generate', status: 'done', detail });
     return finalResult;
   } catch (error) {
     // A consumer failure is not an upstream failure and must not trigger another
     // callback, another model request, or a fabricated successful result.
     if (callbackFailed) throw callbackError;
-    const failure = error instanceof InpatientEmrGenerationValidationError
+    const partialValues = readInpatientEmrFieldValues(accumulatedResponse, aiFieldKeys);
+    const fieldValues = mergeGeneratedValues(template.fields, context, partialValues);
+    const receivedFields = aiFieldKeys.filter(key => fieldValues[key]).length;
+    // Only display transport metadata. Upstream error bodies can contain clinical text.
+    const remote = error as { status?: number; requestId?: string } | null;
+    const status = remote?.status;
+    const http = typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+      ? `（HTTP ${status}）` : '';
+    const requestId = typeof remote?.requestId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(remote.requestId)
+      ? ` 请求 ID：${remote.requestId}` : '';
+    const draft = receivedFields ? `已保留 ${receivedFields} 项草稿。` : '未收到可用字段正文。';
+    const failure = error instanceof InpatientEmrTemplateConfigurationError
       ? error
-      : new Error('住院病历生成未完成，已保留收到的草稿，请稍后重试或核对补充。');
+      : new Error(`住院病历生成未完成，AI 请求失败${http}。${draft}请检查后台连接后重试。${requestId}`);
     if (!hasFirstToken) {
       finishInpatientEmrTraceStage(trace, 'aiFirstToken', requested ? 'error' : 'skipped',
         requested ? '未收到可用 AI 正文' : '尚未调用 AI');
     }
     finishInpatientEmrTraceStage(trace, 'aiGenerate', 'error', failure.message);
     finishInpatientEmrTrace(trace);
-    const partialValues = parsePartialJson(accumulatedResponse, aiFieldKeys);
-    const fieldValues = mergeGeneratedValues(template.fields, context, partialValues);
     publish(buildGenerationResult(
       request, context, template, fieldValues, fieldValues, trace,
       buildEvidenceSummary(context, template, { aiStatus: 'failed', aiDetail: failure.message }),

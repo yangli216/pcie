@@ -3,6 +3,9 @@ import { createApp, nextTick, type App } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import OutpatientEmrPage from './OutpatientEmrPage.vue';
 import type { OutpatientEmrReferenceFeedbackPayload } from '../types';
+import { chatFast } from '@/services/llm';
+import internalMedicineHtml from '@/test/template-parsing/fixtures/his-internal-medicine-template.html?raw';
+import internalMedicineDefinition from '@/test/template-parsing/fixtures/his-internal-medicine-template.json?raw';
 
 const boundary = vi.hoisted(() => ({
   complete: vi.fn().mockResolvedValue(undefined),
@@ -25,6 +28,37 @@ vi.mock('@features/consultation-result', () => ({
 let app: App | null = null;
 let root: HTMLDivElement | null = null;
 afterEach(() => { app?.unmount(); root?.remove(); boundary.complete.mockClear(); boundary.feedback = null; });
+
+it('returns the appetite default and the reported symptom while skipping an unanswered duration unit', async () => {
+  vi.mocked(chatFast).mockResolvedValueOnce(JSON.stringify({ 胃纳: null, 腹泻标志: '有', 时间单位: null }));
+  root = document.createElement('div');
+  document.body.append(root);
+  const completed = vi.fn();
+  app = createApp(OutpatientEmrPage, {
+    request: {
+      visitId: 'SYN-VISIT', requestId: 'SYN-PARTIAL', templateId: 'SYN-INTERNAL', templateName: '内科门诊',
+      templateHtml: internalMedicineHtml, templateDefinition: internalMedicineDefinition,
+      targetFieldIds: ['胃纳', '腹泻标志', '时间单位'],
+      recordContext: { recordText: '患者诉腹泻。' },
+    },
+    onCompleted: completed,
+  });
+  app.mount(root);
+  const select = (id: string) => root!.querySelector<HTMLSelectElement>(`select[data-outpatient-emr-field-id="${id}"]`);
+  await vi.waitFor(() => expect(select('胃纳')?.value).toBe('如常'));
+  expect(select('时间单位')?.value).toBe('');
+  const submit = Array.from(root.querySelectorAll('button')).find(button => button.textContent?.includes('返回参数'))!;
+  expect(submit.disabled).toBe(false);
+  submit.click();
+  await vi.waitFor(() => expect(boundary.complete).toHaveBeenCalledTimes(1));
+  const payload = boundary.complete.mock.calls[0][1].result;
+  expect(payload.fieldValues).toEqual({ 胃纳: '如常', 腹泻标志: '有' });
+  expect(payload.dictionarySelections).toEqual({ 胃纳: { value: '2', text: '如常' }, 腹泻标志: { value: '1', text: '有' } });
+  expect(payload.emrFieldValues).toEqual({ 胃纳: '2', 腹泻标志: '1' });
+  expect(payload.templateMetadata.fields.map((field: { id: string }) => field.id)).toEqual(['腹泻标志', '胃纳']);
+  boundary.feedback!({ consultationId: 'SYN-VISIT', requestId: 'SYN-PARTIAL', status: 'success' });
+  expect(completed).toHaveBeenCalledOnce();
+});
 
 it('keeps conflict correction, doctor text, pending, failure retry and exact success in one real page flow', async () => {
   root = document.createElement('div'); document.body.append(root);

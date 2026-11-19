@@ -1,40 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import type { InpatientEmrTemplateField } from '../types';
-import { parseCompleteInpatientEmrValues } from './inpatientEmrGenerationValues';
+import { readInpatientEmrFieldValues } from './inpatientEmrGenerationValues';
 
-const fields: InpatientEmrTemplateField[] = [
-  { id: 'basis', name: '诊断依据', type: 'text', readonly: false, key: false, meaning: '诊断依据正文', aiSuitable: true, rule: { source: 'ai', constraints: [] } },
-  { id: 'diff', name: '鉴别诊断', type: 'text', readonly: false, key: false, meaning: '鉴别诊断正文', aiSuitable: true, rule: { source: 'ai', constraints: [] } },
-  { id: 'patient', name: '住院号', type: 'text', readonly: true, key: false, meaning: 'HIS事实', aiSuitable: false, rule: { source: 'his_or_system', constraints: [] } },
-];
+const fields = ['basis', 'diff', 'vital'];
 
-describe('inpatient final response acceptance', () => {
-  it('accepts exact IDs with string content, including a single outer fence and JSON escapes', () => {
-    expect(parseCompleteInpatientEmrValues('\uFEFF```json\n{"basis":"合成依据\\n含\\\"引号\\\"和\\\\路径","diff":"待排方向，需核对资料"}\n```', fields))
-      .toEqual({ basis: '合成依据\n含"引号"和\\路径', diff: '待排方向，需核对资料' });
+describe('inpatient model reply field projection', () => {
+  it('reads field strings from surrounding text and Markdown, preserving the actual model text', () => {
+    const text = ' 合成依据\n含"引号"、反斜杠\\及 ``` 文字。 ';
+    const reply = '以下为结果：\n```json\n' + JSON.stringify({ basis: text, diff: '' }) + '\n```';
+    expect(readInpatientEmrFieldValues(reply, fields)).toEqual({ basis: text, diff: '' });
   });
 
-  it.each([
-    ['missing', '{"basis":"合成依据"}'],
-    ['empty', '{"basis":"合成依据","diff":"  "}'],
-    ['placeholder', '{"basis":"合成依据","diff":"请输入鉴别诊断"}'],
-    ['copied label', '{"basis":"诊断依据","diff":"合成鉴别"}'],
-    ['null', '{"basis":"合成依据","diff":null}'],
-    ['object', '{"basis":"合成依据","diff":{"text":"合成鉴别"}}'],
-    ['array', '[{"basis":"合成依据","diff":"合成鉴别"}]'],
-    ['unknown', '{"basis":"合成依据","diff":"合成鉴别","patient":"AI不应写入"}'],
-    ['display name', '{"诊断依据":"合成依据","鉴别诊断":"合成鉴别"}'],
-    ['truncated', '{"basis":"合成依据","diff":"合成鉴别'],
-    ['extra text', '{"basis":"合成依据","diff":"合成鉴别"}说明'],
-    ['two objects', '{"basis":"合成依据"}{"diff":"合成鉴别"}'],
-    ['duplicate', '{"basis":"合成依据","basis":"另一个值","diff":"合成鉴别"}'],
-    ['escaped duplicate', '{"basis":"合成依据","\\u0062asis":"另一个值","diff":"合成鉴别"}'],
-  ])('rejects %s instead of declaring generation complete', (_name, response) => {
-    expect(() => parseCompleteInpatientEmrValues(response, fields)).toThrow();
+  it('retains blank values, labels and model wording without requiring every field', () => {
+    expect(readInpatientEmrFieldValues('{"basis":"诊断依据","diff":"  "}', fields)).toEqual({ basis: '诊断依据', diff: '  ' });
+    expect(readInpatientEmrFieldValues('{"basis":"待补充","unknown":"其他字段"}', fields)).toEqual({ basis: '待补充' });
   });
 
-  it('does not confuse a clinical recommendation with a whole-field input hint', () => {
-    expect(parseCompleteInpatientEmrValues('{"basis":"合成依据","diff":"请补充既往影像以进一步鉴别。"}', fields).diff)
-      .toBe('请补充既往影像以进一步鉴别。');
+  it('reads recognizable scalar values from the explicit fieldValues envelope when another field is structured', () => {
+    expect(readInpatientEmrFieldValues('{"fieldValues":{"vital":37.0,"diff":false,"basis":{"text":"nested"}}}', fields))
+      .toEqual({ vital: '37.0', diff: 'false' });
+    expect(readInpatientEmrFieldValues('{"vital":0,"diff":null,"basis":["unexpected"]}', fields)).toEqual({ vital: '0' });
   });
+
+  it('uses the latest returned string for duplicate IDs and keeps unrelated usable fields', () => {
+    expect(readInpatientEmrFieldValues('{"basis":"首稿","diff":"另一字段","basis":"修订"}', fields))
+      .toEqual({ basis: '修订', diff: '另一字段' });
+  });
+
+  it('keeps identified fields when prose includes brackets or the reply contains two field maps', () => {
+    const reply = '说明{样例}：{"basis":"合成依据"}\n{"diff":"合成鉴别"}';
+    expect(readInpatientEmrFieldValues(reply, fields)).toEqual({ basis: '合成依据', diff: '合成鉴别' });
+  });
+
+  it('retains interrupted field text, including a prefixed reply and an incomplete escape', () => {
+    const reply = '回复：{"fieldValues":{"vital":37,"basis":"合成依据","diff":"已接收\\n\\u5408\\u53';
+    expect(readInpatientEmrFieldValues(reply, fields)).toEqual({ vital: '37', basis: '合成依据', diff: '已接收\n合' });
+  });
+
+  it.each(['', '模型返回的是说明文字', '{"error":{"basis":"错误消息"}}', '{"message":"diagnostic text"}', '{}'])(
+    'does not turn unrecognized prose or nested diagnostics into a template value', (reply) => {
+      expect(readInpatientEmrFieldValues(reply, fields)).toEqual({});
+    },
+  );
 });

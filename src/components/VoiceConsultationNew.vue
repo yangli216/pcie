@@ -98,7 +98,6 @@ import {
   type ClinicalResultChannel,
   type ClinicalResultGenerationSection,
   type ClinicalResultRecommendationType,
-  type ClinicalResultRecordSummaryInput,
   type ClinicalResultRegenerationRecord,
   RECORD_CONFIRMED_WRITEBACK_FIELDS,
   type ClinicalRecordFactField,
@@ -1314,11 +1313,8 @@ const {
   applyWritebackFeedback,
 } = writebackFeedbackController;
 
-function getCurrentRecordSummaryInput(): ClinicalResultRecordSummaryInput {
-  return {
-    chiefComplaint: chiefComplaint.value,
-    historyOfPresentIllness: historyOfPresentIllness.value,
-  };
+function getCurrentRecordSummaryInput() {
+  return { chiefComplaint: chiefComplaint.value, historyOfPresentIllness: historyOfPresentIllness.value };
 }
 
 function buildDiagnosisRationale(matchedDiagnosis: MatchedDiagnosis, displayName: string): string {
@@ -1839,36 +1835,25 @@ async function fetchAIDiagnosis(
 
   const requestSeq = diagnosisRequestSeq.value + 1;
   diagnosisRequestSeq.value = requestSeq;
-  const requestRecordKey = [
-    patientAnchorId.value,
-    chiefComplaint.value,
-    historyOfPresentIllness.value,
-  ].join('|');
+  const recordAtStart = getCurrentRecordSummaryInput();
+  const patientAtStart = patientAnchorId.value;
   try {
     const requestSpec = buildClinicalResultDiagnosisRequestSpec({
       patientName: patientName.value,
       gender: patientGender.value,
       age: patientAge.value,
-      chiefComplaint: chiefComplaint.value,
-      historyOfPresentIllness: historyOfPresentIllness.value,
+      ...recordAtStart,
     }, PROMPTS.consultation.diagnosisRecommendation, {
       consultationId: resolveConsultationId(),
     });
 
     const response = await chat(requestSpec.messages, undefined, undefined, undefined, requestSpec.config);
     const parsed = parseLLMJson<Diagnosis[]>(response);
-    const currentRecordKey = [
-      patientAnchorId.value,
-      chiefComplaint.value,
-      historyOfPresentIllness.value,
-    ].join('|');
-    if (requestSeq !== diagnosisRequestSeq.value || requestRecordKey !== currentRecordKey) {
-      console.info('[VoiceConsultationNew] Ignore stale diagnosis response', {
-        requestSeq,
-        latest: diagnosisRequestSeq.value,
-        requestRecordKey,
-        currentRecordKey,
-      });
+    const current = getCurrentRecordSummaryInput();
+    if (requestSeq !== diagnosisRequestSeq.value || patientAtStart !== patientAnchorId.value
+      || recordAtStart.chiefComplaint !== current.chiefComplaint
+      || recordAtStart.historyOfPresentIllness !== current.historyOfPresentIllness) {
+      console.info('[VoiceConsultationNew] Ignore stale diagnosis response', { requestSeq });
       return false;
     }
 
@@ -2721,10 +2706,7 @@ watch(
 
 const resultFactCheckState = useVoiceResultFactCheckState({
   isEnabled: isReviewerEnabled,
-  getRecordText: () => ({
-    chiefComplaint: chiefComplaint.value,
-    historyOfPresentIllness: historyOfPresentIllness.value,
-  }),
+  getRecordText: getCurrentRecordSummaryInput,
   getDiagnosisName: () => selectedDiagnosis.value?.name || '',
   checkDiagnosis,
   checkMedicine,

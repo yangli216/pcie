@@ -524,13 +524,15 @@ export interface HisOutpatientMedicalRecordDocument {
  */
 export interface HisOutpatientMedicalRecord {
   visitId: string;
+  /** 所选门诊归属患者，用于与住院上下文核对。 */
+  patientId?: string;
   /** 当前用于预览 / AI 参考的文书 ID */
   documentId?: string;
   /** 当前用于预览 / AI 参考的文书标题 */
   documentTitle?: string;
   /** HTML 格式的完整病历；展示前必须经过共享 HTML 白名单净化，禁止直接交给 iframe/v-html */
   htmlContent: string;
-  /** 从 HTML 正文中提取的纯文本，供 AI 参考 */
+  /** 文书正文。仅有 HTML 时可省略；若 HTML 仅供预览且没有文书正文，使用空串。 */
   plainText?: string;
   /** 当前已获取的文书列表 */
   documents?: HisOutpatientMedicalRecordDocument[];
@@ -552,6 +554,8 @@ export interface HisOutpatientMedicalRecord {
   treatmentPlan?: string;
   /** 本次门急诊病历详情中的生命体征。 */
   vitalSigns?: HisVisitVitalSigns;
+  /** Current visit's clinical source fields, retaining original values and vendor field names. */
+  sourceFacts?: { source: string; fields: Record<string, unknown> };
   /** 厂商透传 */
   raw?: Record<string, unknown>;
 }

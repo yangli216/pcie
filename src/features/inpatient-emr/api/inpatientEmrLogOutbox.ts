@@ -39,6 +39,21 @@ class IndexedDbLogStorage implements InpatientLogStorage {
   async remove(key: string) { await this.transaction('readwrite', store => store.delete(key)); }
 }
 
+function uploadFailure(error: unknown) {
+  const meta = error as { status?: number; requestId?: string; name?: string; message?: string } | null;
+  const status = meta?.status;
+  const rejected = status !== undefined && [400, 409, 413, 422].includes(status);
+  const request = typeof meta?.requestId === 'string' && /^[a-f\d-]{32,36}$/i.test(meta.requestId)
+    ? `（请求 ID：${meta.requestId}）` : '';
+  let reason = '连接或签名失败，请检查后台连接';
+  if (rejected) reason = `服务端拒收事件（HTTP ${status}），请联系管理员核查`;
+  else if (meta?.name === 'TimeoutError' || meta?.name === 'AbortError' || meta?.message?.includes('超时')) reason = '等待后台确认超时，请检查后台连接';
+  else if (status === 401 || status === 403) reason = `设备授权失败（HTTP ${status}），请检查设备注册`;
+  else if (status) reason = `后台请求失败（HTTP ${status}）`;
+  else if (meta?.message === '住院日志确认响应缺失') reason = '后台未返回日志确认';
+  return { rejected, message: `${reason}${request}。` };
+}
+
 export function createInpatientLogOutbox(storage: InpatientLogStorage,
   post: (snapshot: InpatientLogSnapshot) => Promise<unknown>, currentScope: () => string) {
   const state = reactive({ pending: 0, error: '', uploading: false, unrecorded: 0 });
@@ -52,7 +67,8 @@ export function createInpatientLogOutbox(storage: InpatientLogStorage,
   };
   async function persist(entry: PendingInpatientLog) {
     const existing = (await storage.all()).filter(item => item.key !== entry.key);
-    if (entry.bytes > 1048576 || existing.length >= 100 || existing.reduce((sum, item) => sum + item.bytes, entry.bytes) > 8 * 1024 * 1024)
+    if (entry.bytes > 1048576) throw new Error('单条住院日志超过 1 MiB');
+    if (existing.length >= 100 || existing.reduce((sum, item) => sum + item.bytes, entry.bytes) > 8 * 1024 * 1024)
       throw new Error('日志待传队列超限');
     await storage.put(entry);
   }
@@ -76,21 +92,41 @@ export function createInpatientLogOutbox(storage: InpatientLogStorage,
         const entries = (await load()).filter(entry => entry.scope === scope)
           .sort((a, b) => a.snapshot.generationStartedAt - b.snapshot.generationStartedAt || a.snapshot.sequence - b.snapshot.sequence);
         state.pending = entries.length;
-        state.error = missingMessage();
+        const blockedGenerations = new Set<string>();
+        let diagnostic = '';
         for (const entry of entries) {
           if (currentScope() !== scope) break;
-          // Retry in-memory storage failures before transmitting; acknowledgement is the only deletion path.
+          if (blockedGenerations.has(entry.snapshot.generationId)) continue;
           if (memory.has(entry.key)) {
-            await serialize(async () => { await persist(entry); memory.delete(entry.key); });
+            try {
+              await serialize(async () => { await persist(entry); memory.delete(entry.key); });
+            } catch (error) {
+              const reason = error instanceof Error && ['单条住院日志超过 1 MiB', '日志待传队列超限'].includes(error.message)
+                ? error.message : '日志未能写入本地队列';
+              diagnostic ||= `${reason}。`;
+              blockedGenerations.add(entry.snapshot.generationId);
+              continue;
+            }
           }
-          await post(entry.snapshot);
+          if (currentScope() !== scope) break;
+          try {
+            await post(entry.snapshot);
+          } catch (error) {
+            const failure = uploadFailure(error);
+            if (!failure.rejected) { diagnostic = failure.message; break; }
+            diagnostic ||= failure.message;
+            blockedGenerations.add(entry.snapshot.generationId);
+            continue;
+          }
           await serialize(async () => {
             await storage.remove(entry.key);
             state.pending = (await load()).filter(item => item.scope === currentScope()).length;
           });
         }
+        const memoryOnly = [...memory.values()].some(entry => entry.scope === scope);
+        state.error = diagnostic + (memoryOnly ? '有记录未落盘，请保持客户端运行。' : '') + missingMessage();
       } catch {
-        state.error = '住院日志尚未完成补传，请重试；未落盘的记录需保持客户端运行。';
+        state.error = '无法访问住院日志本地待传队列，请保持客户端运行并重试。' + missingMessage();
       } finally { state.uploading = false; }
     })().finally(() => { sending = null; schedule(); });
     return sending;
@@ -102,7 +138,6 @@ export function createInpatientLogOutbox(storage: InpatientLogStorage,
       memory.set(entry.key, entry);
       try {
         await persist(entry); memory.delete(entry.key);
-        state.error = missingMessage();
       } catch { state.error = '住院日志未能写入本地待传队列，请保持客户端运行并重试。'; }
       try { state.pending = (await load()).filter(item => item.scope === currentScope()).length; }
       catch { state.pending = [...memory.values()].filter(item => item.scope === currentScope()).length; }
@@ -112,7 +147,7 @@ export function createInpatientLogOutbox(storage: InpatientLogStorage,
   return { state, enqueue, flush, reportMissing: () => { state.unrecorded++; state.error = missingMessage(); }, stop: () => { if (retryTimer) clearTimeout(retryTimer); retryTimer = undefined; } };
 }
 const outbox = createInpatientLogOutbox(new IndexedDbLogStorage(), async snapshot => {
-  const acknowledgement = await regionalPost<{ idLog: string }>('/v1/client/user-logs/inpatient-emr/events', snapshot);
+  const acknowledgement = await regionalPost<{ idLog: string }>('/v1/client/user-logs/inpatient-emr/events', snapshot, 30_000);
   if (!acknowledgement?.idLog) throw new Error('住院日志确认响应缺失');
 }, inpatientLogScope);
 export const inpatientLogUpload = outbox.state;

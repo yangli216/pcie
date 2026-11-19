@@ -5,7 +5,6 @@ import {
   buildEditableInpatientEmrPreviewHtml,
   buildDefaultFieldValues,
   fillInpatientEmrTemplateHtml,
-  isInpatientEmrPlaceholderValue,
   parseInpatientEmrTemplate,
 } from './inpatientEmrTemplate';
 import type { InpatientEmrContext } from '../types';
@@ -20,6 +19,14 @@ const MALICIOUS_TEMPLATE = `
 `;
 
 describe('inpatient EMR HTML boundary', () => {
+  it('prefers the rendered text from the current template over its design-time entry hint', () => {
+    const parsed = parseInpatientEmrTemplate('<p data-id="cc" data-type="text" data-name="主诉" data-default="请输入主诉"><span class="tag-value">合成本次主诉</span></p>');
+    expect(parsed.fields[0]).toMatchObject({
+      defaultValue: '合成本次主诉',
+      templateText: { rendered: '合成本次主诉', attributeDefault: '请输入主诉' },
+    });
+  });
+
   it('uses clinical semantics consistently without single-character or abbreviation substring matches', () => {
     const labels = ['临床诊断依据文本', '临床表现文本', '入院原因正文', '查房医师意见', '诊断依据编码', '诊断依据录入时间', '鉴别诊断医师签名', '病程记录操作人员', '首次病程记录医师', '诊断依据签署人', '首次病程记录名称', '首次病程记录标题', 'diagnostic_basis_created_at'];
     const parsed = parseInpatientEmrTemplate(labels.map((name, index) => `<span data-id="syn-${index}" data-name="${name}" data-type="text">原值</span>`).join(''));
@@ -93,12 +100,9 @@ describe('inpatient EMR HTML boundary', () => {
     expect(buildDefaultFieldValues(parsed.fields, context).病程记录文本).toBe('模板原病程');
   });
 
-  it.each(['请输入诊断依据', '请输入鉴别诊断…', '请填写诊疗计划。', '请录入正文', '待填写', '待补充……', '[请输入诊断依据]', '【请输入鉴别诊断】', '（待补充）', '( 待填写 )'])('rejects a whole-field entry hint: %s', (value) => {
-    expect(isInpatientEmrPlaceholderValue(value)).toBe(true);
-  });
-
-  it.each(['请补充维生素D。', '（请补充维生素D。）', '患者病史待补充，已知情况如下。', '仅依据现有资料。', '[待补充）', ''])('keeps clinical text distinct from a whole-field hint: %s', (value) => {
-    expect(isInpatientEmrPlaceholderValue(value)).toBe(false);
+  it.each(['请输入诊断依据', '（待补充）', '请填写查体，已测左上肢温度37.6℃', '请补充维生素D。'])('preserves the original rendered field text: %s', (value) => {
+    const parsed = parseInpatientEmrTemplate(`<span data-id="病史" data-type="text">${value}</span>`);
+    expect(parsed.fields[0].templateText?.rendered).toBe(value);
   });
 
   it('sanitizes before parsing and preserves template field contracts', () => {

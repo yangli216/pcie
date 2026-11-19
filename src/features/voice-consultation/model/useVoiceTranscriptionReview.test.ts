@@ -98,33 +98,33 @@ describe('stopped voice transcription review', () => {
     expect(review.canConfirm.value).toBe(true);
   });
 
-  it.each(['', '  \n\t  '])('clears the provisional draft and permits continuation when final transcription returns %j', async (result) => {
+  it.each(['', '  \n\t  '])('keeps the provisional draft available for review when final transcription returns %j', async (result) => {
     const retryTranscription = vi.fn().mockResolvedValue(result);
     const review = useVoiceTranscriptionReview({ retryTranscription });
     await review.complete({
       audio: recording(), prefix: '', draft: '可能遗漏尾部的草稿', finish: async () => result,
     });
     expect(review.status.value).toBe('empty');
-    expect(review.text.value).toBe('');
-    expect(review.canConfirm.value).toBe(false);
+    expect(review.text.value).toBe('可能遗漏尾部的草稿');
+    expect(review.canConfirm.value).toBe(true);
     expect(review.canContinue.value).toBe(true);
     expect(review.canRetry.value).toBe(true);
+    review.text.value = '医生手工补充文字';
     await review.retry();
     expect(review.status.value).toBe('empty');
     expect(review.canContinue.value).toBe(true);
-    expect(review.text.value).toBe('');
-    review.text.value = '医生手工补充文字';
+    expect(review.text.value).toBe('医生手工补充文字');
     expect(review.canConfirm.value).toBe(true);
   });
 
-  it('preserves a reviewed prefix through a silent continuation without adopting its draft', async () => {
+  it('keeps the reviewed prefix and current draft once through a silent continuation', async () => {
     const review = useVoiceTranscriptionReview({ retryTranscription: vi.fn() });
     await review.complete({
       audio: recording(), prefix: '前段已由医生修订', draft: '静音段的临时猜测', finish: async () => '',
     });
 
     expect(review.status.value).toBe('empty');
-    expect(review.text.value).toBe('前段已由医生修订');
+    expect(review.text.value).toBe('前段已由医生修订\n静音段的临时猜测');
     expect(review.canConfirm.value).toBe(true);
     expect(review.canContinue.value).toBe(true);
     expect(review.canRetry.value).toBe(true);
@@ -133,10 +133,10 @@ describe('stopped voice transcription review', () => {
     await review.complete({
       audio: recording([800]), prefix: reviewedPrefix, draft: '下一段草稿', finish: async () => '下一段完整文字',
     });
-    expect(review.text.value).toBe('前段已由医生修订\n下一段完整文字');
+    expect(review.text.value).toBe('前段已由医生修订\n静音段的临时猜测\n下一段完整文字');
   });
 
-  it('clears a failed draft when a successful retry contains no recognized speech', async () => {
+  it('keeps a failed draft for review when a successful retry contains no recognized speech', async () => {
     const review = useVoiceTranscriptionReview({ retryTranscription: vi.fn().mockResolvedValue('') });
     await review.complete({ audio: recording(), prefix: '已审核前段', draft: '失败前的草稿', finish: failedFinish });
     expect(review.canConfirm.value).toBe(false);
@@ -144,7 +144,7 @@ describe('stopped voice transcription review', () => {
     await review.retry();
 
     expect(review.status.value).toBe('empty');
-    expect(review.text.value).toBe('已审核前段');
+    expect(review.text.value).toBe('已审核前段\n失败前的草稿');
     expect(review.canConfirm.value).toBe(true);
     expect(review.canContinue.value).toBe(true);
   });
@@ -166,7 +166,7 @@ describe('stopped voice transcription review', () => {
     expect(review.canConfirm.value).toBe(false);
   });
 
-  it('does not offer a retry or confirmation without saved audio', async () => {
+  it('allows doctor-edited confirmation without saved audio while keeping audio actions blocked', async () => {
     const finish = vi.fn().mockResolvedValue('无音频的文字');
     const retryTranscription = vi.fn();
     const review = useVoiceTranscriptionReview({ retryTranscription });
@@ -180,9 +180,31 @@ describe('stopped voice transcription review', () => {
     expect(review.canConfirm.value).toBe(false);
     review.text.value = '医生手动填写';
     expect(review.canEdit.value).toBe(true);
+    expect(review.canConfirm.value).toBe(true);
+    expect(review.canRetry.value).toBe(false);
+    expect(review.canContinue.value).toBe(false);
+    review.text.value = '草稿';
+    expect(review.canConfirm.value).toBe(false);
+    review.text.value = '  草稿  ';
+    expect(review.canConfirm.value).toBe(false);
+    review.text.value = '  ';
     expect(review.canConfirm.value).toBe(false);
     await review.retry();
     expect(retryTranscription).not.toHaveBeenCalled();
+  });
+
+  it('keeps a reviewed prefix when manually completing a failed segment with no recording', async () => {
+    const review = useVoiceTranscriptionReview({ retryTranscription: vi.fn() });
+    await review.complete({
+      audio: new Blob([]), prefix: '前段已审核文字', draft: '', finish: vi.fn(),
+    });
+    expect(review.text.value).toBe('前段已审核文字');
+    expect(review.canConfirm.value).toBe(false);
+    review.text.value = '前段已审核文字\n本段由医生手动补充';
+    expect(review.canConfirm.value).toBe(true);
+    expect(review.status.value).toBe('failed');
+    expect(review.canContinue.value).toBe(false);
+    expect(review.canRetry.value).toBe(false);
   });
 
   it('deduplicates rapid retry clicks and keeps confirmation and continuation blocked in flight', async () => {

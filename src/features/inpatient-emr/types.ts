@@ -59,6 +59,8 @@ export interface InpatientEmrTemplateField {
   readonly: boolean;
   key: boolean;
   defaultValue?: string;
+  /** Source text from this rendered template instance, independent of the cached field policy. */
+  templateText?: { rendered?: string; attributeDefault?: string };
   meaning: string;
   aiSuitable: boolean;
   rule: InpatientEmrFieldRule;
@@ -83,6 +85,7 @@ export interface InpatientEmrDocumentContext {
 export interface InpatientEmrContext {
   documentContext: InpatientEmrDocumentContext;
   doctorSupplement?: string;
+  doctorEdits?: Record<string, string>;
   aiContext?: HisInpatientEmrContextPackage;
   registration: HisInpatientRegistrationInfo | null;
   orders: HisInpatientOrder[];

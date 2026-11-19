@@ -1,5 +1,6 @@
 import { nextTick, ref } from 'vue';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearFeedbackActor, setFeedbackActor } from '@/services/feedbackContext';
 import type { AppPatient } from '@/types/appState';
 import { useVoiceOutpatientEmrWorkflow } from './useVoiceOutpatientEmrWorkflow';
 
@@ -40,6 +41,17 @@ function createPayload() {
 }
 
 describe('useVoiceOutpatientEmrWorkflow', () => {
+  afterEach(clearFeedbackActor);
+
+  it('keeps the starting HIS institution for display when the handshake changes', () => {
+    setFeedbackActor({ orgName: '合成社区中心' });
+    const workflow = useVoiceOutpatientEmrWorkflow({ currentPatient: ref(createPatient()) });
+    workflow.prepareFromStartVoice(createPayload());
+    setFeedbackActor({ orgName: '另一合成机构' });
+    expect(workflow.startContext.value?.displayOrgName).toBe('合成社区中心');
+    expect(workflow.startContext.value?.template).toEqual(createPayload().outpatientEmr);
+  });
+
   it('retains an isolated template snapshot for the inline voice result', () => {
     const currentPatient = ref<AppPatient | null>(createPatient());
     const workflow = useVoiceOutpatientEmrWorkflow({ currentPatient });

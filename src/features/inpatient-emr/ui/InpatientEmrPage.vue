@@ -49,6 +49,7 @@ const {
   activeStepKey,
   completedStepCount,
   start,
+  regenerate,
   updateFieldValue,
   writeBack,
   applyReferenceFeedback,
@@ -79,9 +80,13 @@ const isDetailLoading = ref(false);
 const previewVisitRecord = ref<HisOutpatientMedicalRecord | null>(null);
 const safePreviewVisitHtml = computed(() => sanitizeExternalHtml(previewVisitRecord.value?.htmlContent));
 let outpatientVisitsLoadSeq = 0;
+let outpatientDetailLoadSeq = 0;
+const selectedVisitOutsideList = computed(() => Boolean(selectedVisitId.value)
+  && !outpatientVisits.value.some(visit => visit.visitId === selectedVisitId.value));
 
+const displayedRequest = computed(() => result.value?.request ?? props.request);
 const isAdmission = computed(() => {
-  return isAdmissionTemplate(props.request?.templateName || '');
+  return isAdmissionTemplate(displayedRequest.value?.templateName || '');
 });
 
 function trimUnknown(value: unknown): string {
@@ -178,9 +183,6 @@ async function loadOutpatientVisits(options: { warnWhenMissingPatient?: boolean;
     });
     if (loadSeq !== outpatientVisitsLoadSeq) return;
     outpatientVisits.value = visits;
-    if (selectedVisitId.value && !outpatientVisits.value.some((visit) => visit.visitId === selectedVisitId.value)) {
-      selectedVisitId.value = null;
-    }
     lastOutpatientVisitQueryKey.value = queryKey;
   } catch (error) {
     console.error('[InpatientEmrPage] Failed to fetch outpatient visits', error);
@@ -194,7 +196,7 @@ async function loadOutpatientVisits(options: { warnWhenMissingPatient?: boolean;
 function setOutpatientHistoryRange(rangeKey: OutpatientHistoryRangeKey): void {
   if (outpatientHistoryRangeKey.value === rangeKey) return;
   outpatientHistoryRangeKey.value = rangeKey;
-  selectedVisitId.value = null;
+  outpatientVisits.value = [];
   lastOutpatientVisitQueryKey.value = '';
   void loadOutpatientVisits({ warnWhenMissingPatient: true, force: true });
 }
@@ -208,18 +210,20 @@ function selectVisit(visitId: string) {
 }
 
 async function viewOutpatientDetail(visitId: string) {
+  const loadSeq = ++outpatientDetailLoadSeq;
   isDetailLoading.value = true;
   showOutpatientPreview.value = true;
   previewVisitRecord.value = null;
   try {
     const adapter = getHisAdapter();
     if (adapter) {
-      previewVisitRecord.value = await adapter.fetchOutpatientMedicalRecord(visitId);
+      const record = await adapter.fetchOutpatientMedicalRecord(visitId);
+      if (loadSeq === outpatientDetailLoadSeq) previewVisitRecord.value = record;
     }
   } catch (error) {
     console.error('[InpatientEmrPage] Failed to fetch outpatient detail', error);
   } finally {
-    isDetailLoading.value = false;
+    if (loadSeq === outpatientDetailLoadSeq) isDetailLoading.value = false;
   }
 }
 
@@ -249,7 +253,7 @@ const activeStepDetail = computed(() => activeStep.value?.detail || '正在整�
 const aiFields = computed(() => result.value?.template.fields.filter((field) => field.aiSuitable) || []);
 const filledFieldCount = computed(() => aiFields.value.filter((field) => result.value?.fieldValues[field.id]?.trim()).length);
 const actionDisabled = computed(() => !props.request || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending');
-const previewEditable = computed(() => !actionDisabled.value && writebackStatus.value !== 'success');
+const previewEditable = computed(() => Boolean(result.value) && !actionDisabled.value && writebackStatus.value !== 'success');
 const primaryActionLabel = computed(() => {
   if (isWritingBack.value) return '正在回写';
   if (writebackStatus.value === 'pending') return '等待 HIS 回执';
@@ -263,9 +267,15 @@ const generationPresentation = computed(() => {
   if (writebackStatus.value === 'pending') return { icon: 'lucide:clock', title: '已发送，等待 HIS 回执', detail: '回填结果以 HIS 回执为准，当前病历为只读', tone: 'working' };
   if (writebackStatus.value === 'success') return { icon: 'lucide:circle-check', title: 'HIS 已完成病历回填', detail: '本次病历已完成回填', tone: 'ready' };
   if (writebackStatus.value === 'error') return { icon: 'lucide:triangle-alert', title: '回写未完成，草稿已保留', detail: '可调整当前正文后重新回写', tone: 'error' };
-  if (errorMessage.value) return { icon: 'lucide:triangle-alert', title: '生成未完成，请核对已有草稿', detail: '可直接修改已有内容，或补充要点后重新生成', tone: 'error' };
-  if (result.value?.evidenceSummary.aiGeneration.status === 'waiting') return { icon: 'lucide:file-pen', title: '等待补充病历依据', detail: '可补充查房要点、引用门诊病历，或直接重新生成', tone: 'waiting' };
-  if (result.value) return { icon: 'lucide:circle-check', title: '病历草稿已生成，请核对', detail: '可直接修改正文，也可切换原始模板核对完整病历', tone: 'ready' };
+  if (errorMessage.value) {
+    const hasDraft = filledFieldCount.value > 0;
+    return { icon: 'lucide:triangle-alert', tone: 'error',
+      title: hasDraft ? '生成未完成，请核对已有草稿' : '生成未完成',
+      detail: hasDraft ? '可直接修改已有内容，或补充要点后重新生成'
+        : result.value ? '可手工填写空字段，或重新生成' : '请查看上方错误提示后重新生成',
+    };
+  }
+  if (result.value) return { icon: 'lucide:file-pen', title: '病历草稿已生成，请核对', detail: '可在原始模板中直接修改蓝色虚线标出的字段', tone: 'ready' };
   return { icon: 'lucide:file-text', title: '准备生成病历', detail: '正在整理本次病历所需资料', tone: 'idle' };
 });
 
@@ -287,31 +297,33 @@ const formattedSupplementDuration = computed(() => {
 watch(
   () => props.request,
   (request) => {
+    outpatientVisitsLoadSeq += 1;
+    outpatientDetailLoadSeq += 1;
+    isLoadingVisits.value = false;
+    isDetailLoading.value = false;
+    outpatientVisits.value = [];
+    previewVisitRecord.value = null;
+    showOutpatientPreview.value = false;
+    showRegenerateDialog.value = false;
+    selectedVisitId.value = request?.outpatientVisitId || null;
     if (request) {
-      outpatientVisitsLoadSeq += 1;
-      selectedVisitId.value = null;
       showWritebackQualityDialog.value = false;
       pendingQualityIssues.value = [];
-      outpatientVisits.value = [];
       outpatientHistoryRangeKey.value = '7d';
       lastOutpatientVisitQueryKey.value = '';
       const isAdmission = isAdmissionTemplate(request.templateName || '');
+      const generation = start(request);
       if (isAdmission) {
         void loadOutpatientVisits({ warnWhenMissingPatient: false });
       }
-      void start(request).then(() => {
+      void generation.then(() => {
         if (props.request !== request) return;
         if (isAdmission) {
           void loadOutpatientVisits({ warnWhenMissingPatient: true });
         }
-        const hasSupplement = Boolean(request.doctorSupplement?.trim());
-        if (isAdmission && !hasSupplement) {
-          openRegenerateDialog();
-        }
       });
     } else {
       reset();
-      showRegenerateDialog.value = false;
       showCancelConfirm.value = false;
       showWritebackQualityDialog.value = false;
     }
@@ -331,12 +343,8 @@ useConsultationReferenceFeedbackListener<InpatientEmrReferenceFeedbackPayload>({
   },
 });
 
-function getCurrentGenerationRequest(): InpatientEmrGenerationRequest | null {
-  return result.value?.request || props.request;
-}
-
 function openRegenerateDialog(): void {
-  const current = getCurrentGenerationRequest();
+  const current = displayedRequest.value;
   if (!current || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending') return;
   supplementText.value = current.doctorSupplement || '';
   supplementError.value = '';
@@ -485,14 +493,10 @@ async function discardSupplementRecording(): Promise<void> {
 }
 
 function confirmRegenerate(): void {
-  const current = getCurrentGenerationRequest();
-  if (!current) return;
   const doctorSupplement = supplementText.value.trim();
   showRegenerateDialog.value = false;
-  void start({
-    ...current,
+  regenerate({
     doctorSupplement: doctorSupplement || undefined,
-    allowGenerateWithoutExternalBasis: !doctorSupplement,
     outpatientVisitId: selectedVisitId.value || undefined,
   });
 }
@@ -531,7 +535,7 @@ onBeforeUnmount(() => {
         <span class="workspace-title-icon"><Icon icon="lucide:file-pen" :size="20" /></span>
         <div>
           <h1 class="workspace-title">AI 住院病历生成</h1>
-          <p class="workspace-subtitle">{{ request?.templateName || '等待 HIS 传入住院病历模板' }}<span v-if="request?.recordTime"> · {{ request.recordTime }}</span></p>
+          <p class="workspace-subtitle">{{ displayedRequest?.templateName || '等待 HIS 传入住院病历模板' }}<span v-if="displayedRequest?.recordTime"> · {{ displayedRequest.recordTime }}</span></p>
         </div>
       </div>
       <button class="workspace-button is-icon" type="button" title="收起，保留当前病历" aria-label="收起，保留当前病历" @click="emit('close')">
@@ -539,29 +543,28 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <div v-if="inpatientLogUpload.error || inpatientLogUpload.pending" class="inpatient-log-notice" role="status">
-      <span>{{ inpatientLogUpload.error || `住院日志待补传 ${inpatientLogUpload.pending} 条` }}</span>
-      <button v-if="!inpatientLogUpload.unrecorded || inpatientLogUpload.pending" type="button" :disabled="inpatientLogUpload.uploading" @click="retryInpatientLogs">{{ inpatientLogUpload.uploading ? '补传中…' : '重试补传' }}</button>
-    </div>
-    <main class="emr-main">
-      <div v-if="errorMessage" class="error-banner" role="alert">
-        <Icon icon="lucide:triangle-alert" :size="18" />
-        <span>{{ errorMessage }}</span>
-      </div>
+    <main class="emr-main" :class="{ 'has-request': request }">
+      <aside v-if="request || inpatientLogUpload.error || inpatientLogUpload.pending" class="generation-sidebar" aria-label="生成提示与依据">
+        <div v-if="inpatientLogUpload.error || inpatientLogUpload.pending" class="inpatient-log-notice" role="status">
+          <span>{{ inpatientLogUpload.error || `住院日志待补传 ${inpatientLogUpload.pending} 条` }}</span>
+          <button v-if="!inpatientLogUpload.unrecorded || inpatientLogUpload.pending" type="button" :disabled="inpatientLogUpload.uploading" @click="retryInpatientLogs">{{ inpatientLogUpload.uploading ? '补传中…' : '重试补传' }}</button>
+        </div>
+        <div v-if="errorMessage" class="error-banner" role="alert">
+          <Icon icon="lucide:triangle-alert" :size="18" />
+          <span>{{ errorMessage }}</span>
+        </div>
 
-      <template v-if="request">
-        <section class="generation-summary" :data-tone="generationPresentation.tone" role="status" aria-live="polite">
-          <span class="summary-icon"><Icon :icon="generationPresentation.icon" :size="20" :class="{ spinning: isGenerating || isWritingBack }" /></span>
-          <div class="summary-copy">
-            <strong>{{ generationPresentation.title }}</strong>
-            <span>{{ generationPresentation.detail }}</span>
-          </div>
-          <span v-if="isGenerating" class="step-count">第 {{ Math.min(completedStepCount + 1, steps.length) }}/{{ steps.length }} 步</span>
-          <span v-else-if="result" class="field-count">已填写 {{ filledFieldCount }}/{{ aiFields.length }} 项</span>
-        </section>
+        <template v-if="request">
+          <section class="generation-summary" :data-tone="generationPresentation.tone" role="status" aria-live="polite">
+            <span class="summary-icon"><Icon :icon="generationPresentation.icon" :size="20" :class="{ spinning: isGenerating || isWritingBack }" /></span>
+            <div class="summary-copy">
+              <strong>{{ generationPresentation.title }}</strong>
+              <span>{{ generationPresentation.detail }}</span>
+              <span v-if="isGenerating" class="step-count">第 {{ Math.min(completedStepCount + 1, steps.length) }}/{{ steps.length }} 步</span>
+              <span v-else-if="result" class="field-count">已填写 {{ filledFieldCount }}/{{ aiFields.length }} 项</span>
+            </div>
+          </section>
 
-        <details class="generation-details" :open="isGenerating">
-          <summary><Icon icon="lucide:workflow" :size="16" /><span>生成过程与依据</span><span class="details-hint">{{ completedStepCount }}/{{ steps.length }} 步</span></summary>
           <InpatientEmrProcessPanel
             :steps="steps"
             :completed-step-count="completedStepCount"
@@ -583,25 +586,21 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="aiFields.length === 0" class="no-ai-fields">当前模板没有识别到 AI 生成字段</p>
           </details>
-        </details>
+        </template>
+      </aside>
 
+      <section v-if="displayedRequest" class="record-pane" aria-label="病历">
         <InpatientEmrTemplatePreview
-          v-if="result"
-          :key="request.requestId || request.admissionId"
-          :html-content="result.request.htmlContent"
-          :fields="result.template.fields"
-          :field-values="result.fieldValues"
-          :initial-field-values="result.initialFieldValues"
+          :key="displayedRequest.requestId || displayedRequest.admissionId"
+          :html-content="displayedRequest.htmlContent"
+          :fields="result?.template.fields ?? []"
+          :field-values="result?.fieldValues ?? {}"
+          :initial-field-values="result?.initialFieldValues ?? {}"
           :editable="previewEditable"
           :is-generating="isGenerating"
           @update-field="updateFieldValue"
         />
-        <div v-else class="generating-state">
-          <Icon :icon="errorMessage ? 'lucide:triangle-alert' : 'lucide:sparkles'" :size="30" />
-          <strong>{{ errorMessage ? '本次生成未完成' : activeStepLabel }}</strong>
-          <span>{{ errorMessage ? '可补充要点后重新生成' : activeStepDetail }}</span>
-        </div>
-      </template>
+      </section>
       <section v-else class="empty-panel">
         <Icon icon="lucide:file-plus-2" :size="28" />
         <strong>等待住院病历生成请求</strong>
@@ -673,6 +672,10 @@ onBeforeUnmount(() => {
             <span class="range-text">{{ outpatientHistoryRangeText }}</span>
           </div>
 
+          <div v-if="selectedVisitOutsideList" class="selected-reference">
+            <span>已引用门诊就诊 {{ selectedVisitId }}</span>
+            <button class="action-btn" type="button" @click="selectedVisitId = null">取消引用</button>
+          </div>
           <div class="visits-card-list" v-if="outpatientVisits.length > 0">
             <div
               v-for="visit in outpatientVisits"
@@ -705,10 +708,11 @@ onBeforeUnmount(() => {
                   type="button"
                   class="action-btn select-btn"
                   :class="{ 'is-active': selectedVisitId === visit.visitId }"
+                  :aria-pressed="selectedVisitId === visit.visitId"
                   @click="selectVisit(visit.visitId)"
                 >
                   <Icon :icon="selectedVisitId === visit.visitId ? 'lucide:check-circle-2' : 'lucide:plus-circle'" :size="13" />
-                  <span>{{ selectedVisitId === visit.visitId ? '已引用' : '以此为基准' }}</span>
+                  <span>{{ selectedVisitId === visit.visitId ? '取消引用' : '以此为基准' }}</span>
                 </button>
               </div>
             </div>
@@ -911,27 +915,43 @@ onBeforeUnmount(() => {
 .inpatient-emr-page button { font: inherit; }
 .inpatient-emr-page button:focus-visible,
 .inpatient-emr-page summary:focus-visible { outline: 2px solid var(--workspace-primary); outline-offset: 3px; }
-.emr-main { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; gap: 14px; padding: 16px 20px; overflow: auto; overscroll-behavior: contain; }
+.emr-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 16px 20px;
+  gap: 16px;
+  overflow: auto;
+}
+.emr-main.has-request {
+  display: grid;
+  grid-template-columns: clamp(248px, 28%, 360px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.generation-sidebar, .record-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.generation-sidebar { gap: 12px; }
+.generation-sidebar > * { flex-shrink: 0; }
 .generation-summary { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
 .generation-summary[data-tone='working'] { border-color: #bfdbfe; background: #eff6ff; }
 .generation-summary[data-tone='ready'] { border-color: #bbf7d0; background: #f0fdf4; }
-.generation-summary[data-tone='waiting'] { border-color: #fde68a; background: #fffbeb; }
 .generation-summary[data-tone='error'] { border-color: #fecaca; background: #fff7f7; }
 .summary-icon { display: grid; place-items: center; flex: 0 0 34px; height: 34px; border-radius: 9px; color: #2563eb; background: #dbeafe; }
 .generation-summary[data-tone='ready'] .summary-icon { color: #15803d; background: #dcfce7; }
-.generation-summary[data-tone='waiting'] .summary-icon { color: #b45309; background: #fef3c7; }
 .generation-summary[data-tone='error'] .summary-icon { color: #b91c1c; background: #fee2e2; }
 .summary-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .summary-copy strong { font-size: 14px; }
 .summary-copy > span { color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .step-count, .field-count { flex-shrink: 0; color: #64748b; font-size: 12px; line-height: 1.6; }
-.generation-details { border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; }
-.generation-details > summary { display: flex; align-items: center; gap: 8px; padding: 11px 14px; cursor: pointer; color: #475569; font-size: 13px; list-style: none; }
-.generation-details > summary::after { content: '展开'; margin-left: auto; color: #2563eb; font-size: 12px; }
-.generation-details[open] > summary::after { content: '收起'; }
-.details-hint { color: #94a3b8; font-size: 12px; }
-.generation-details :deep(.process-panel) { margin: 0 12px 12px; box-shadow: none; }
-.field-panel { margin: 0 14px 14px; color: #475569; font-size: 13px; }
+.field-panel { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #475569; font-size: 13px; }
 .field-panel summary { cursor: pointer; }
 .field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin-top: 12px; }
 .field-prompt-card { min-width: 0; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
@@ -940,9 +960,8 @@ onBeforeUnmount(() => {
 .field-prompt-detail code { display: block; margin-top: 8px; overflow-wrap: anywhere; }
 .field-prompt-detail pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .no-ai-fields { color: #64748b; }
-.empty-panel, .generating-state { display: grid; flex: 1; min-height: 260px; gap: 10px; place-content: center; justify-items: center; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px; color: #64748b; background: #fff; text-align: center; }
-.generating-state strong { font-size: 16px; color: #334155; }
-.empty-panel span, .generating-state span { font-size: 13px; }
+.empty-panel { display: grid; flex: 1; min-height: 260px; gap: 10px; place-content: center; justify-items: center; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px; color: #64748b; background: #fff; text-align: center; }
+.empty-panel span { font-size: 13px; }
 .error-banner { display: flex; gap: 8px; align-items: flex-start; padding: 12px 14px; border: 1px solid #fecaca; border-radius: 8px; color: #b91c1c; background: #fef2f2; font-size: 13px; overflow-wrap: anywhere; }
 .writeback-status { max-width: 360px; color: #64748b; font-size: 12px; line-height: 1.6; text-align: right; overflow-wrap: anywhere; }
 .writeback-status.is-pending { color: #1d4ed8; }
@@ -1267,6 +1286,15 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   border: 1px dashed rgba(37, 99, 235, 0.3);
   border-radius: 8px;
+}
+
+.selected-reference {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
 }
 
 .section-title-row {
@@ -1604,7 +1632,7 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped>
-.inpatient-log-notice { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: #fff4dc; color: #725513; font-size: 12px; }
+.inpatient-log-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid #f3dcae; border-radius: 8px; background: #fff4dc; color: #725513; font-size: 12px; }
 .inpatient-log-notice button { flex-shrink: 0; padding: 4px 10px; border: 1px solid currentColor; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1613,10 +1641,10 @@ onBeforeUnmount(() => {
 }
 @container workspace-page (max-width: 720px) {
   .emr-main { padding: 12px 14px; }
+  .emr-main.has-request { display: flex; }
+  .generation-sidebar, .record-pane { flex: 0 0 auto; overflow: visible; }
   .footer-actions { flex: 1; }
   .footer-actions .writeback-status { flex-basis: 100%; max-width: none; }
-  .generation-summary { flex-wrap: wrap; }
-  .step-count, .field-count { margin-left: 46px; }
   .history-range-row, .section-title-row { flex-wrap: wrap; }
   .history-range-row .range-text { width: 100%; margin-left: 0; white-space: normal; }
   .visits-card-list { grid-template-columns: 1fr; }
