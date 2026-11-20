@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { syntheticFieldPolicy } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { analyzeOutpatientEmrFields } from '../api/outpatientEmrService';
 import { hashOutpatientEmrTemplate } from '../lib/outpatientEmrWriteback';
@@ -38,9 +39,10 @@ function decodedResponse(templateHtml = html) {
 
 function resolveResponse(body: Record<string, unknown>, cacheHit = false) {
   return {
-    schemaVersion: 'outpatient-emr-template-pair-resolution.v1', cacheHit,
+    schemaVersion: 'outpatient-emr-template-pair-resolution.v2', cacheHit,
     templateId: body.templateId, templateHash: body.templateHash,
     id: cacheHit ? 'SYN-SNAPSHOT' : null, receivedAt: cacheHit ? 1 : null,
+    fieldPolicy: cacheHit ? syntheticFieldPolicy(parseOutpatientEmrTemplate(html, definition, ['chiefComplaint']).fields) : null,
     parseResult: cacheHit ? {
       schemaVersion: 'outpatient-emr-template-pair.v1',
       fields: parseOutpatientEmrTemplate(html, definition, ['chiefComplaint']).fields,
@@ -51,7 +53,8 @@ function resolveResponse(body: Record<string, unknown>, cacheHit = false) {
 function fakeHttp(path: string, body: Record<string, unknown>): unknown {
   if (path === DECODE) return decodedResponse();
   if (path === RESOLVE) return resolveResponse(body);
-  if (path === SNAPSHOT) return { id: 'SYN-SNAPSHOT', templateHash: body.templateHash, deduplicated: false, receivedAt: 1 };
+  if (path === SNAPSHOT) return { schemaVersion: 'outpatient-emr-template-pair-receipt.v2', templateId: body.templateId,
+    fieldPolicy: syntheticFieldPolicy((body.parseResult as ReturnType<typeof parseOutpatientEmrTemplate>).fields), parseResult: body.parseResult, id: 'SYN-SNAPSHOT', templateHash: body.templateHash, deduplicated: false, receivedAt: 1 };
   throw new Error(`Unexpected synthetic route ${path}`);
 }
 
@@ -169,7 +172,7 @@ describe('server-decoded outpatient template analysis', () => {
     boundary.post.mockImplementation((path: string, body: Record<string, unknown>) => {
       if (path === DECODE) return { ...decodedResponse(mixedHtml), templateDefinition: mixedDefinition };
       if (path === RESOLVE && hit) return {
-        ...resolveResponse(body, true),
+        ...resolveResponse(body, true), fieldPolicy: syntheticFieldPolicy(parsed.fields),
         parseResult: { schemaVersion: 'outpatient-emr-template-pair.v1', fields: parsed.fields },
       };
       return fakeHttp(path, body);

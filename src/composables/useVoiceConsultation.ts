@@ -180,6 +180,8 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     const { voiceTemplateDraft, voiceTemplateDocument } = cached;
     if (!matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDraft, context, template.identity.templateHash)) return null;
     if (voiceTemplateDocument && !matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDocument, context, template.identity.templateHash)) return null;
+    if (voiceTemplateDraft?.policyRevision !== template.identity.policyRevision
+      || voiceTemplateDraft?.ruleSetVersion !== template.identity.ruleSetVersion) return null;
     const chapters = Array.isArray(voiceTemplateDocument?.chapters) ? voiceTemplateDocument.chapters : [];
     const legacyTexts = Object.fromEntries(chapters.flatMap(chapter =>
       typeof chapter?.chapterId === 'string' && typeof chapter.text === 'string' ? [[chapter.chapterId, chapter.text]] : []));

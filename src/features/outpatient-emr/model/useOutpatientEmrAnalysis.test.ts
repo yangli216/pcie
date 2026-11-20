@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { syntheticFieldPolicy, syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   OutpatientEmrAnalysisRequest,
@@ -14,20 +15,15 @@ const snapshotMocks = vi.hoisted(() => ({
     templateId,
     templateHash,
   }: { templateId: string; templateHash: string }) => Promise.resolve({
-    schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-    cacheHit: false,
+    schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+    cacheHit: false, fieldPolicy: null,
     id: null,
     templateId,
     templateHash,
     parseResult: null,
     receivedAt: null,
   })),
-  persist: vi.fn().mockResolvedValue({
-    id: 'snapshot-default',
-    templateHash: 'template-hash',
-    deduplicated: false,
-    receivedAt: 1,
-  }),
+  persist: vi.fn().mockImplementation(input => syntheticReceipt(input)),
 }));
 
 vi.mock('../api/outpatientEmrTemplateSnapshotService', () => ({
@@ -108,8 +104,8 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     }: { templateId: string; templateHash: string }) => {
       callOrder.push('resolve');
       return {
-        schemaVersion: 'outpatient-emr-template-pair-resolution.v1' as const,
-        cacheHit: false,
+        schemaVersion: 'outpatient-emr-template-pair-resolution.v2' as const,
+        cacheHit: false, fieldPolicy: null,
         id: null,
         templateId,
         templateHash,
@@ -136,6 +132,7 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
         'familyHistory',
       ]);
       return {
+        ...syntheticReceipt(input),
         id: 'snapshot-1',
         templateHash: 'template-hash',
         deduplicated: false,
@@ -172,8 +169,8 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
       familyHistory: '历史解析后的模型家族史',
     });
     const resolveTemplateSnapshot = vi.fn().mockResolvedValue({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-      cacheHit: true,
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+      cacheHit: true, fieldPolicy: syntheticFieldPolicy(cachedTemplate.fields),
       id: 'snapshot-history',
       templateId: 'TPL-001',
       templateHash: 'template-hash',
@@ -200,7 +197,9 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     expect(parseTemplate).not.toHaveBeenCalled();
     expect(persistTemplateSnapshot).not.toHaveBeenCalled();
     expect(analyzeFields).toHaveBeenCalledOnce();
-    expect(analysis.template.value?.fields).toEqual(cachedTemplate.fields);
+    expect(analysis.template.value?.fields.map(({ generationRule, aiSuitable, ...field }) => ({ ...field, aiSuitable })))
+      .toEqual(cachedTemplate.fields.map(field => ({ ...field, aiSuitable: true })));
+    expect(analysis.targetFields.value.every(field => field.generationRule?.aiSuitable)).toBe(true);
   });
 
   it('creates a new parse only when the same template ID has a changed content hash', async () => {
@@ -215,8 +214,8 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     }: { templateId: string; templateHash: string }) => (
       templateHash === 'hash-v1'
         ? {
-            schemaVersion: 'outpatient-emr-template-pair-resolution.v1' as const,
-            cacheHit: true,
+            schemaVersion: 'outpatient-emr-template-pair-resolution.v2' as const,
+            cacheHit: true, fieldPolicy: syntheticFieldPolicy(cachedTemplate.fields),
             id: 'snapshot-v1',
             templateId,
             templateHash,
@@ -227,8 +226,8 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
             receivedAt: 1,
           }
         : {
-            schemaVersion: 'outpatient-emr-template-pair-resolution.v1' as const,
-            cacheHit: false,
+            schemaVersion: 'outpatient-emr-template-pair-resolution.v2' as const,
+            cacheHit: false, fieldPolicy: null,
             id: null,
             templateId,
             templateHash,
@@ -237,12 +236,7 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
           }
     ));
     const parseTemplate = vi.fn().mockImplementation(parseOutpatientEmrTemplate);
-    const persistTemplateSnapshot = vi.fn().mockResolvedValue({
-      id: 'snapshot-v2',
-      templateHash: 'hash-v2',
-      deduplicated: false,
-      receivedAt: 2,
-    });
+    const persistTemplateSnapshot = vi.fn().mockImplementation(input => syntheticReceipt(input));
     const analyzeFields = vi.fn().mockResolvedValue({
       personalHistory: '模型个人史',
       familyHistory: '模型家族史',

@@ -46,6 +46,7 @@ export function buildOutpatientEmrAnalysisMessages(input: {
   request: OutpatientEmrAnalysisRequest;
   fields: OutpatientEmrTemplateField[];
   templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
+  templateReferenceChapters?: ReturnType<typeof import('../lib/voiceOutpatientEmrRecognition').describeOutpatientTemplateReferences>;
   templateNarrative?: ReturnType<typeof describeOutpatientEmrNarrative>;
   reviewedSectionOnly?: boolean;
 }): ChatMessage[] {
@@ -84,6 +85,7 @@ export async function analyzeOutpatientEmrFields(
     request: OutpatientEmrAnalysisRequest;
     fields: OutpatientEmrTemplateField[];
     templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
+    templateReferenceChapters?: ReturnType<typeof import('../lib/voiceOutpatientEmrRecognition').describeOutpatientTemplateReferences>;
     templateNarrative?: ReturnType<typeof describeOutpatientEmrNarrative>;
     reviewedSectionOnly?: boolean;
     signal?: AbortSignal;

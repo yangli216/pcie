@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
+import { syntheticReceipt, syntheticFieldPolicy } from '@/test/template-parsing/outpatientFieldPolicyFixture';
+import policyWire from '@/test/template-parsing/fixtures/outpatient-field-policy-wire.json';
+import { resolveOutpatientEmrTemplateSnapshot } from '../api/outpatientEmrTemplateSnapshotService';
+import * as regionalClient from '@/services/regionalClient';
 import { effectScope, nextTick, ref, type EffectScope } from 'vue';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { AppPatient } from '@/types/appState';
 import { buildPatientContext } from '@/utils/patientContext';
 import { analyzeOutpatientEmrFields, type OutpatientEmrChatFast } from '../api/outpatientEmrService';
@@ -10,7 +14,7 @@ import type {
   VoiceOutpatientEmrInitialDraft,
   VoiceOutpatientEmrStartContext,
 } from '../types';
-import { clearVoiceOutpatientEmrRecordDraftCache, useVoiceOutpatientEmrRecord } from './useVoiceOutpatientEmrRecord';
+import { clearVoiceOutpatientEmrRecordDraftCache, useVoiceOutpatientEmrRecord, type VoiceOutpatientEmrRecordOptions } from './useVoiceOutpatientEmrRecord';
 import { parseOutpatientEmrTemplate } from '../lib/outpatientEmrTemplate';
 import { loadVoiceOutpatientEmrTemplateSource } from './useVoiceOutpatientEmrTemplateSource';
 import type { OutpatientEmrAnalysisDependencies } from './useOutpatientEmrAnalysis';
@@ -80,6 +84,7 @@ function setup(
     patientId?: string;
     initialDraft?: VoiceOutpatientEmrInitialDraft;
     awaitInitialDraft?: boolean;
+    getLegacyRecord?: VoiceOutpatientEmrRecordOptions['getLegacyRecord'];
   } = {},
 ) {
   const options = {
@@ -93,6 +98,7 @@ function setup(
     awaitingFeedback: ref(false),
     initialDraft: ref(input.initialDraft),
     awaitInitialDraft: ref(input.awaitInitialDraft ?? false),
+    getLegacyRecord: input.getLegacyRecord,
   };
   const analyzeFields = vi.fn().mockResolvedValue({ chiefComplaint: '咳嗽三天。', familyHistory: '' });
   const completeConsultation = vi.fn().mockResolvedValue(undefined);
@@ -101,7 +107,7 @@ function setup(
   const controller = scope.run(() => useVoiceOutpatientEmrRecord(options, {
     analyzeFields,
     resolveTemplateSnapshot: vi.fn().mockResolvedValue({ cacheHit: false }),
-    persistTemplateSnapshot: vi.fn().mockResolvedValue({ id: 'SYN-SNAPSHOT' }),
+    persistTemplateSnapshot: vi.fn().mockImplementation(input => syntheticReceipt(input)),
     hashTemplate: vi.fn().mockResolvedValue('SYN-HASH'),
     completeConsultation,
     ...overrides,
@@ -123,11 +129,54 @@ function basePayload(): OutpatientEmrPreparedWritebackPayload {
 
 function firstVoiceDraft(fieldValues: VoiceOutpatientEmrInitialDraft['fieldValues']): VoiceOutpatientEmrInitialDraft {
   const { template, visitId } = context();
-  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH',
+  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH', policyRevision: 0, ruleSetVersion: 'outpatient-emr-field-prompt.v5',
     targetFieldIds: [...template.targetFieldIds], fieldValues };
 }
 
 describe('useVoiceOutpatientEmrRecord', () => {
+  it('reuses the saved field instruction for a single chapter edit and preserves out-of-chapter HIS evidence', async () => {
+    const { templateHtml, templateDefinition, templateId, templateName } = policyWire.request;
+    const targetFieldIds = ['symptom', 'duration', 'manualRemark'];
+    const session = { visitId: 'SYN-VISIT', template: { templateId, templateName, templateHtml, templateDefinition,
+      requestId: 'SYN-REQUEST', targetFieldIds } };
+    const http = vi.spyOn(regionalClient, 'regionalPost').mockResolvedValue(policyWire.configured);
+    onTestFinished(() => http.mockRestore());
+    const model = vi.fn().mockResolvedValue(JSON.stringify({ symptom: '咳嗽', duration: '4', manualRemark: '越权的模型值' }));
+    const { controller } = setup({ resolveTemplateSnapshot: resolveOutpatientEmrTemplateSnapshot,
+      hashTemplate: async () => policyWire.configured.templateHash, analyzeFields: input => analyzeOutpatientEmrFields(input, { chatFast: model }) },
+    { context: session, initialDraft: { ...firstVoiceDraft({ symptom: '咳嗽', duration: '3' }), templateId, targetFieldIds,
+      templateHash: policyWire.configured.templateHash, policyRevision: 2 } });
+    await vi.waitFor(() => expect(controller.canSubmit.value).toBe(true));
+    expect(model).not.toHaveBeenCalled();
+    const initialRequests = http.mock.calls.length;
+    controller.updateChapterText('chief', '医生核对为咳嗽4天');
+    await vi.waitFor(() => expect(controller.fieldValues.value.duration).toBe('4'));
+    expect(http.mock.calls.length).toBeGreaterThan(initialRequests);
+    const [system, data] = model.mock.calls[0][0];
+    expect(system.content.split('持续时间由相邻栏填写。')).toHaveLength(2);
+    expect(data.content).toContain('医生核对为咳嗽4天');
+    expect(data.content).toContain('HIS已登记');
+    expect(controller.fieldValues.value.manualRemark).toBe('HIS已登记');
+  });
+
+  it('keeps a manual direct control independent from the legacy voice record and accepts a doctor edit', async () => {
+    const { controller } = setup({
+      persistTemplateSnapshot: async input => {
+        const receipt = syntheticReceipt(input);
+        const chief = receipt.fieldPolicy.fields.find(field => field.fieldId === 'chiefComplaint')!;
+        Object.assign(chief, { aiSuitable: false, generationSource: 'manual-override', promptSource: 'not_ai',
+          resolvedPrompt: null, unmentionedDefault: null });
+        return receipt;
+      },
+    }, { getLegacyRecord: () => ({ chiefComplaint: '旧语音整段主诉' }) });
+    await vi.waitFor(() => expect(controller.analysisStatus.value).toBe('ready'));
+    expect(controller.chapterRows.value.find(row => row.key === 'chief')?.text).toBe('');
+    const reviewed = { chiefComplaint: '旧语音整段主诉' };
+    expect(controller.buildConfirmedPayload(basePayload(), reviewed)?.fieldValues).not.toHaveProperty('chiefComplaint');
+    controller.updateChapterField('chiefComplaint', '医生手填的主诉');
+    expect(controller.buildConfirmedPayload(basePayload(), reviewed)?.fieldValues?.chiefComplaint).toBe('医生手填的主诉');
+  });
+
   it('previews and persists sparse supplements using the original fields and preserves individual doctor edits', async () => {
     const session = compoundHistoryContext();
     const initialDraft = { ...firstVoiceDraft({ flag: '0', operation: '原记录' }), targetFieldIds: session.template.targetFieldIds };
@@ -209,7 +258,9 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const session = context();
     const source = await loadVoiceOutpatientEmrTemplateSource(session, async input => input);
     const template = parseOutpatientEmrTemplate(source.templateHtml, source.templateDefinition, session.template.targetFieldIds);
-    const getPreparedVoiceTemplate = vi.fn(() => ({ template, source, templateHash: 'SYN-HASH' }));
+    const fieldPolicy = syntheticFieldPolicy(template.fields);
+    const fields = template.targetFields.map(f => ({ ...f, aiSuitable: true, generationRule: fieldPolicy.fields.find(rule => rule.fieldId === f.id) }));
+    const getPreparedVoiceTemplate = vi.fn(() => ({ template: { ...template, targetFields: fields, fieldPolicy }, source, templateHash: 'SYN-HASH' }));
     const unexpected = vi.fn(() => { throw new Error('不应重复准备模板'); });
     const { controller, analyzeFields } = setup({
       getPreparedVoiceTemplate, normalizeTemplateSource: unexpected, hashTemplate: unexpected,
@@ -287,10 +338,10 @@ describe('useVoiceOutpatientEmrRecord', () => {
     expect(cleared?.pastMedicalHistory).toBe('');
     expect(analyzeFields).not.toHaveBeenCalled();
     controller.updateReviewedRecordField('pastMedicalHistory', '有肝炎史。');
-    expect(analyzeFields).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(analyzeFields).toHaveBeenCalledOnce());
     const submitted = analyzeFields.mock.calls[0][0];
     expect(submitted.fields.map((field: { id: string }) => field.id)).toEqual(['flag', 'operation']);
-    expect(submitted.request.recordContext).toEqual({ reviewedSection: 'pastMedicalHistory', recordText: '有肝炎史。' });
+    expect(submitted.request.recordContext).toMatchObject({ reviewedSection: 'pastMedicalHistory', recordText: '有肝炎史。' });
     expect(submitted.reviewedSectionOnly).toBe(true);
     await vi.waitFor(() => expect(controller.fieldValues.value.flag).toBe('有'));
     const rewritten = controller.buildConfirmedPayload(base, { pastMedicalHistory: '有肝炎史。' });
@@ -327,7 +378,9 @@ describe('useVoiceOutpatientEmrRecord', () => {
     await vi.waitFor(() => expect(controller.analysisStatus.value).toBe('ready'));
     controller.updateFieldValue('operation', '医生已核对手术名称');
     controller.updateReviewedRecordField('pastMedicalHistory', '患者有肝炎史。');
+    await vi.waitFor(() => expect(analyzeFields).toHaveBeenCalledOnce());
     controller.updateReviewedRecordField('pastMedicalHistory', '肝炎史待核实。');
+    await vi.waitFor(() => expect(analyzeFields).toHaveBeenCalledTimes(2));
     expect(analyzeFields.mock.calls.map(([input]) => input.request.targetFieldIds)).toEqual([['flag'], ['flag']]);
     expect(analyzeFields.mock.calls[0][0].signal.aborted).toBe(true);
     stale.resolve({ flag: '1' });
@@ -342,6 +395,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     await vi.waitFor(() => expect(remounted.analysisErrorMessage.value).toContain('合成服务失败'));
     expect(remounted.fieldValues.value).toEqual({ flag: '', operation: '医生已核对手术名称' });
     const retryTask = remounted.retry();
+    await vi.waitFor(() => expect(analyzeFields).toHaveBeenCalledTimes(3));
     expect(analyzeFields.mock.calls[2][0].request.targetFieldIds).toEqual(['flag']);
     remounted.updateFieldValue('flag', '否认');
     retry.resolve({ flag: '1', operation: '错误覆盖' });
@@ -358,6 +412,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const { controller, options } = setup({ analyzeFields }, { context: session, initialDraft });
     await vi.waitFor(() => expect(controller.analysisStatus.value).toBe('ready'));
     controller.updateReviewedRecordField('pastMedicalHistory', '手术史待核实。');
+    await vi.waitFor(() => expect(analyzeFields).toHaveBeenCalledOnce());
     expect(controller.fieldValues.value).toEqual({ flag: '', operation: '' });
     if (action === 'submit') controller.stopGenerationForWriteback();
     else options.patient.value = buildPatientContext({ payload: { idPi: 'SYN-OTHER', idVis: 'SYN-OTHER-VISIT' } });
@@ -425,7 +480,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const decoding = deferred<typeof original>();
     const normalizeTemplateSource = vi.fn().mockReturnValue(decoding.promise);
     const resolveTemplateSnapshot = vi.fn().mockResolvedValue({ cacheHit: false });
-    const persistTemplateSnapshot = vi.fn().mockResolvedValue({ id: 'SYN-SNAPSHOT' });
+    const persistTemplateSnapshot = vi.fn().mockImplementation(input => syntheticReceipt(input));
     const deps = { normalizeTemplateSource, resolveTemplateSnapshot, persistTemplateSnapshot };
     const first = setup(deps, { context: session, recordContext: null });
     expect(normalizeTemplateSource).toHaveBeenCalledTimes(1);

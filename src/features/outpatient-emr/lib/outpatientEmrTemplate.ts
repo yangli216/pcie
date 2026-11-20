@@ -691,6 +691,7 @@ export const OUTPATIENT_EMR_FIELD_SOURCE_LABELS: Readonly<
   'unmentioned-default': '本次未提及，按默认值填写',
   ai: 'AI 依据本次病例生成',
   structured: '来自已确认的结构化病历',
+  his: '来自 HIS 原值',
   doctor: '医生已修改',
   empty: '待填写',
 };

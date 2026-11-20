@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { syntheticFieldPolicy, syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { chat, chatFast, chatStream } from '@/services/llm';
 import * as snapshots from '@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService';
@@ -11,6 +12,7 @@ import * as regional from '@/services/regionalClient';
 import type { VoiceOutpatientEmrStartContext } from '@features/outpatient-emr/types';
 import templateHtml from '@/test/template-parsing/fixtures/his-internal-medicine-template.html?raw';
 import templateDefinition from '@/test/template-parsing/fixtures/his-internal-medicine-template.json?raw';
+import policyWire from '@/test/template-parsing/fixtures/outpatient-field-policy-wire.json';
 import { useVoiceIntentRecognition, type VoiceIntentProgress } from './useVoiceIntentRecognition';
 
 vi.mock('@/services/llm', () => ({ chat: vi.fn(), chatStream: vi.fn(), chatFast: vi.fn() }));
@@ -37,15 +39,41 @@ beforeEach(() => {
     schemaVersion: 'outpatient-emr-template-decoded.v1', templateHtml, templateDefinition,
   });
   vi.spyOn(snapshots, 'resolveOutpatientEmrTemplateSnapshot').mockImplementation(async input => ({
-    ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v1', id: null, cacheHit: false,
+    ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v2', id: null, cacheHit: false, fieldPolicy: null,
     parseResult: null, receivedAt: null,
   }));
   vi.spyOn(snapshots, 'persistOutpatientEmrTemplateSnapshot').mockImplementation(async input => ({
-    id: 'SYN-SNAPSHOT', templateHash: input.templateHash, deduplicated: false, receivedAt: 1,
+    ...syntheticReceipt(input),
   }));
 });
 
 describe('first-pass voice recognition with a bound outpatient template', () => {
+  it('uses the saved rule in the ordinary voice stream and keeps the registration note as reference only', async () => {
+    vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot).mockRestore();
+    vi.mocked(regional.regionalPost).mockResolvedValue(policyWire.configured);
+    const { templateHtml, templateDefinition, templateId, templateName } = policyWire.request;
+    const context = { visitId: 'SYN-VOICE', template: { templateHtml, templateDefinition, templateId, templateName,
+      requestId: 'SYN-VOICE-CHIEF', targetFieldIds: ['symptom', 'duration', 'manualRemark'] } };
+    const template = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    expect(template?.identity.policyRevision).toBe(2);
+    vi.mocked(chatStream).mockImplementation(async (messages, onChunk) => {
+      expect(messages[0].content.split('持续时间由相邻栏填写。')).toHaveLength(2);
+      expect(messages[1].content).toContain('HIS已登记');
+      for (const event of [
+        { event: 'record_core', data: { chiefComplaint: '咳嗽3天' } },
+        { event: 'template_chapter', data: { chapterId: 'chief', fieldValues: { symptom: '咳嗽', duration: '3' } } },
+        { event: 'template_chapter', data: { chapterId: 'notes', fieldValues: { manualRemark: '越权的模型值' } } },
+        { event: 'diagnoses', data: [] }, { event: 'recommendation_plan', data: { mode: 'explicit_only', recommendNow: [] } },
+        { event: 'done', data: {} },
+      ]) onChunk(JSON.stringify(event) + '\n');
+    });
+    const result = await useVoiceIntentRecognition().processTranscript('本次主诉咳嗽3天', { outpatientTemplate: template });
+    expect(result?.voiceTemplateDraft?.fieldValues).toEqual({ symptom: '咳嗽', duration: '3' });
+    expect(result?.voiceTemplateDocument?.chapters.find(chapter => chapter.chapterId === 'chief')?.text).toBe('咳嗽3天');
+    expect(chatStream).toHaveBeenCalledOnce();
+    expect(chatFast).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])('uses the first ordinary stream for the full note and optional field values (reported=%s)', async reported => {
     const context = session();
     const templateWithPatient = templateHtml.replace('姓名：<span', 'SYN-PATIENT-NAME 姓名：<span');
@@ -79,9 +107,9 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     });
     expect(chatStream).toHaveBeenCalledTimes(1);
     const [systemPrompt, userPrompt] = vi.mocked(chatStream).mock.calls[0][0].map(message => message.content);
-    expect(systemPrompt).toContain('[topic:administrative] 页眉、身份、科室、签名');
+    expect(template!.fields.map(field => field.id)).not.toContain('就诊时间');
     expect(systemPrompt).toContain('[shape:measurement] 测量值字段');
-    expect(systemPrompt).toContain('outpatient-emr-field-prompt.v4');
+    expect(systemPrompt).toContain('outpatient-emr-field-prompt.v5');
     expect(systemPrompt).not.toContain('只能返回一个 JSON 对象');
     expect(userPrompt).not.toContain('SYN-PATIENT-NAME');
     expect(userPrompt).toContain('合成转写');
@@ -96,7 +124,7 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     expect(result?.factSuggestions).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'historyOfPresentIllness' })]));
     expect(result?.voiceTemplateDraft).toEqual({
       ...template!.identity, targetFieldIds: context.template.targetFieldIds,
-      fieldValues: reported ? { 痰声标志: '有', 收缩压: '120', 就诊时间: '' } : {},
+      fieldValues: reported ? { 痰声标志: '有', 收缩压: '120' } : {},
     });
     expect(progress.find(part => part.readySections.includes('record_core'))?.result.voiceTemplateDraft).toBeUndefined();
     expect(progress.find(part => part.readySections.includes('record_extra'))?.result.voiceTemplateDraft).toEqual(result?.voiceTemplateDraft);
@@ -254,12 +282,12 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     const cached = getPreparedVoiceOutpatientTemplate(context, request);
     expect(Object.keys(cached!).sort()).toEqual(['source', 'template', 'templateHash']);
     expect(cached?.source).toEqual({ templateHtml, templateDefinition });
-    expect(cached?.template.targetFields.map(field => field.id)).toEqual(first?.fields.map(field => field.id));
+    expect(cached?.template.targetFields.filter(field => field.aiSuitable).map(field => field.id)).toEqual(first?.fields.map(field => field.id));
     expect(await hashVoiceOutpatientRecognitionTemplate(context)).toBe(first?.identity.templateHash);
     expect((await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true))?.identity).toEqual(first?.identity);
     expect(regional.regionalPost).toHaveBeenCalledTimes(1);
-    expect(snapshots.resolveOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(1);
-    expect(snapshots.persistOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(1);
+    expect(snapshots.resolveOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(2);
+    expect(snapshots.persistOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(2);
 
     expect(getPreparedVoiceOutpatientTemplate(session(), request)).toBeUndefined();
     for (const changed of [
@@ -278,7 +306,7 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     await prepareVoiceOutpatientRecognitionTemplate(first, [], () => true);
     const all = getPreparedVoiceOutpatientTemplate(first)!.template.fields;
     vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot).mockImplementationOnce(async input => ({
-      ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v1', cacheHit: true, id: 'existing',
+      ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v2', cacheHit: true, fieldPolicy: syntheticFieldPolicy(all), id: 'existing',
       receivedAt: 1, parseResult: { schemaVersion: 'outpatient-emr-template-pair.v1', fields: all.map(field => (
         field.id === '收缩压' ? { ...field, mappingSource: 'manual-override', recordField: 'physicalExam' } : field
       )) },
@@ -286,7 +314,7 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     const next = session();
     const hit = await prepareVoiceOutpatientRecognitionTemplate(next, [], () => true);
     expect(hit?.fields.find(field => field.id === '收缩压')?.mappingSource).toBe('manual-override');
-    expect(getPreparedVoiceOutpatientTemplate(next)?.template.targetFields).toEqual(hit?.fields);
+    expect(getPreparedVoiceOutpatientTemplate(next)?.template.targetFields.filter(field => field.aiSuitable)).toEqual(hit?.fields);
     expect(snapshots.resolveOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(2);
     expect(snapshots.persistOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(1);
   });
@@ -295,7 +323,7 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     let current = true;
     vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot).mockImplementationOnce(async input => {
       current = false;
-      return { ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v1', cacheHit: false, id: null,
+      return { ...input, schemaVersion: 'outpatient-emr-template-pair-resolution.v2', cacheHit: false, fieldPolicy: null, id: null,
         parseResult: null, receivedAt: null };
     });
     expect(await prepareVoiceOutpatientRecognitionTemplate(session(), [], () => current)).toBeUndefined();

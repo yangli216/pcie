@@ -1,3 +1,4 @@
+import { syntheticFieldPolicy, syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   OutpatientEmrAnalysisRequest,
@@ -85,7 +86,7 @@ describe('outpatientEmrTemplateSnapshotService', () => {
 
     expect(payload.parseResult.fields).toHaveLength(2);
     expect(payload).toEqual(expect.objectContaining({
-      schemaVersion: 'outpatient-emr-template-pair-snapshot.v1',
+      schemaVersion: 'outpatient-emr-template-pair-snapshot.v2',
       templateId: 'TPL-001',
       templateHtml: request.templateHtml,
       templateDefinition: request.templateDefinition,
@@ -99,6 +100,7 @@ describe('outpatientEmrTemplateSnapshotService', () => {
 
   it('uses the signed regional client endpoint', async () => {
     regionalMocks.post.mockResolvedValueOnce({
+      ...syntheticReceipt({ request, template, templateHash: 'a'.repeat(64) }),
       id: 'snapshot-1',
       templateHash: 'a'.repeat(64),
       deduplicated: false,
@@ -114,7 +116,7 @@ describe('outpatientEmrTemplateSnapshotService', () => {
     expect(regionalMocks.post).toHaveBeenCalledWith(
       '/v1/client/outpatient-emr/templates/snapshots',
       expect.objectContaining({
-        schemaVersion: 'outpatient-emr-template-pair-snapshot.v1',
+        schemaVersion: 'outpatient-emr-template-pair-snapshot.v2',
         templateId: 'TPL-001',
       }),
     );
@@ -128,8 +130,8 @@ describe('outpatientEmrTemplateSnapshotService', () => {
       templateHash,
     }).parseResult;
     regionalMocks.post.mockResolvedValueOnce({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-      cacheHit: true,
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+      cacheHit: true, fieldPolicy: syntheticFieldPolicy(template.fields),
       id: 'snapshot-history',
       templateId: request.templateId,
       templateHash,
@@ -146,20 +148,28 @@ describe('outpatientEmrTemplateSnapshotService', () => {
       templateId: request.templateId,
       templateHash,
     })).toEqual({
-      schemaVersion: 'outpatient-emr-template-pair-resolve.v1',
+      schemaVersion: 'outpatient-emr-template-pair-resolve.v2',
       templateId: request.templateId,
       templateHash,
     });
     expect(regionalMocks.post).toHaveBeenCalledWith(
       '/v1/client/outpatient-emr/templates/snapshots/resolve',
       {
-        schemaVersion: 'outpatient-emr-template-pair-resolve.v1',
+        schemaVersion: 'outpatient-emr-template-pair-resolve.v2',
         templateId: request.templateId,
         templateHash,
       },
     );
     expect(result.cacheHit).toBe(true);
     expect(result.parseResult?.fields).toHaveLength(2);
+  });
+
+  it('identifies legacy servers on both resolve and registration', async () => {
+    const templateHash = 'b'.repeat(64);
+    regionalMocks.post.mockResolvedValueOnce({ schemaVersion: 'outpatient-emr-template-pair-resolution.v1' })
+      .mockResolvedValueOnce({ schemaVersion: 'outpatient-emr-template-pair-receipt.v1' });
+    await expect(resolveOutpatientEmrTemplateSnapshot({ templateId: request.templateId, templateHash })).rejects.toThrow('请先升级 PCIE Server');
+    await expect(persistOutpatientEmrTemplateSnapshot({ request, template, templateHash })).rejects.toThrow('请先升级 PCIE Server');
   });
 
   it('accepts a server manual-override mapping on a historical hit', async () => {
@@ -176,8 +186,8 @@ describe('outpatientEmrTemplateSnapshotService', () => {
       projectionMode: 'section-compose',
     };
     regionalMocks.post.mockResolvedValueOnce({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-      cacheHit: true,
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+      cacheHit: true, fieldPolicy: syntheticFieldPolicy(template.fields),
       id: 'snapshot-manual',
       templateId: request.templateId,
       templateHash,
@@ -201,8 +211,8 @@ describe('outpatientEmrTemplateSnapshotService', () => {
     const templateHash = 'a'.repeat(64);
     const [valid, ambiguous] = buildOutpatientEmrTemplateSnapshotRequest({ request, template, templateHash }).parseResult.fields;
     regionalMocks.post.mockResolvedValueOnce({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-      cacheHit: true, id: 'snapshot-partial', templateId: request.templateId, templateHash, receivedAt: 8,
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+      cacheHit: true, fieldPolicy: syntheticFieldPolicy(template.fields), id: 'snapshot-partial', templateId: request.templateId, templateHash, receivedAt: 8,
       parseResult: {
         schemaVersion: 'outpatient-emr-template-pair.v1',
         fields: [valid, ambiguous, { id: ambiguous.id, readonly: 'broken' }, null],
@@ -226,9 +236,9 @@ describe('outpatientEmrTemplateSnapshotService', () => {
   it('returns only an explicit miss and rejects malformed historical responses', async () => {
     const templateHash = 'c'.repeat(64);
     regionalMocks.post.mockResolvedValueOnce({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
       cacheHit: false,
-      id: null,
+      fieldPolicy: null, id: null,
       templateId: request.templateId,
       templateHash,
       parseResult: null,
@@ -244,8 +254,8 @@ describe('outpatientEmrTemplateSnapshotService', () => {
     }));
 
     regionalMocks.post.mockResolvedValueOnce({
-      schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-      cacheHit: true,
+      schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+      cacheHit: true, fieldPolicy: syntheticFieldPolicy(template.fields),
       id: 'snapshot-broken',
       templateId: request.templateId,
       templateHash,

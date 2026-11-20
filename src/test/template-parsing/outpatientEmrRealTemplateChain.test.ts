@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // 真实模板串联：真实模板对 → 字段 prompt generator → Fake 模型输出 → 规范化 → 草稿来源
 // → 医生补选 → 同源 builder → SDK 终态校验。模型为 Fake，不连接真实 AI 或 HIS。
-// @ts-expect-error Node built-ins are provided by Vitest but @types/node is not a direct project dependency.
-import { runInNewContext } from 'node:vm';
+import { deliverToOutpatientSdk } from './outpatientSdkHarness';
+import { syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { describe, expect, it, vi } from 'vitest';
 import { analyzeOutpatientEmrFields } from '@features/outpatient-emr/api/outpatientEmrService';
 import { OUTPATIENT_EMR_PROMPT_VERSION } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
@@ -13,24 +13,18 @@ import type {
 } from '@features/outpatient-emr/types';
 import templateHtml from './fixtures/real-template.html?raw';
 import templateDefinition from './fixtures/real-template.json?raw';
-import sdkSource from '../../../sdk/med-hermes-sdk.js?raw';
 
 vi.mock('@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService', () => ({
   resolveOutpatientEmrTemplateSnapshot: vi.fn(async ({ templateId, templateHash }) => ({
-    schemaVersion: 'outpatient-emr-template-pair-resolution.v1',
-    cacheHit: false,
+    schemaVersion: 'outpatient-emr-template-pair-resolution.v2',
+    cacheHit: false, fieldPolicy: null,
     id: null,
     templateId,
     templateHash,
     parseResult: null,
     receivedAt: null,
   })),
-  persistOutpatientEmrTemplateSnapshot: vi.fn().mockResolvedValue({
-    id: 'snapshot-real',
-    templateHash: 'hash',
-    deduplicated: false,
-    receivedAt: 1,
-  }),
+  persistOutpatientEmrTemplateSnapshot: vi.fn().mockImplementation(input => syntheticReceipt(input)),
 }));
 
 
@@ -82,29 +76,6 @@ function createRequest(): OutpatientEmrAnalysisRequest {
   };
 }
 
-type MedHermesConstructor = new () => {
-  analyzeOutpatientEmr(request: OutpatientEmrAnalysisRequest): Promise<Record<string, unknown>>;
-  _http: { post: (...args: unknown[]) => Promise<unknown> };
-  _callWithFallback: (httpCall: () => Promise<unknown>) => Promise<unknown>;
-  _resumeEventChannelIfNeeded: () => void;
-  _dispatchEnvelope(envelope: unknown): void;
-};
-
-function loadSdk(): MedHermesConstructor {
-  const moduleState: { exports: unknown } = { exports: {} };
-  const sandbox: Record<string, unknown> = {
-    module: moduleState,
-    exports: moduleState.exports,
-    AbortController,
-    setTimeout,
-    clearTimeout,
-    console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  };
-  sandbox.globalThis = sandbox;
-  runInNewContext(sdkSource, sandbox);
-  return moduleState.exports as MedHermesConstructor;
-}
-
 describe('outpatient EMR real-template chain (Fake model)', () => {
   it('produces one SDK-accepted record-confirmed from the real template pair', async () => {
     const chatFast = vi.fn(async (messages: Array<{ role: string; content: string }>) => {
@@ -137,7 +108,7 @@ describe('outpatient EMR real-template chain (Fake model)', () => {
     expect(user).not.toContain('SIM-VISIT-CHAIN-01');
 
     expect(analysis.fieldValues.value['就诊时间']).toBe('2025-03-18 10:52');
-    expect(analysis.fieldValueSources.value['就诊时间']).toBe('template');
+    expect(analysis.fieldValueSources.value['就诊时间']).toBe('his');
     expect(analysis.fieldValues.value['高血压病史标志']).toBe('有');
     expect(analysis.fieldValueSources.value['主诉文本']).toBe('ai');
     // 模型返回空串表示无法确定，允许医生选填，回写保留其余控件的 HIS 原值。
@@ -162,24 +133,6 @@ describe('outpatient EMR real-template chain (Fake model)', () => {
     expect(result.outpatientRecord?.maritalReproductiveHistory).toContain('已婚已育');
     expect(JSON.stringify(result)).not.toContain('"source"');
 
-    const MedHermes = loadSdk();
-    const sdk = new MedHermes();
-    sdk._resumeEventChannelIfNeeded = vi.fn();
-    sdk._callWithFallback = (httpCall) => httpCall();
-    sdk._http.post = vi.fn().mockResolvedValue({ status: 'success' });
-    const pending = sdk.analyzeOutpatientEmr(request);
-    sdk._dispatchEnvelope({
-      state: 'ready',
-      event: {
-        id: `${request.visitId}:${request.requestId}:record-confirmed:1`,
-        type: 'record-confirmed',
-        consultationId: request.visitId,
-        requestId: request.requestId,
-        timestamp: result.timestamp,
-        terminal: false,
-        payload: result,
-      },
-    });
-    await expect(pending).resolves.toEqual(result);
+    await expect(deliverToOutpatientSdk(request, result)).resolves.toEqual(result);
   });
 });

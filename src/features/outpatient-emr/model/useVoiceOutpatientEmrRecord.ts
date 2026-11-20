@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, shallowRef, watch, type Ref } from 'vue';
 import type { AppPatient } from '@/types/appState';
+import { buildOutpatientEmrFieldRules, resolveOutpatientEmrFieldPromptProfiles } from '../lib/outpatientEmrPromptGenerator';
 import { analyzeOutpatientEmrFields } from '../api/outpatientEmrService';
 import { isSameOutpatientEmrAnalysisRequestSnapshot } from '../lib/outpatientEmrRequestIdentity';
 import { isAdministrativeTemplateSlot } from '../lib/outpatientEmrPromptGenerator';
@@ -17,7 +18,7 @@ import {
 import { isVoiceOutpatientEmrFieldBound } from '../lib/outpatientEmrDraftSource';
 import { resolveOutpatientEmrFinalDictionaryItem } from '../lib/outpatientEmrDictionary';
 import { patchVoiceRecordFieldEdit } from '../lib/voiceOutpatientEmrFieldEdit';
-import { getPreparedVoiceOutpatientTemplate, matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
+import { describeOutpatientTemplateReferences, getPreparedVoiceOutpatientTemplate, matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
 import { buildVoiceOutpatientEmrPatientInput } from '../lib/voiceOutpatientEmr';
 import {
   voiceOutpatientEmrDraftCache, type ReviewedVoiceSections, type VoiceOutpatientEmrReviewSnapshot,
@@ -31,6 +32,7 @@ import type {
   OutpatientEmrRecordContext,
   OutpatientEmrRecordField,
   OutpatientEmrTemplateField,
+  OutpatientEmrTemplateParseResult,
   VoiceOutpatientEmrDocument,
   VoiceOutpatientEmrInitialDraft,
   VoiceOutpatientEmrStartContext,
@@ -157,6 +159,8 @@ export function useVoiceOutpatientEmrRecord(
   const streamDocument = computed(() => {
     const context = templateSource.matchingContext.value;
     const document = options.document?.value;
+    const policy = preparedTemplate.value?.fieldPolicy;
+    if (policy && (document?.policyRevision !== policy.revision || document?.ruleSetVersion !== policy.ruleSetVersion)) return;
     return context && analysis.analysisErrorCode.value !== 'REQUEST_ID_CONFLICT' && matchesVoiceOutpatientRecognitionTemplate(document, context,
       analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(context)?.templateHash || options.initialDraft?.value?.templateHash)
       ? document : undefined;
@@ -168,8 +172,13 @@ export function useVoiceOutpatientEmrRecord(
     const session = templateSource.matchingContext.value;
     const initial = options.initialDraft?.value;
     const waitingForLeaves = ['idle', 'analyzing'].includes(analysis.analysisStatus.value);
-    const initialValues = waitingForLeaves && initial && session && matchesVoiceOutpatientRecognitionTemplate(initial, session,
-      analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(session)?.templateHash) ? initial.fieldValues : {};
+    const active = preparedTemplate.value;
+    const initialMatches = initial && active?.fieldPolicy && initial.policyRevision === active.fieldPolicy.revision
+      && initial.ruleSetVersion === active.fieldPolicy.ruleSetVersion;
+    const initialValues = waitingForLeaves && session && initialMatches && matchesVoiceOutpatientRecognitionTemplate(initial, session,
+      analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(session)?.templateHash)
+      ? Object.fromEntries(active.targetFields.filter(field => field.aiSuitable && Object.prototype.hasOwnProperty.call(initial.fieldValues, field.id))
+        .map(field => [field.id, initial.fieldValues[field.id]])) : {};
     const incoming = new Map(streamed?.chapters.map(chapter => [chapter.chapterId, chapter]));
     const chapters = preparedTemplate.value ? sourceChapters.value : (streamed?.chapters ?? []).map(chapter => ({
       id: chapter.chapterId, title: chapter.title, fields: [], sections: [],
@@ -182,7 +191,7 @@ export function useVoiceOutpatientEmrRecord(
         : generated?.editableFieldIds ?? generated?.fieldIds.filter(id => streamed?.targetFieldIds.includes(id)) ?? [];
       const recordFields = [...new Set(fields.flatMap(field => field.recordField ? [field.recordField] : []))];
       const direct = outpatientEmrChapterTextField(chapter);
-      const legacyRecordText = !streamed && direct?.recordField && analysis.fieldValueSources.value[direct.id] !== 'doctor'
+      const legacyRecordText = !streamed && direct?.aiSuitable && direct.recordField && analysis.fieldValueSources.value[direct.id] !== 'doctor'
         && sourceChapters.value.filter(item => item.fields.some(slot => slot.editable && slot.field.recordField === direct.recordField)).length === 1
         ? options.getLegacyRecord?.()?.[direct.recordField] : undefined;
       const legacyValue = direct && legacyRecordText?.trim()
@@ -282,17 +291,35 @@ export function useVoiceOutpatientEmrRecord(
   }
 
   function getSupplementChapters() {
+    const modelIds = new Set(analysis.targetFields.value.filter(f => f.aiSuitable).map(f => f.id));
     return chapterRows.value.filter(row => row.fieldIds.length).map(row => ({
       chapterId: row.key, title: row.label, text: row.text, fieldIds: row.fields.map(field => field.id),
       narrative: describeOutpatientEmrNarrative(row.sections, [analysis.request.value?.patient?.name,
         analysis.request.value?.patient?.idPi, analysis.request.value?.visitId]),
-      editableFieldIds: row.fieldIds, directTextFieldId: row.direct?.id,
+      editableFieldIds: row.fieldIds.filter(id => modelIds.has(id)),
+      directTextFieldId: row.direct && modelIds.has(row.direct.id) ? row.direct.id : undefined,
       recordField: row.sections.length === 1 ? row.sections[0].recordField : null,
     }));
   }
 
+  function supplementEvidence(parsed: OutpatientEmrTemplateParseResult) {
+    const request = analysis.request.value;
+    if (!request) return {};
+    const definition = templateSource.prepared.value?.templateDefinition ?? request.templateDefinition;
+    return {
+      templateReferenceChapters: describeOutpatientTemplateReferences(parsed, definition,
+        [request.patient?.name, request.patient?.idPi, request.visitId]),
+      templateSourceNotes: parsed.templateSourceNotes,
+    };
+  }
+
+  function supplementRules() {
+    const fields = analysis.targetFields.value.filter(f => f.aiSuitable);
+    return buildOutpatientEmrFieldRules(resolveOutpatientEmrFieldPromptProfiles(fields), fields).join('\n');
+  }
+
   function applySupplementPatch(fields: OutpatientEmrTemplateField[], values: Readonly<Record<string, string | null>>): void {
-    const targets = fields.filter(field => typeof values[field.id] === 'string' && !analysis.isIndividuallyEdited(field.id));
+    const targets = fields.filter(field => field.aiSuitable && typeof values[field.id] === 'string' && !analysis.isIndividuallyEdited(field.id));
     analysis.replaceReviewedSectionValues(targets.filter(field => values[field.id] !== ''), values);
     // An explicit clear is a writable empty text. An unknown value leaves the original slot alone.
     analysis.replaceReviewedSectionValues(targets.filter(field => values[field.id] === ''), {}, true);
@@ -300,7 +327,7 @@ export function useVoiceOutpatientEmrRecord(
 
   function supplementTargets(row: (typeof chapterRows.value)[number], values: Readonly<Record<string, string | null>>) {
     return row.fields.filter(field => {
-      if (!row.fieldIds.includes(field.id) || !Object.prototype.hasOwnProperty.call(values, field.id)
+      if (!field.aiSuitable || !row.fieldIds.includes(field.id) || !Object.prototype.hasOwnProperty.call(values, field.id)
         || analysis.isIndividuallyEdited(field.id)) return false;
       const value = values[field.id];
       return typeof value === 'string' && !isVoiceOutpatientEmrFieldPlaceholder(field, value, fieldPlaceholders.value.get(field.id))
@@ -337,6 +364,7 @@ export function useVoiceOutpatientEmrRecord(
       applySupplementPatch(targets, leaves);
       reviewedSections.value = { ...reviewedSections.value, [key]: {
         chapterId: row.key, supplement: true, text: '',
+        policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion,
         values: { ...reviewedSections.value[key]?.values, ...leaves },
       } };
     }
@@ -350,7 +378,7 @@ export function useVoiceOutpatientEmrRecord(
     const fieldEdits = collectDoctorEdits();
     if (!chapters.length && !Object.keys(fieldEdits).length) return;
     return { visitId: request.visitId, requestId: request.requestId, templateId: request.templateId,
-      templateHash: analysis.templateHash.value, targetFieldIds: [...request.targetFieldIds], chapters, fieldEdits };
+      templateHash: analysis.templateHash.value, policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion, targetFieldIds: [...request.targetFieldIds], chapters, fieldEdits };
   });
 
   function restoreReviewSnapshot(snapshot?: VoiceOutpatientEmrReviewSnapshot): void {
@@ -375,7 +403,10 @@ export function useVoiceOutpatientEmrRecord(
         || !chapterRows.value.some(row => row.key === edit.chapterId && row.fieldIds.length)) continue;
       const key = chapterKey(edit.chapterId);
       if (reviewedSections.value[key]) continue;
-      reviewedSections.value = { ...reviewedSections.value, [key]: edit };
+      const samePolicy = snapshot.policyRevision === analysis.template.value.fieldPolicy?.revision
+        && snapshot.ruleSetVersion === analysis.template.value.fieldPolicy?.ruleSetVersion;
+      if (edit.supplement && !samePolicy) continue;
+      reviewedSections.value = { ...reviewedSections.value, [key]: samePolicy ? edit : { ...edit, values: undefined } };
       void syncReviewedSection(key, 'restore');
     }
   });
@@ -396,8 +427,16 @@ export function useVoiceOutpatientEmrRecord(
     const sections = chapter?.sections ?? narrativeSections.value.filter(section => section.recordField === key);
     const fields = chapter ? chapter.fields.filter(item => item.editable).map(item => item.field)
       : analysis.targetFields.value.filter(field => field.recordField === key);
+    const policy = analysis.template.value.fieldPolicy;
+    const samePolicy = edit.policyRevision === policy?.revision && edit.ruleSetVersion === policy?.ruleSetVersion;
     if (edit.supplement) {
-      applySupplementPatch(fields, edit.values ?? {});
+      if (!samePolicy) {
+        const retained = { ...reviewedSections.value };
+        delete retained[key];
+        reviewedSections.value = retained;
+        return true;
+      }
+      applySupplementPatch(fields.filter(field => field.aiSuitable), edit.values ?? {});
       return true;
     }
     const direct = chapter ? fields.filter(field => outpatientEmrChapterTextField(chapter)?.id === field.id)
@@ -409,35 +448,49 @@ export function useVoiceOutpatientEmrRecord(
       return true;
     }
     for (const field of editable.filter(field => direct.includes(field))) analysis.updateFieldValue(field.id, edit.text);
-    const targets = compound.filter(field => !analysis.isIndividuallyEdited(field.id));
-    if (!targets.length) return true;
-    if (edit.values || (edit.error && mode !== 'retry')) {
+    const targets = compound.filter(field => field.aiSuitable && !analysis.isIndividuallyEdited(field.id));
+    if (!compound.some(field => !analysis.isIndividuallyEdited(field.id))) return true;
+    if (samePolicy && (edit.values || (edit.error && mode !== 'retry'))) {
       analysis.replaceReviewedSectionValues(targets, edit.values ?? {});
       return !edit.error;
     }
     // Remove superseded facts before starting the request. Early confirmation and
     // failures may still submit the reviewed paragraph, but never its old leaves.
-    analysis.replaceReviewedSectionValues(targets, {});
+    analysis.replaceReviewedSectionValues(targets.filter(f => !['structured', 'his'].includes(analysis.fieldValueSources.value[f.id])), {});
     reviewedSections.value = { ...reviewedSections.value, [key]: { chapterId: edit.chapterId, text: edit.text } };
     const run = new AbortController();
     sectionRuns.set(key, run);
     try {
+      const refreshed = await analysis.refreshPolicyForModel(() => !run.signal.aborted && sectionRuns.get(key) === run);
+      if (!refreshed || run.signal.aborted) return false;
+      const originalIds = new Set(fields.map(f => f.id));
+      const allowed = refreshed.targetFields.filter(f => originalIds.has(f.id) && f.aiSuitable && !analysis.isIndividuallyEdited(f.id) && !direct.some(d => d.id === f.id));
+      if (!allowed.length) return true;
+      const identifiers = [request.patient?.name, request.patient?.idPi, request.visitId];
+      const definition = templateSource.prepared.value?.templateDefinition ?? request.templateDefinition;
+      const doctors = modelFields(refreshed.targetFields).filter(field => field.source === 'doctor');
       const result = await analyzeFields({
-        request: { ...request, targetFieldIds: targets.map(field => field.id),
-          recordContext: { reviewedSection: chapter?.title ?? key, ...(chapter ? { chapterId: chapter.id } : {}), recordText: edit.text } },
-        fields: targets, reviewedSectionOnly: true,
+        templateSourceNotes: refreshed.templateSourceNotes,
+        templateReferenceChapters: describeOutpatientTemplateReferences(refreshed, definition, identifiers, allowed),
+        request: withOutpatientEmrDoctorEdits({ ...request, targetFieldIds: allowed.map(field => field.id),
+          recordContext: { ...request.recordContext, reviewedSection: chapter?.title ?? key, ...(chapter ? { chapterId: chapter.id } : {}), recordText: edit.text } }, doctors),
+        fields: allowed, reviewedSectionOnly: true,
         templateNarrative: describeOutpatientEmrNarrative(sections,
           [request.patient?.name, request.patient?.idPi, request.visitId]),
         signal: run.signal,
       });
-      if (run.signal.aborted || sectionRuns.get(key) !== run) return false;
-      analysis.replaceReviewedSectionValues(targets, result);
-      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], values: result } };
+      if (run.signal.aborted || sectionRuns.get(key) !== run
+        || refreshed.fieldPolicy?.revision !== analysis.template.value?.fieldPolicy?.revision
+        || refreshed.fieldPolicy?.ruleSetVersion !== analysis.template.value?.fieldPolicy?.ruleSetVersion) return false;
+      analysis.replaceReviewedSectionValues(allowed.filter(f => !analysis.isIndividuallyEdited(f.id)), result);
+      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], values: result,
+        policyRevision: refreshed.fieldPolicy?.revision, ruleSetVersion: refreshed.fieldPolicy?.ruleSetVersion } };
       return true;
     } catch (cause) {
       if (run.signal.aborted || sectionRuns.get(key) !== run) return false;
       const reason = cause instanceof Error ? cause.message : String(cause);
-      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], error: '病历修订后的模板字段更新失败：' + reason } };
+      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], policyRevision: analysis.template.value?.fieldPolicy?.revision,
+        ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion, error: '病历修订后的模板字段更新失败：' + reason } };
       return false;
     } finally {
       if (sectionRuns.get(key) === run) sectionRuns.delete(key);
@@ -657,7 +710,7 @@ export function useVoiceOutpatientEmrRecord(
     updateChapterText,
     updateChapterField,
     getModelDraft,
-    getSupplementChapters,
+    getSupplementChapters, supplementEvidence, supplementRules,
     previewSupplementRecord,
     applySupplementFields,
     updateReviewedRecordField,

@@ -40,6 +40,9 @@ export interface BuildClinicalResultRegenerationRequestInput {
     age?: string;
   };
   currentRecord: ClinicalResultRegenerationRecord;
+  templateFieldRules?: string;
+  templateReferenceChapters?: ReturnType<typeof import('@features/outpatient-emr/lib/voiceOutpatientEmrRecognition').describeOutpatientTemplateReferences>;
+  templateSourceNotes?: import('@features/outpatient-emr/types').OutpatientEmrTemplateSourceNote[];
   templateFields?: ReadonlyArray<{
     id: string;
     name?: string;
@@ -95,6 +98,7 @@ export function buildClinicalResultRegenerationRequest(
       ? '依据 templateChapters 的实际章节、固定句式及各填空位置，结合医生本次补充更新模板字段。'
       : '结合当前病例草稿与医生刚补充的本次就诊事实，重新生成完整病例正文。字段没有有效临床内容时输出空字符串。',
   ];
+  if (hasTemplate && input.templateFieldRules) system.push(input.templateFieldRules);
   if (input.templateFields?.length) {
     system.push('当前模板字段另列于 templateFields。source=unmentioned-default 表示问诊未提及时采用的书写默认值，不能据此写出患者明确否认、查体正常或检查阴性。结合字段含义使用有病例依据的事实。source=doctor 是医生对该字段的最新修订，空字符串表示医生已清空；正文草稿有冲突时按医生修订及本轮补充重写。');
   }
@@ -116,6 +120,8 @@ export function buildClinicalResultRegenerationRequest(
             patient: hasTemplate ? { gender: input.patient.gender, age: input.patient.age } : input.patient,
             currentRecord: input.currentRecord,
             ...(input.templateFields?.length ? { templateFields: input.templateFields } : {}),
+            ...(input.templateReferenceChapters?.length ? { templateReferenceChapters: input.templateReferenceChapters } : {}),
+            ...(input.templateSourceNotes?.length ? { templateSourceNotes: input.templateSourceNotes } : {}),
             ...(hasTemplate ? { templateChapters: input.templateChapters } : {}),
             doctorSupplement,
           }, null, 2),

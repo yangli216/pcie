@@ -10,6 +10,7 @@ const props = defineProps<{
   analysisStatus: OutpatientEmrAnalysisStatus;
   writebackStatus: OutpatientEmrWritebackStatus;
   fieldCount: number;
+  resultSummary: string;
   errorCode?: string;
   errorMessage?: string;
   writebackMessage?: string;
@@ -20,7 +21,7 @@ const presentation = computed(() => {
     return {
       icon: 'lucide:loader-circle',
       title: '正在分析模板字段',
-      detail: `本次只分析 ${props.fieldCount} 个可回填字段`,
+      detail: `本次 AI 可填写 ${props.fieldCount} 个字段`,
       tone: 'working',
     };
   }
@@ -38,8 +39,8 @@ const presentation = computed(() => {
   if (props.analysisStatus === 'ready') {
     return {
       icon: 'lucide:circle-check',
-      title: '分析完成，等待医生确认',
-      detail: `已生成 ${props.fieldCount} 个模板字段草稿，可直接在病历中修改`,
+      title: props.resultSummary.startsWith('待补充') ? '病历待补充' : '等待医生确认',
+      detail: props.resultSummary,
       tone: 'ready',
     };
   }

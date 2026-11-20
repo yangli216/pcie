@@ -1,6 +1,8 @@
 import { regionalPost } from '@/services/regionalClient';
 import type {
   OutpatientEmrAnalysisRequest,
+  OutpatientFieldPolicy,
+  OutpatientFieldRule,
   OutpatientEmrFieldMappingSource,
   OutpatientEmrProjectionMode,
   OutpatientEmrRecordField,
@@ -10,8 +12,8 @@ import type {
 
 type UnknownRecord = Record<string, unknown>;
 
-const RESOLVE_SCHEMA = 'outpatient-emr-template-pair-resolve.v1' as const;
-const RESOLUTION_SCHEMA = 'outpatient-emr-template-pair-resolution.v1' as const;
+const RESOLVE_SCHEMA = 'outpatient-emr-template-pair-resolve.v2' as const;
+const RESOLUTION_SCHEMA = 'outpatient-emr-template-pair-resolution.v2' as const;
 const PARSE_SCHEMA = 'outpatient-emr-template-pair.v1' as const;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const RECORD_FIELDS = new Set<OutpatientEmrRecordField>([
@@ -59,7 +61,7 @@ export interface OutpatientEmrTemplateParseSnapshot {
 }
 
 export interface OutpatientEmrTemplateSnapshotRequest {
-  schemaVersion: 'outpatient-emr-template-pair-snapshot.v1';
+  schemaVersion: 'outpatient-emr-template-pair-snapshot.v2';
   templateId: string;
   templateName: string;
   templateHash: string;
@@ -69,6 +71,10 @@ export interface OutpatientEmrTemplateSnapshotRequest {
 }
 
 export interface OutpatientEmrTemplateSnapshotReceipt {
+  schemaVersion: 'outpatient-emr-template-pair-receipt.v2';
+  templateId: string;
+  parseResult: OutpatientEmrTemplateParseSnapshot;
+  fieldPolicy: OutpatientFieldPolicy;
   id: string;
   templateHash: string;
   deduplicated: boolean;
@@ -88,6 +94,7 @@ export interface OutpatientEmrTemplateSnapshotResolution {
   templateId: string;
   templateHash: string;
   parseResult: OutpatientEmrTemplateParseSnapshot | null;
+  fieldPolicy: OutpatientFieldPolicy | null;
   receivedAt: number | null;
 }
 
@@ -284,13 +291,46 @@ function parseSnapshot(value: unknown): OutpatientEmrTemplateParseSnapshot {
   return { schemaVersion: PARSE_SCHEMA, fields };
 }
 
+function parsePolicy(value: unknown): OutpatientFieldPolicy {
+  const policy = requireExactObject(value, ['schemaVersion','templateState','revision','ruleSetVersion','fields'], 'fieldPolicy');
+  const state = policy.templateState;
+  if (policy.schemaVersion !== 'outpatient-emr-field-policy.v1' || (state !== 'enabled' && state !== 'disabled' && state !== 'deleted')
+    || typeof policy.ruleSetVersion !== 'string' || !/^outpatient-emr-field-prompt\.v[1-9]\d*$/.test(policy.ruleSetVersion)
+    || !Array.isArray(policy.fields) || policy.fields.length > 2000 || (state !== 'enabled' && policy.fields.length > 0)) {
+    throw new Error('门诊模板字段规则协议不兼容。');
+  }
+  const fields = new Map<string, OutpatientFieldRule>();
+  const seenIds = new Set<string>();
+  for (const item of policy.fields) {
+    if (!isRecord(item) || typeof item.fieldId !== 'string') continue;
+    const id = item.fieldId;
+    if (seenIds.has(id)) { fields.delete(id); continue; }
+    seenIds.add(id);
+    if (!id || id.length > 512 || id.trim() !== id || Object.keys(item).length !== 7
+      || typeof item.meaning !== 'string' || !item.meaning.trim() || typeof item.aiSuitable !== 'boolean'
+      || typeof item.generationSource !== 'string' || !['default','protected','manual-override'].includes(item.generationSource)) continue;
+    const valid = item.aiSuitable
+      ? item.generationSource !== 'protected' && (item.promptSource === 'default' || item.promptSource === 'custom')
+        && typeof item.resolvedPrompt === 'string' && !!item.resolvedPrompt.trim()
+        && (item.unmentionedDefault === null || (typeof item.unmentionedDefault === 'string' && !!item.unmentionedDefault.trim()))
+      : item.promptSource === 'not_ai' && item.resolvedPrompt === null && item.unmentionedDefault === null;
+    if (valid) fields.set(id, item as unknown as OutpatientFieldRule);
+  }
+  return { schemaVersion: 'outpatient-emr-field-policy.v1', templateState: state,
+    revision: requireTimestamp(policy.revision, 'fieldPolicy.revision'), ruleSetVersion: policy.ruleSetVersion, fields: [...fields.values()] };
+}
+
 function parseResolution(
   value: unknown,
   expected: ResolveOutpatientEmrTemplateSnapshotInput,
 ): OutpatientEmrTemplateSnapshotResolution {
+  if (isRecord(value) && value.schemaVersion === 'outpatient-emr-template-pair-resolution.v1') {
+    throw new Error('模板历史解析响应的 schemaVersion 为 v1，请先升级 PCIE Server 以读取字段书写规则。');
+  }
   const record = requireExactObject(value, [
     'schemaVersion',
     'cacheHit',
+    'fieldPolicy',
     'id',
     'templateId',
     'templateHash',
@@ -310,7 +350,7 @@ function parseResolution(
     throw new Error('模板历史解析响应身份与当前模板不一致。');
   }
   if (!cacheHit) {
-    if (record.id !== null || record.parseResult !== null || record.receivedAt !== null) {
+    if (record.fieldPolicy !== null || record.id !== null || record.parseResult !== null || record.receivedAt !== null) {
       throw new Error('模板历史解析未命中响应必须显式返回空详情。');
     }
     return {
@@ -320,6 +360,7 @@ function parseResolution(
       templateId,
       templateHash,
       parseResult: null,
+      fieldPolicy: null,
       receivedAt: null,
     };
   }
@@ -333,19 +374,29 @@ function parseResolution(
     templateId,
     templateHash,
     parseResult,
+    fieldPolicy: parsePolicy(record.fieldPolicy),
     receivedAt,
   };
 }
 
-function parseReceipt(value: unknown, expectedHash: string): OutpatientEmrTemplateSnapshotReceipt {
+function parseReceipt(value: unknown, expectedHash: string, expectedId: string): OutpatientEmrTemplateSnapshotReceipt {
+  if (isRecord(value) && value.schemaVersion === 'outpatient-emr-template-pair-receipt.v1') {
+    throw new Error('模板登记回执的 schemaVersion 为 v1，请先升级 PCIE Server 以读取字段书写规则。');
+  }
   const record = requireExactObject(
     value,
-    ['id', 'templateHash', 'deduplicated', 'receivedAt'],
+    ['schemaVersion', 'id', 'templateId', 'templateHash', 'deduplicated', 'receivedAt', 'parseResult', 'fieldPolicy'],
     '模板解析登记响应',
   );
   const templateHash = requireString(record, 'templateHash', '模板解析登记响应');
+  if (record.schemaVersion !== 'outpatient-emr-template-pair-receipt.v2' || record.templateId !== expectedId)
+    throw new Error('模板解析登记响应版本或模板 ID 不一致，请核对服务端版本。');
   if (templateHash !== expectedHash) throw new Error('模板解析登记响应 hash 与当前模板不一致。');
   return {
+    schemaVersion: 'outpatient-emr-template-pair-receipt.v2',
+    templateId: expectedId,
+    parseResult: parseSnapshot(record.parseResult),
+    fieldPolicy: parsePolicy(record.fieldPolicy),
     id: requireString(record, 'id', '模板解析登记响应'),
     templateHash,
     deduplicated: requireBoolean(record, 'deduplicated', '模板解析登记响应'),
@@ -357,7 +408,7 @@ export function buildOutpatientEmrTemplateSnapshotRequest(
   input: PersistOutpatientEmrTemplateSnapshotInput,
 ): OutpatientEmrTemplateSnapshotRequest {
   return {
-    schemaVersion: 'outpatient-emr-template-pair-snapshot.v1',
+    schemaVersion: 'outpatient-emr-template-pair-snapshot.v2',
     templateId: input.request.templateId,
     templateName: input.request.templateName,
     templateHash: input.templateHash,
@@ -397,5 +448,5 @@ export async function persistOutpatientEmrTemplateSnapshot(
     '/v1/client/outpatient-emr/templates/snapshots',
     buildOutpatientEmrTemplateSnapshotRequest(input),
   );
-  return parseReceipt(response, input.templateHash);
+  return parseReceipt(response, input.templateHash, input.request.templateId);
 }

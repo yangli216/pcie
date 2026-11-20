@@ -142,10 +142,17 @@ export function buildOutpatientEmrRecordConfirmedPayload(input: {
     );
   }
 
-  const currentValues = { ...input.fieldValues, ...input.documentDirectText };
+  const currentValues = { ...input.fieldValues };
+  for (const field of input.fields) {
+    // Manual controls already contain the HIS value or the doctor's explicit edit.
+    if (!field.aiSuitable && (field.generationRule || field.policyDisposition)) continue;
+    const direct = input.documentDirectText?.[field.id];
+    if (typeof direct === 'string') currentValues[field.id] = direct;
+  }
   if (input.reviewedRecord && !input.documentDirectText) {
     for (const field of input.fields) {
-      if (!field.recordField || !isDirectOutpatientEmrTextField(field)) continue;
+      if (!field.recordField || !isDirectOutpatientEmrTextField(field)
+        || (!field.aiSuitable && (field.generationRule || field.policyDisposition))) continue;
       const reviewed = input.reviewedRecord[field.recordField];
       if (typeof reviewed === 'string') currentValues[field.id] = reviewed;
     }

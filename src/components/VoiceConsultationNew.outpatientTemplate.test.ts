@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // Real result page, parser, model prompt/normalization, template editor and
 // merged writeback builder. Only native I/O, model and snapshot HTTP are Fake.
+import { syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
+import policyWire from '@/test/template-parsing/fixtures/outpatient-field-policy-wire.json';
+import * as snapshots from '@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService';
 import { createApp, defineComponent, h, nextTick, ref, type App, type Ref } from 'vue';
 import { createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -93,7 +96,7 @@ vi.mock('@/services/consultationUserLog', async original => ({
 }));
 vi.mock('@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService', () => ({
   resolveOutpatientEmrTemplateSnapshot: vi.fn().mockResolvedValue({ cacheHit: false }),
-  persistOutpatientEmrTemplateSnapshot: vi.fn().mockResolvedValue({ id: 'SYN-TEMPLATE-SNAPSHOT' }),
+  persistOutpatientEmrTemplateSnapshot: vi.fn().mockImplementation(input => syntheticReceipt(input)),
 }));
 vi.mock('@tauri-apps/plugin-http', async original => ({
   ...await original<any>(),
@@ -173,6 +176,7 @@ async function mountResult(
     legacyCache?: boolean;
     templateError?: string;
     fieldValues?: Record<string, string | null>;
+    policyRevision?: number;
     decoded?: { templateHtml: string; templateDefinition: string };
     streaming?: Ref<boolean>;
     chapters?: Array<Pick<NonNullable<ClinicalResultInput['voiceTemplateDocument']>['chapters'][number], 'chapterId' | 'title' | 'fieldIds'>>;
@@ -194,6 +198,7 @@ async function mountResult(
   if (options.templateError) intent.voiceTemplateError = options.templateError;
   else if (!options.legacyCache) intent.voiceTemplateDraft = {
     visitId: context.visitId, templateId: template.templateId, requestId: template.requestId,
+    policyRevision: options.policyRevision ?? 0, ruleSetVersion: 'outpatient-emr-field-prompt.v5',
     templateHash: await hashOutpatientEmrTemplate(source.templateHtml, source.templateDefinition),
     targetFieldIds: [...template.targetFieldIds], fieldValues: options.fieldValues ?? {},
   };
@@ -320,6 +325,46 @@ async function feedback(requestId: string, consultationId = 'SYN-VOICE-TPL-VISIT
 }
 
 describe('voice result with an HIS outpatient template', () => {
+  it('refreshes the saved split-field rule for a doctor supplement and submits the reviewed raw controls', async () => {
+    const { templateHtml, templateDefinition, templateId, templateName } = policyWire.request;
+    const context = { visitId: 'SYN-VOICE-TPL-VISIT', template: { templateId, templateName, templateHtml, templateDefinition,
+      requestId: 'SYN-SUPPLEMENT', targetFieldIds: ['symptom', 'duration', 'manualRemark'] } };
+    const api = await vi.importActual<typeof snapshots>('@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService');
+    const http = vi.spyOn(regionalClient, 'regionalPost').mockResolvedValue(policyWire.configured);
+    const resolve = vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot);
+    const previous = resolve.getMockImplementation()!;
+    resolve.mockImplementation(api.resolveOutpatientEmrTemplateSnapshot);
+    onTestFinished(() => { http.mockRestore(); resolve.mockImplementation(previous); });
+    host.diagnosis.mockResolvedValue(JSON.stringify([{ id: 'SYN-DX', code: 'J06.900', name: '急性上呼吸道感染', rate: '95%' }]));
+    host.regenerate.mockResolvedValue(JSON.stringify({ templateFieldValues: { duration: '4', manualRemark: '越权的模型值' } }));
+    await mountResult(context, ref(true), ref(false), [], undefined, '男', [], {
+      policyRevision: 2, fieldValues: { symptom: '咳嗽', duration: '3' }, diagnoses: [],
+    });
+    await vi.waitFor(() => expect(recordText('主诉')).toBe('咳嗽3天'));
+    const beforeSupplement = http.mock.calls.length;
+    container.querySelector<HTMLButtonElement>('[aria-label="补充说明并重新生成病历"]')!.click();
+    await settle();
+    const supplement = document.querySelector<HTMLTextAreaElement>('.supplement-textarea')!;
+    supplement.value = '患者核对咳嗽已经4天';
+    supplement.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    document.querySelector<HTMLButtonElement>('.supplement-dialog .primary-button')!.click();
+    await vi.waitFor(() => expect(host.regenerate).toHaveBeenCalledOnce());
+    const [system, data] = host.regenerate.mock.calls[0][0];
+    const request = JSON.parse(data.content.split('输入数据如下：\n\n')[1]);
+    expect(http.mock.calls.slice(beforeSupplement).map(([path]) => path)).toContain('/v1/client/outpatient-emr/templates/snapshots/resolve');
+    expect(system.content.split('持续时间由相邻栏填写。')).toHaveLength(2);
+    expect(JSON.stringify(request.templateReferenceChapters)).toContain('HIS已登记');
+    expect(request.templateChapters.flatMap((chapter: { editableFieldIds: string[] }) => chapter.editableFieldIds)).toEqual(['symptom', 'duration']);
+    await vi.waitFor(() => expect(recordText('主诉')).toBe('咳嗽4天'));
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues).toMatchObject({ symptom: '咳嗽', duration: '4' });
+    expect(JSON.stringify(host.received[0])).not.toContain('越权的模型值');
+    expect(host.received[0].outpatientRecord.chiefComplaint).toBe('症状名称：咳嗽；持续时间：4');
+  });
+
   it('opens the clinical document when transcription is confirmed and decodes its HIS field metadata once', async () => {
     const capturing = ref(true);
     const factsReady = ref(false);

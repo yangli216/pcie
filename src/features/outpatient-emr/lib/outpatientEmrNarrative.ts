@@ -2,7 +2,7 @@ import type { OutpatientEmrRecordField, OutpatientEmrTemplateField, OutpatientEm
 import { resolveOutpatientEmrFinalDictionaryItem } from './outpatientEmrDictionary';
 import { readFieldSourceText } from './outpatientEmrTemplate';
 import { isTemplateObject, readOutpatientEmrChapters } from './outpatientEmrTemplateDefinition';
-import { isAdministrativeTemplateSlot, resolveOutpatientEmrFieldPromptProfile } from './outpatientEmrPromptGenerator';
+import { isAdministrativeTemplateSlot, isOutpatientEmrDurationField, resolveOutpatientEmrFieldPromptProfile } from './outpatientEmrPromptGenerator';
 
 type TextPart = { kind: 'text'; text: string };
 type Slot = { kind: 'field'; field: OutpatientEmrTemplateField };
@@ -320,9 +320,15 @@ function scanNarrative(
 }
 
 function templateParts(section: OutpatientEmrNarrativeSection, clause: OutpatientEmrNarrativeClause): SourcePart[] {
-  // Plain blocks containing only bare slots offer no prose to connect them.
-  // A direct narrative already has the main document section's heading.
   if (clause.parts.some(part => part.kind === 'text' && part.text.trim())) return clause.parts;
+  const slots = clause.parts.filter((part): part is Slot => part.kind === 'field');
+  if (slots.length === 2) {
+    const [symptom, duration] = slots.map(slot => slot.field);
+    const chief = [symptom.articleId, symptom.articleName, symptom.articleDefinitionName].some(title => /^(?:主诉|chiefComplaint)$/iu.test(title));
+    if (chief && /症状|主诉|chiefComplaint|chiefSymptom|symptom/iu.test(symptom.name + symptom.id)
+      && isOutpatientEmrDurationField(duration)) return clause.parts;
+  }
+  // Other bare controls need their field labels to make each value intelligible.
   if (clause.parts.length === 1) {
     const part = clause.parts[0];
     if (part.kind === 'field' && (section.directField === part.field || part.field.projectionMode === 'direct' || fieldLabel(part.field) === section.title)) return [part];

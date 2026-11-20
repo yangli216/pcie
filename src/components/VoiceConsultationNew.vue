@@ -2258,7 +2258,6 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
     && patientId === getPatientContextId(props.initialPatientData)
     && visitId === getPatientContextVisitId(props.initialPatientData) && template === voiceTemplateContext.value;
   const previousRecord = getCurrentRegenerationRecord();
-  const templateFields = voiceTemplateDraft.getModelDraft();
   const previousDiagnoses = aiDiagnoses.value.map((item) => ({ ...item }));
   const previousSelectedDiagnosisIdentity = getDiagnosisIdentity(selectedDiagnosis.value);
   const previousSelectedDiagnosisIdentities = new Set(
@@ -2269,8 +2268,6 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
   const previousAutoTreatmentFetchAttemptKey = autoTreatmentFetchAttemptKey.value;
   const previousTreatmentGenerationState = { ...treatmentGenerationState.value };
   const previousFactSuggestions = factSuggestions.value.map((item) => ({ ...item }));
-  const templateChapters = voiceTemplateDraft.getSupplementChapters().map(chapter => chapter.recordField === 'physicalExam'
-    ? { ...chapter, text: stripUnverifiedPhysicalExam(chapter.text, previousFactSuggestions) } : chapter);
   const regenerationEvidenceRecord = { ...previousRecord, physicalExam: stripUnverifiedPhysicalExam(previousRecord.physicalExam, previousFactSuggestions) };
 
   supplementTemplateSnapshot.value = { recordContext: voiceTemplateRecordContext.value, isCurrent };
@@ -2286,16 +2283,31 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
     supplementLength: doctorSupplement.trim().length,
   });
 
+  let currentRun = isCurrent;
   try {
+    const checked = template ? await voiceTemplateDraft.refreshPolicyForModel(isCurrent) : undefined;
+    if (!currentRun()) return;
+    if (checked?.fieldPolicy) {
+      const { revision, ruleSetVersion } = checked.fieldPolicy;
+      currentRun = () => isCurrent() && !isWritebackBusy.value
+        && revision === voiceTemplateDraft.template.value?.fieldPolicy?.revision
+        && ruleSetVersion === voiceTemplateDraft.template.value?.fieldPolicy?.ruleSetVersion;
+    }
+    const templateFields = voiceTemplateDraft.getModelDraft();
+    const templateChapters = voiceTemplateDraft.getSupplementChapters().map(chapter => chapter.recordField === 'physicalExam'
+      ? { ...chapter, text: stripUnverifiedPhysicalExam(chapter.text, previousFactSuggestions) } : chapter);
+    const writableChapters = checked && templateChapters.some(chapter => chapter.editableFieldIds.length) ? templateChapters : undefined;
     const requestSpec = buildClinicalResultRegenerationRequest({
+      ...(checked ? voiceTemplateDraft.supplementEvidence(checked) : {}),
+      templateFieldRules: writableChapters ? voiceTemplateDraft.supplementRules() : undefined,
       channel: resultChannel.value,
       patient: {
-        name: patientName.value,
+        name: template ? undefined : patientName.value,
         gender: patientGender.value,
         age: patientAge.value,
       },
       currentRecord: regenerationEvidenceRecord,
-      templateFields, templateChapters: template ? templateChapters : undefined,
+      templateFields, templateChapters: writableChapters,
       doctorSupplement,
       consultationId: resolveConsultationId(),
     });
@@ -2306,10 +2318,10 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
       undefined,
       requestSpec.config,
     );
-    if (!isCurrent()) return;
+    if (!currentRun()) return;
     const { templateFieldValues, ...standardRecord } = normalizeClinicalResultRegenerationOutput(
       parseLLMJson(response),
-      regenerationEvidenceRecord, template ? templateChapters : undefined, templateFields,
+      regenerationEvidenceRecord, writableChapters, templateFields,
     );
     const regeneratedRecord = { ...standardRecord, ...(templateFieldValues && voiceTemplateDraft.previewSupplementRecord(templateFieldValues)) };
 
@@ -2324,7 +2336,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
         deferSideEffects: true,
         requestMode: 'regeneration',
       });
-      if (!isCurrent()) return;
+      if (!currentRun()) return;
       if (!diagnosisReady) {
         throw new Error('病例已生成，但诊断建议刷新失败');
       }
@@ -2340,7 +2352,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
           requireAll: true,
           deferSideEffects: true,
         });
-        if (!isCurrent()) return;
+        if (!currentRun()) return;
         if (!treatmentReady) {
           throw new Error('病例和诊断已生成，但治疗方案刷新失败');
         }
@@ -2363,7 +2375,7 @@ async function handleSupplementRegenerate(doctorSupplement: string): Promise<voi
     submitVoiceGeneratedUserLog();
     showToast?.('已结合补充信息重新生成问诊结果', 'success');
   } catch (error) {
-    if (!isCurrent()) return;
+    if (!currentRun()) return;
     applyRegenerationRecord(previousRecord);
     aiDiagnoses.value = previousDiagnoses;
     const previousSelectedDiagnosis = previousDiagnoses.find(
@@ -3826,6 +3838,7 @@ useChronicRefillTimingPresentation(() => ({
             <p v-if="initialTemplateError || voiceTemplateDraft.analysisStatus.value === 'error'" role="alert">
               {{ initialTemplateError || voiceTemplateDraft.analysisErrorMessage.value || '门诊模板字段准备失败。' }}
             </p>
+            <p v-if="voiceTemplateDraft.analysisStatus.value === 'ready'" role="status">{{ voiceTemplateDraft.resultSummary.value }}</p>
             <p v-if="voiceTemplateDraft.dictionaryValidationMessage.value" role="alert">
               {{ voiceTemplateDraft.dictionaryValidationMessage.value }}
             </p>

@@ -28,7 +28,7 @@ const emit = defineEmits<{
 const {
   request: activeRequest,
   template,
-  targetFields,
+  targetFields, aiTargetCount, resultSummary,
   fieldValues,
   fieldValueSources,
   analysisStatus,
@@ -146,7 +146,8 @@ async function handleCancel(): Promise<void> {
         <OutpatientEmrAnalysisPanel
           :analysis-status="analysisStatus"
           :writeback-status="writebackStatus"
-          :field-count="targetFields.length"
+          :field-count="aiTargetCount"
+          :result-summary="resultSummary"
           :error-code="analysisErrorCode"
           :error-message="analysisErrorMessage"
           :writeback-message="writebackMessage"

@@ -2,6 +2,7 @@ import type {
   OutpatientEmrFieldValueSource,
   OutpatientEmrTemplateField,
 } from '../types';
+import { resolveOutpatientEmrFinalDictionaryItem } from './outpatientEmrDictionary';
 import { resolveOutpatientEmrUnmentionedDefault } from './outpatientEmrPromptGenerator';
 
 export interface OutpatientEmrDraftValue {
@@ -28,6 +29,12 @@ function comparable(value: string): string {
 export function buildOutpatientEmrInitialDraft(
   field: OutpatientEmrTemplateField,
 ): OutpatientEmrDraftValue {
+  if (!field.aiSuitable && (field.generationRule || field.policyDisposition)) {
+    const value = field.dictionaryItems.length
+      ? resolveOutpatientEmrFinalDictionaryItem(field, field.baselineDictionaryValue || field.baselineValue)?.text
+      : field.baselineValue;
+    if (value) return { value, source: field.generationRule ? 'his' : 'template' };
+  }
   if (field.dictionaryItems.length === 0 && field.baselineValue) {
     return { value: field.baselineValue, source: 'template' };
   }

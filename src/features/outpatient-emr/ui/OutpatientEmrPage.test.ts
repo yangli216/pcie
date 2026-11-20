@@ -84,6 +84,8 @@ function createAnalysis() {
       targetFields: [field],
     }),
     targetFields: ref([field]),
+    aiTargetCount: ref(1),
+    resultSummary: ref('AI 已填 1/1 个字段'),
     fieldValues: ref<Record<string, string>>({ field: 'AI 草稿' }),
     analysisStatus: ref<'idle' | 'analyzing' | 'ready' | 'error'>('ready'),
     analysisErrorCode: ref(''),

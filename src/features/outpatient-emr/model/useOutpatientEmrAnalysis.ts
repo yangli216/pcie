@@ -21,7 +21,8 @@ import {
   normalizeOutpatientEmrModelValues,
 } from '../lib/outpatientEmrWriteback';
 import { prepareOutpatientEmrTemplate, type PreparedOutpatientEmrTemplate } from '../lib/prepareOutpatientEmrTemplate';
-import { matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
+import { describeOutpatientEmrNarrative, parseOutpatientEmrNarrative } from '../lib/outpatientEmrNarrative';
+import { describeOutpatientTemplateReferences, matchesVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
 import { findInvalidOutpatientEmrDictionaryValue } from '../lib/outpatientEmrDictionary';
 import { isAdministrativeTemplateSlot } from '../lib/outpatientEmrPromptGenerator';
 import { findOutpatientEmrFieldConflicts } from '../lib/outpatientEmrFieldConsistency';
@@ -133,6 +134,18 @@ export function useOutpatientEmrAnalysis(
   const now = dependencies.now || Date.now;
 
   const targetFields = computed(() => template.value?.targetFields || []);
+  const aiTargetCount = computed(() => targetFields.value.filter(field => field.aiSuitable).length);
+  const generatedCount = computed(() => targetFields.value.filter(field => field.aiSuitable && !!fieldValues.value[field.id]?.trim()
+    && ['ai', 'template-matched'].includes(fieldValueSources.value[field.id])).length);
+  const resultSummary = computed(() => {
+    const unresolved = targetFields.value.filter(field => field.policyDisposition === 'unresolved').length;
+    if (unresolved) return `AI 已填 ${generatedCount.value}/${aiTargetCount.value} 个字段，另有 ${unresolved} 个字段规则待核对`;
+    if (aiTargetCount.value === 0) return '本次无 AI 生成字段';
+    if (generatedCount.value) return `AI 已填 ${generatedCount.value}/${aiTargetCount.value} 个字段`;
+    const hasOriginal = targetFields.value.filter(field => field.aiSuitable).every(({ id }) =>
+      ['structured', 'his', 'doctor'].includes(fieldValueSources.value[id]) && !!fieldValues.value[id]?.trim());
+    return hasOriginal ? '已保留原有内容，AI 本轮未新增' : '待补充，AI 本轮没有返回可采用的字段';
+  });
   const isFieldInWriteback = dependencies.isFieldInWriteback;
   const writebackFields = computed(() => isFieldInWriteback
     ? targetFields.value.filter(field => isFieldInWriteback(field, fieldValues.value[field.id], fieldValueSources.value[field.id]))
@@ -229,7 +242,7 @@ export function useOutpatientEmrAnalysis(
         }
         templateHash.value = hash;
       }
-      let prepared = dependencies.getPreparedVoiceTemplate?.(nextRequest);
+      let prepared = initialDraft ? dependencies.getPreparedVoiceTemplate?.(nextRequest) : undefined;
       if (prepared) {
         acceptHash(prepared.templateHash);
       } else {
@@ -241,7 +254,13 @@ export function useOutpatientEmrAnalysis(
       }
       if (!isCurrent() || !prepared) return false;
       const parsedTemplate = prepared.template;
+      const modelFields = parsedTemplate.targetFields.filter(field => field.aiSuitable);
       const localRequest = { ...nextRequest, ...prepared.source };
+      const identityWords = [localRequest.patient?.name, localRequest.patient?.idPi, localRequest.visitId];
+      const policy = parsedTemplate.fieldPolicy;
+      if (initialDraft && policy && (initialDraft.policyRevision !== policy.revision || initialDraft.ruleSetVersion !== policy.ruleSetVersion)) {
+        initialDraft = undefined;
+      }
       const previousValues = fieldValues.value;
       const previousSources = fieldValueSources.value;
       const structuredValues = resolveOutpatientEmrStructuredFieldValues({
@@ -252,7 +271,7 @@ export function useOutpatientEmrAnalysis(
         if (!editedFieldIds.has(field.id) && Object.prototype.hasOwnProperty.call(structuredValues, field.id)) {
           return [field.id, { value: structuredValues[field.id], source: 'structured' }] as const;
         }
-        const keepPrevious = preserveDoctorEdits
+        const keepPrevious = preserveDoctorEdits && (editedFieldIds.has(field.id) || previousSources[field.id] === 'doctor')
           && Object.prototype.hasOwnProperty.call(previousValues, field.id);
         return [field.id, keepPrevious
           ? { value: previousValues[field.id], source: previousSources[field.id] || 'empty' }
@@ -282,11 +301,13 @@ export function useOutpatientEmrAnalysis(
         .map(({ id, name, recordField, articleName }) => ({
           id, name, recordField, articleName, value: fieldValues.value[id], source: 'doctor' as const,
         }));
-      const generatedValues = initialDraft
-        ? normalizeOutpatientEmrModelValues(initialDraft.fieldValues, parsedTemplate.targetFields)
+      const generatedValues = !modelFields.length ? {} : initialDraft
+        ? normalizeOutpatientEmrModelValues(initialDraft.fieldValues, modelFields)
         : await analyzeFields({
           request: withOutpatientEmrDoctorEdits(localRequest, doctorTemplateEdits),
-          fields: parsedTemplate.targetFields,
+          fields: modelFields,
+          templateNarrative: describeOutpatientEmrNarrative(parseOutpatientEmrNarrative(parsedTemplate.sanitizedHtml, parsedTemplate.targetFields), identityWords),
+          templateReferenceChapters: describeOutpatientTemplateReferences(parsedTemplate, prepared.source.templateDefinition, identityWords, modelFields),
           ...(parsedTemplate.templateSourceNotes?.length ? { templateSourceNotes: parsedTemplate.templateSourceNotes } : {}),
           signal: abortController.signal,
         });
@@ -295,7 +316,7 @@ export function useOutpatientEmrAnalysis(
       const mergedValues = { ...fieldValues.value };
       const mergedSources = { ...fieldValueSources.value };
       parsedTemplate.targetFields.forEach((field) => {
-        if (editedFieldIds.has(field.id) || revisedDuringGeneration.has(field.id)) return;
+        if (!field.aiSuitable || editedFieldIds.has(field.id) || revisedDuringGeneration.has(field.id)) return;
         if (Object.prototype.hasOwnProperty.call(structuredValues, field.id)) return;
         const value = Object.prototype.hasOwnProperty.call(generatedValues, field.id) ? generatedValues[field.id] : undefined;
         const draft = resolveOutpatientEmrModelDraft(field, value === undefined ? '' : value);
@@ -320,6 +341,36 @@ export function useOutpatientEmrAnalysis(
         activeAbortController = null;
       }
     }
+  }
+
+  async function refreshPolicyForModel(stillCurrent: () => boolean): Promise<OutpatientEmrTemplateParseResult | undefined> {
+    const input = request.value;
+    const token = runToken;
+    const current = () => stillCurrent() && token === runToken && request.value === input && !writebackLocked.value;
+    if (!input || !template.value || !current()) return;
+    const source = await normalizeTemplateSource(input);
+    if (!current()) return;
+    const prepared = await prepareOutpatientEmrTemplate(input, source, {
+      hashTemplate, resolveTemplateSnapshot, restoreTemplateFromSnapshot, parseTemplate, persistTemplateSnapshot,
+    }, current);
+    if (!prepared || !current()) return;
+    if (templateHash.value !== prepared.templateHash) throw new OutpatientEmrError('REQUEST_ID_CONFLICT', '当前模板版本已变化，请重新核对。');
+    const previous = template.value.fieldPolicy;
+    const next = prepared.template.fieldPolicy;
+    if (next?.revision !== previous?.revision || next?.ruleSetVersion !== previous?.ruleSetVersion) {
+      const values = { ...fieldValues.value };
+      const sources = { ...fieldValueSources.value };
+      for (const f of prepared.template.targetFields) {
+        if (['doctor', 'structured', 'his'].includes(sources[f.id])) continue;
+        const draft = buildOutpatientEmrInitialDraft(f);
+        values[f.id] = draft.value;
+        sources[f.id] = draft.source;
+      }
+      template.value = prepared.template;
+      fieldValues.value = values;
+      fieldValueSources.value = sources;
+    }
+    return prepared.template;
   }
 
   async function start(nextRequest: OutpatientEmrAnalysisRequest, initialDraft?: VoiceOutpatientEmrInitialDraft): Promise<boolean> {
@@ -528,6 +579,7 @@ export function useOutpatientEmrAnalysis(
     template,
     templateHash,
     targetFields,
+    aiTargetCount, generatedCount, resultSummary, refreshPolicyForModel,
     dictionaryValidationIssue,
     dictionaryValidationMessage,
     fieldConflicts,

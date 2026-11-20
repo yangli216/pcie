@@ -1,7 +1,8 @@
 import { toRaw } from 'vue';
 import { prepareOutpatientEmrTemplate, type PreparedOutpatientEmrTemplate } from './prepareOutpatientEmrTemplate';
 import type {
-  OutpatientEmrAnalysisRequest, OutpatientEmrTemplateField, VoiceOutpatientEmrDocument, VoiceOutpatientEmrInitialDraft, VoiceOutpatientEmrStartContext,
+  OutpatientEmrAnalysisRequest, OutpatientEmrTemplateField, OutpatientEmrTemplateParseResult,
+  VoiceOutpatientEmrDocument, VoiceOutpatientEmrInitialDraft, VoiceOutpatientEmrStartContext,
 } from '../types';
 import { buildOutpatientEmrDocument, describeOutpatientEmrNarrative, isVoiceOutpatientEmrFieldPlaceholder, outpatientEmrChapterTextField, renderVoiceOutpatientEmrChapter } from './outpatientEmrNarrative';
 import { buildOutpatientEmrFieldRules, buildOutpatientEmrPromptFields, isAdministrativeTemplateSlot, resolveOutpatientEmrFieldPromptProfiles } from './outpatientEmrPromptGenerator';
@@ -21,9 +22,11 @@ export interface VoiceOutpatientRecognitionTemplate {
   };
 }
 
-function describeVoiceChapters(
+export function describeVoiceChapters(
   chapters: ReturnType<typeof buildOutpatientEmrDocument>, definition: string, identifiers: readonly (string | undefined)[],
+  sourceNotes: NonNullable<ReturnType<typeof parseOutpatientEmrTemplate>['templateSourceNotes']> = [],
 ) {
+  const notedFields = new Set(sourceNotes.map(note => note.fieldId));
   const privateWords = identifiers.filter((word): word is string => !!word?.trim()).sort((a, b) => b.length - a.length);
   const redact = (text: string) => privateWords.reduce((value, word) => value.split(word).join('〔已隐去〕'), text);
   const definitionSlots = new Map<string, Record<string, unknown>[]>();
@@ -38,13 +41,15 @@ function describeVoiceChapters(
   // Keep malformed JSON field values as source text for this read-only context.
   function sourceValue(input: unknown) {
     if (input === undefined || input === null || typeof input === 'number' || typeof input === 'boolean') return input;
-    return typeof input === 'string' ? redact(input) : { raw: redact(JSON.stringify(input)) };
+    return typeof input === 'string' ? redact(input) : { raw: redact(JSON.stringify(input, (key, value) => /^(?:idPi|naPi|patientId|patientName|visitId|idVis|身份证号|患者姓名)$/i.test(key) ? '〔已隐去〕' : value)) };
   }
   return chapters.map(chapter => ({
     chapterId: chapter.id, title: redact(chapter.title),
     fields: chapter.fields.map(({ field, editable }) => ({ id: field.id, name: redact(field.name), writable: editable })),
     narrative: describeOutpatientEmrNarrative(chapter.sections, identifiers),
     referenceSlots: (chapter.referenceSlots ?? []).flatMap(slot => {
+      // Unpaired requested slots already carry attributed, de-identified evidence in templateSourceNotes.
+      if (notedFields.has(slot.id)) return [];
       const sources = definitionSlots.get(JSON.stringify([chapter.id, slot.id])) ?? [];
       if (sources.some(leaf => leaf.HIDDEN === true || leaf.HIDDEN === 'true'
         || isAdministrativeTemplateSlot(slot.id, String(leaf.NAME ?? ''), [chapter.id, chapter.title]))) return [];
@@ -53,6 +58,15 @@ function describeVoiceChapters(
       }];
     }),
   }));
+}
+
+/** Source values are available as evidence even when this round may not write their controls. */
+export function describeOutpatientTemplateReferences(
+  parsed: OutpatientEmrTemplateParseResult, definition: string, identifiers: readonly (string | undefined)[],
+  writable = parsed.targetFields.filter(field => field.aiSuitable),
+) {
+  return describeVoiceChapters(buildOutpatientEmrDocument({ ...parsed, targetFields: writable }, true),
+    definition, identifiers, parsed.templateSourceNotes);
 }
 
 interface CachedBoundTemplate {
@@ -88,10 +102,10 @@ export async function prepareVoiceOutpatientRecognitionTemplate(
   identifiers: readonly (string | undefined)[],
   isCurrent: () => boolean,
 ): Promise<VoiceOutpatientRecognitionTemplate | undefined> {
-  let prepared = getPreparedVoiceOutpatientTemplate(context);
+  let prepared: PreparedOutpatientEmrTemplate | undefined;
   const { templateId, requestId, targetFieldIds, templateHtml, templateDefinition } = context.template;
   const request = { ...context.template, visitId: context.visitId, recordContext: {}, targetFieldIds: [...targetFieldIds] };
-  if (!prepared) {
+  {
     const [{ loadVoiceOutpatientEmrTemplateSource }, snapshots] = await Promise.all([
       import('../model/useVoiceOutpatientEmrTemplateSource'), import('../api/outpatientEmrTemplateSnapshotService'),
     ]);
@@ -107,19 +121,22 @@ export async function prepareVoiceOutpatientRecognitionTemplate(
   }
   if (!isCurrent() || !prepared) return;
   const { templateHash, template: parsed } = prepared;
-  const identity = { visitId: request.visitId, templateId, requestId, templateHash, targetFieldIds: request.targetFieldIds };
+  const identity = { visitId: request.visitId, templateId, requestId, templateHash, targetFieldIds: request.targetFieldIds,
+    policyRevision: parsed.fieldPolicy?.revision, ruleSetVersion: parsed.fieldPolicy?.ruleSetVersion };
   if (!matchesVoiceOutpatientRecognitionTemplate(identity, context)
     || templateHtml !== context.template.templateHtml || templateDefinition !== context.template.templateDefinition) return;
   boundTemplates.set(toRaw(context), { prepared, identity, templateHtml, templateDefinition });
-  const chapters = buildOutpatientEmrDocument(parsed, false, prepared.source.templateDefinition);
-  const profiles = resolveOutpatientEmrFieldPromptProfiles(parsed.targetFields);
+  const modelFields = parsed.targetFields.filter(field => field.aiSuitable);
+  const modelTemplate = { ...parsed, targetFields: modelFields };
+  const chapters = buildOutpatientEmrDocument(modelTemplate, false, prepared.source.templateDefinition);
+  const profiles = resolveOutpatientEmrFieldPromptProfiles(modelFields);
   return {
     identity: { ...identity, targetFieldIds: [...identity.targetFieldIds] },
-    fields: parsed.targetFields, chapters,
-    fieldRules: buildOutpatientEmrFieldRules(profiles).join('\n'),
+    fields: modelFields, chapters,
+    fieldRules: buildOutpatientEmrFieldRules(profiles, modelFields).join('\n'),
     promptData: {
-      fields: buildOutpatientEmrPromptFields(parsed.targetFields, profiles),
-      chapters: describeVoiceChapters(buildOutpatientEmrDocument(parsed, true), prepared.source.templateDefinition, identifiers),
+      fields: buildOutpatientEmrPromptFields(modelFields, profiles),
+      chapters: describeOutpatientTemplateReferences(parsed, prepared.source.templateDefinition, identifiers, modelFields),
       ...(parsed.templateSourceNotes?.length ? { templateSourceNotes: parsed.templateSourceNotes } : {}),
     },
   };

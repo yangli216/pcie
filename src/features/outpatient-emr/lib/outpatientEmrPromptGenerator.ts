@@ -16,7 +16,7 @@ import type {
  * abstracted from the production business prompts (voice record generation,
  * negative-candidate review, physical-exam extension, precaution diagnosis scope).
  */
-export const OUTPATIENT_EMR_PROMPT_VERSION = 'outpatient-emr-field-prompt.v4';
+export const OUTPATIENT_EMR_PROMPT_VERSION = 'outpatient-emr-field-prompt.v5';
 
 export type OutpatientEmrFieldTopic =
   | 'chief-complaint'
@@ -125,7 +125,11 @@ const ADMINISTRATIVE_FIELD_NAMES = new Set([
 ]);
 const MEASUREMENT_FIELD_PATTERN = /^(?:体温|脉搏|心率|呼吸|呼吸频率|收缩压|舒张压|血压|身高|体重|腰围|臀围|BMI|血氧饱和度|血氧|SpO2|指尖血糖|随机血糖)$/iu;
 const DATETIME_TYPES = new Set(['date', 'datetime', 'time']);
-const DURATION_FIELD_PATTERN = /持续(?:时间|时长|多久)|病程(?:时间|时长)|(?:发作|症状|病情|患病)时长/u;
+const DURATION_FIELD_PATTERN = /持续(?:时间|时长|多久)|病程(?:时间|时长)|(?:发作|症状|病情|患病)时长|duration/iu;
+
+export function isOutpatientEmrDurationField(field: OutpatientEmrTemplateField): boolean {
+  return DURATION_FIELD_PATTERN.test(`${compact(field.name)}|${compact(field.id)}`);
+}
 const FLAG_DETAIL_PATTERN = /(?:补充|说明|详情|描述)$/u;
 
 const RECORD_FIELD_TOPICS: Readonly<Record<string, OutpatientEmrFieldTopic>> = {
@@ -237,7 +241,7 @@ function resolveShape(
   if (DATETIME_TYPES.has(field.type)) return 'datetime';
   // Narrative duration fields describe an interval (e.g. "3天"), while actual
   // date/time controls retain their declared shape even when their label overlaps.
-  if (DURATION_FIELD_PATTERN.test(`${name}|${compact(field.id)}`)) return 'narrative';
+  if (isOutpatientEmrDurationField(field)) return 'narrative';
   if (/(?:时间|日期)$/u.test(name)) return 'datetime';
   if (FLAG_DETAIL_PATTERN.test(name) && hasSiblingPresenceFlag(field, siblings)) return 'flag-detail';
   return 'narrative';
@@ -274,6 +278,7 @@ export function resolveOutpatientEmrUnmentionedDefault(
   field: OutpatientEmrTemplateField,
   profile = resolveOutpatientEmrFieldPromptProfile(field),
 ): string | undefined {
+  if (field.generationRule) return field.generationRule.unmentionedDefault ?? undefined;
   // Field-level history keywords can refine the topic even inside an examination section.
   if (field.recordField === 'physicalExam' || field.recordField === 'maritalReproductiveHistory'
     || field.recordField === 'menstrualHistory') return;
@@ -315,7 +320,7 @@ function collectUsedRules(profiles: OutpatientEmrFieldPromptProfile[]) {
   };
 }
 
-export function buildOutpatientEmrFieldRules(profiles: OutpatientEmrFieldPromptProfile[]): string[] {
+export function buildOutpatientEmrFieldRules(profiles: OutpatientEmrFieldPromptProfile[], fields: OutpatientEmrTemplateField[] = []): string[] {
   const used = collectUsedRules(profiles);
   return [
     `规则版本：${OUTPATIENT_EMR_PROMPT_VERSION}`,
@@ -327,6 +332,12 @@ export function buildOutpatientEmrFieldRules(profiles: OutpatientEmrFieldPromptP
     ...used.modifiers.map((key) => `[${key}] ${MODIFIER_RULES[key]}`),
     '',
     ...FIELD_VALUE_RULES,
+    ...(fields.some(f => f.generationRule?.aiSuitable) ? [
+      '以下为本版本逐栏生效的书写规则。与通用章节写法冲突时以该栏规则为准，输出类型、事实依据和授权范围仍须遵守。',
+      ...fields.filter(f => f.generationRule?.aiSuitable).map(f => JSON.stringify({
+        fieldId: f.id, meaning: f.generationRule!.meaning, rule: f.generationRule!.resolvedPrompt,
+      })),
+    ] : []),
   ];
 }
 
@@ -362,13 +373,14 @@ export function buildOutpatientEmrPromptMessages(input: {
   request: Pick<OutpatientEmrAnalysisRequest, 'templateId' | 'templateName' | 'patient' | 'recordContext'>;
   fields: OutpatientEmrTemplateField[];
   templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
+  templateReferenceChapters?: ReturnType<typeof import('../lib/voiceOutpatientEmrRecognition').describeVoiceChapters>;
   templateNarrative?: ReturnType<typeof describeOutpatientEmrNarrative>;
   reviewedSectionOnly?: boolean;
 }): ChatMessage[] {
   const profiles = resolveOutpatientEmrFieldPromptProfiles(input.fields);
   const system = [
     ...STANDALONE_CONTEXT_RULES,
-    ...buildOutpatientEmrFieldRules(profiles),
+    ...buildOutpatientEmrFieldRules(profiles, input.fields),
     ...(input.templateNarrative?.length ? [
       'templateNarrative 是模板作者的句式，保留同一原句的字段 ID、名称、固定文字与单位。结合原句理解字段含义；模板文字不是患者已陈述的事实，字段名与原句不一致时保留两者作为解释上下文。只用病例和医生修订确定字段值。',
     ] : []),
@@ -396,6 +408,7 @@ export function buildOutpatientEmrPromptMessages(input: {
     },
     patient: Object.keys(patient).length > 0 ? patient : null,
     recordContext: input.request.recordContext,
+    ...(input.templateReferenceChapters?.length ? { templateReferenceChapters: input.templateReferenceChapters } : {}),
     ...(input.templateNarrative?.length ? { templateNarrative: input.templateNarrative } : {}),
     ...(input.templateSourceNotes?.length ? { templateSourceNotes: input.templateSourceNotes } : {}),
   };

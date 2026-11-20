@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { createApp, nextTick, type App } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import OutpatientEmrPage from './OutpatientEmrPage.vue';
@@ -17,7 +18,7 @@ vi.mock('@/services/llm', () => ({
 }));
 vi.mock('../api/outpatientEmrTemplateSnapshotService', () => ({
   resolveOutpatientEmrTemplateSnapshot: vi.fn().mockResolvedValue({ cacheHit: false }),
-  persistOutpatientEmrTemplateSnapshot: vi.fn().mockResolvedValue({ id: 'SYN-SNAPSHOT' }),
+  persistOutpatientEmrTemplateSnapshot: vi.fn().mockImplementation(input => syntheticReceipt(input)),
 }));
 vi.mock('@features/consultation-result', () => ({
   useConsultationReferenceFeedbackListener: (options: { onFeedback: typeof boundary.feedback }) => {

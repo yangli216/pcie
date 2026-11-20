@@ -27,6 +27,8 @@ export interface VoiceOutpatientEmrStartContext {
 }
 
 export interface VoiceOutpatientEmrTemplateIdentity {
+  policyRevision?: number;
+  ruleSetVersion?: string;
   visitId: string;
   requestId: string;
   templateId: string;
@@ -89,10 +91,31 @@ export type OutpatientEmrFieldValueSource =
   | 'unmentioned-default'
   | 'ai'
   | 'structured'
+  | 'his'
   | 'doctor'
   | 'empty';
 
+export interface OutpatientFieldRule {
+  fieldId: string;
+  meaning: string;
+  aiSuitable: boolean;
+  generationSource: 'default' | 'manual-override' | 'protected';
+  promptSource: 'default' | 'custom' | 'not_ai';
+  resolvedPrompt: string | null;
+  unmentionedDefault: string | null;
+}
+
+export interface OutpatientFieldPolicy {
+  schemaVersion: 'outpatient-emr-field-policy.v1';
+  templateState: 'enabled' | 'disabled' | 'deleted';
+  revision: number;
+  ruleSetVersion: string;
+  fields: OutpatientFieldRule[];
+}
+
 export interface OutpatientEmrTemplateField {
+  generationRule?: OutpatientFieldRule;
+  policyDisposition?: 'inactive' | 'unresolved';
   id: string;
   name: string;
   type: string;
@@ -125,6 +148,7 @@ export interface OutpatientEmrTemplateSourceNote {
 export interface OutpatientEmrTemplateParseResult
   extends OutpatientEmrTemplateInspectionResult {
   targetFields: OutpatientEmrTemplateField[];
+  fieldPolicy?: OutpatientFieldPolicy;
   templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
 }
 
