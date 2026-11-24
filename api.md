@@ -1529,6 +1529,8 @@ try {
 
 如果字段已经在 HIS 成功提交、只是 `success` 回执发送失败，不得回滚字段或改发 `failed`。HIS 应持久保留 `requestId + visitId + recordId + success` 回执任务，网络恢复后用相同身份重发成功回执。
 
+白云门诊医生站在首次将所选控件写入编辑器时核对绑定结果。医生随后可以修改正文、清空字段或调整字典选项，PHIS 保存医生的最终稿。本次文书保存和本批所选诊疗操作成功后，PHIS 按原请求发送 `success`。PCIE 收到与本次请求和就诊匹配的成功回执即完成回写。保存及回执阶段均无需将病历内容与首次回填值再次比对。
+
 直接使用 REST + WebSocket 时，执行顺序和校验规则完全相同：`POST /api/outpatient/emr/analyze` 的同步 `200` 之后继续等待 `/api/consultation/events/ws` 中与 `visitId + requestId + emrType` 匹配的终态事件，回填后再调用 [6.5 回执接口](#65-post-apiconsultationreference-feedback必须)。新接入优先使用 SDK，避免自行实现断线重连、事件补发、去重和 Promise 匹配。
 
 #### 6.3C.8 取消、错误与重试

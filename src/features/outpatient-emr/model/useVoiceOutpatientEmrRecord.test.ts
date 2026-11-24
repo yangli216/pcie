@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { OUTPATIENT_EMR_PROMPT_VERSION } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
 import { syntheticReceipt, syntheticFieldPolicy } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import policyWire from '@/test/template-parsing/fixtures/outpatient-field-policy-wire.json';
 import { resolveOutpatientEmrTemplateSnapshot } from '../api/outpatientEmrTemplateSnapshotService';
@@ -129,7 +130,7 @@ function basePayload(): OutpatientEmrPreparedWritebackPayload {
 
 function firstVoiceDraft(fieldValues: VoiceOutpatientEmrInitialDraft['fieldValues']): VoiceOutpatientEmrInitialDraft {
   const { template, visitId } = context();
-  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH', policyRevision: 0, ruleSetVersion: 'outpatient-emr-field-prompt.v5',
+  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH', policyRevision: 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
     targetFieldIds: [...template.targetFieldIds], fieldValues };
 }
 

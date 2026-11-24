@@ -128,7 +128,7 @@
     "receivedAt": 1795050000000,
     "fieldPolicy": {
       "schemaVersion": "outpatient-emr-field-policy.v1",
-      "ruleSetVersion": "outpatient-emr-field-prompt.v5",
+      "ruleSetVersion": "outpatient-emr-field-prompt.v6",
       "templateState": "enabled",
       "revision": 2,
       "fields": [
@@ -138,7 +138,7 @@
           "aiSuitable": true,
           "generationSource": "manual-override",
           "promptSource": "custom",
-          "resolvedPrompt": "仅填写患者本次主症状名称。\n持续时间由相邻栏填写。\n仅依据本次有来源的资料。只返回本栏正文。",
+          "resolvedPrompt": "仅填写患者本次主症状名称。\n持续时间由相邻栏填写。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
           "unmentionedDefault": null
         },
         {
@@ -147,7 +147,7 @@
           "aiSuitable": true,
           "generationSource": "default",
           "promptSource": "default",
-          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。只返回本栏正文。数值栏只填数值，单位沿用模板。",
+          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位或相邻有单位槽时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。数值栏只填数值，单位沿用模板。",
           "unmentionedDefault": null
         },
         {
@@ -237,7 +237,7 @@
     },
     "fieldPolicy": {
       "schemaVersion": "outpatient-emr-field-policy.v1",
-      "ruleSetVersion": "outpatient-emr-field-prompt.v5",
+      "ruleSetVersion": "outpatient-emr-field-prompt.v6",
       "templateState": "enabled",
       "revision": 2,
       "fields": [
@@ -247,7 +247,7 @@
           "aiSuitable": true,
           "generationSource": "manual-override",
           "promptSource": "custom",
-          "resolvedPrompt": "仅填写患者本次主症状名称。\n持续时间由相邻栏填写。\n仅依据本次有来源的资料。只返回本栏正文。",
+          "resolvedPrompt": "仅填写患者本次主症状名称。\n持续时间由相邻栏填写。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
           "unmentionedDefault": null
         },
         {
@@ -256,7 +256,7 @@
           "aiSuitable": true,
           "generationSource": "default",
           "promptSource": "default",
-          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。只返回本栏正文。数值栏只填数值，单位沿用模板。",
+          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位或相邻有单位槽时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。数值栏只填数值，单位沿用模板。",
           "unmentionedDefault": null
         },
         {
@@ -336,7 +336,7 @@
     "receivedAt": 1795050000000,
     "fieldPolicy": {
       "schemaVersion": "outpatient-emr-field-policy.v1",
-      "ruleSetVersion": "outpatient-emr-field-prompt.v5",
+      "ruleSetVersion": "outpatient-emr-field-prompt.v6",
       "templateState": "disabled",
       "revision": 3,
       "fields": []

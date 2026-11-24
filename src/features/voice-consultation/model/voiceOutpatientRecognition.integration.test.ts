@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { OUTPATIENT_EMR_PROMPT_VERSION } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
 import { syntheticFieldPolicy, syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { chat, chatFast, chatStream } from '@/services/llm';
@@ -109,7 +110,7 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     const [systemPrompt, userPrompt] = vi.mocked(chatStream).mock.calls[0][0].map(message => message.content);
     expect(template!.fields.map(field => field.id)).not.toContain('就诊时间');
     expect(systemPrompt).toContain('[shape:measurement] 测量值字段');
-    expect(systemPrompt).toContain('outpatient-emr-field-prompt.v5');
+    expect(systemPrompt).toContain(OUTPATIENT_EMR_PROMPT_VERSION);
     expect(systemPrompt).not.toContain('只能返回一个 JSON 对象');
     expect(userPrompt).not.toContain('SYN-PATIENT-NAME');
     expect(userPrompt).toContain('合成转写');

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Real result page, parser, model prompt/normalization, template editor and
 // merged writeback builder. Only native I/O, model and snapshot HTTP are Fake.
+import { OUTPATIENT_EMR_PROMPT_VERSION } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
 import { syntheticReceipt } from '@/test/template-parsing/outpatientFieldPolicyFixture';
 import policyWire from '@/test/template-parsing/fixtures/outpatient-field-policy-wire.json';
 import * as snapshots from '@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService';
@@ -198,7 +199,7 @@ async function mountResult(
   if (options.templateError) intent.voiceTemplateError = options.templateError;
   else if (!options.legacyCache) intent.voiceTemplateDraft = {
     visitId: context.visitId, templateId: template.templateId, requestId: template.requestId,
-    policyRevision: options.policyRevision ?? 0, ruleSetVersion: 'outpatient-emr-field-prompt.v5',
+    policyRevision: options.policyRevision ?? 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
     templateHash: await hashOutpatientEmrTemplate(source.templateHtml, source.templateDefinition),
     targetFieldIds: [...template.targetFieldIds], fieldValues: options.fieldValues ?? {},
   };

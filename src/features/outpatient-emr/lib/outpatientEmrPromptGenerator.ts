@@ -16,7 +16,7 @@ import type {
  * abstracted from the production business prompts (voice record generation,
  * negative-candidate review, physical-exam extension, precaution diagnosis scope).
  */
-export const OUTPATIENT_EMR_PROMPT_VERSION = 'outpatient-emr-field-prompt.v5';
+export const OUTPATIENT_EMR_PROMPT_VERSION = 'outpatient-emr-field-prompt.v6';
 
 export type OutpatientEmrFieldTopic =
   | 'chief-complaint'
@@ -65,6 +65,8 @@ const UNIVERSAL_RULES: readonly string[] = [
   'fields.recordField 仅用于说明已由确定性规则确认的标准病历语义；为 null 时不得自行猜测归类。',
   '给定 fields 已由 HIS 模板渲染器确定为当前生效范围；不得根据性别、年龄或其他患者属性自行新增、删除或替换字段。',
   'recordContext.doctorTemplateEdits 是本轮医生对模板的最新修订，显式空字符串也表示医生已清空。保留旧稿来源和时间关系，合并当前病例时以医生最新修订为准。',
+  '优先本轮医生修订和已确认的临床事实，缺项可从问诊原文或转写补充。字段名和模板原句指向不同项目且医生未核实时返回空字符串，禁止以其中一项替另一项作肯否。',
+  '模板原句把病程拆为数量与单位时分别填写，如“3天”分别为“3”和“天”。固定单位由模板承载。时间字典按显示含义匹配，阶段选项不可用于填写时长数量。',
   'templateSourceNotes 标注当前请求中无法配对或隐藏的模板目标。可见字段提供的模板原文只作背景材料；仅为 fields 中的字段生成正文。',
   '每个字段按其 topic 与 shape 两条规则共同约束，modifiers 中列出的附加规则同样适用。',
 ];
@@ -80,8 +82,8 @@ const FIELD_VALUE_RULES: readonly string[] = [
 ];
 
 const TOPIC_RULES: Readonly<Record<OutpatientEmrFieldTopic, string>> = {
-  'chief-complaint': '主诉：写本次就诊最主要的症状或体征及持续时间，简洁规范；不写诊断名称、检查结论或治疗。',
-  'present-illness': '现病史：按起病时间与诱因、主要症状特点及演变、伴随症状与有鉴别意义的阴性症状、院外诊治经过组织 2～4 句书面语；删除问答过程、缴费流程和重复内容，不写既往史、个人史、家族史。',
+  'chief-complaint': '主诉：普通就诊简写主要症状或体征及有据的持续时间，不加“+”或推测诊断。仅当本次明确为慢病复诊配药时，写本次已选病种及“复诊配药”，不从全部既往慢病补列病种。',
+  'present-illness': '现病史：按起病时间与诱因、主要症状特点及演变、伴随症状与有鉴别意义且明确陈述的阴性症状、院外诊治经过组织 2～4 句书面语；删除问答过程、缴费流程和重复内容，不写既往史、个人史、家族史。',
   'past-history': '既往史：只写患者本人的长期健康事实（慢性病、传染病、手术外伤、输血、长期用药、预防接种等）及明确时间；不写本次门诊流水、本次诊断或鉴别方向；病例中已知的既往慢病不得写成否认。',
   'personal-history': '个人史：只写患者本人的吸烟、饮酒、职业及有害物质接触、疫区疫水、吸毒、冶游等事实；他人陈述、家属习惯或被动暴露不作为患者本人主动史，烟酒量与年限保留原值。',
   'menstrual-history': '月经史：只写明确的月经事实（初潮、周期、经期、末次月经、经量、痛经、血块、绝经及绝经后异常）；不得根据年龄或其他字段推断。',
@@ -90,10 +92,10 @@ const TOPIC_RULES: Readonly<Record<OutpatientEmrFieldTopic, string>> = {
   'allergy-history': '过敏史：只写明确的过敏原和过敏反应；只有病例明确否认时才写否认或选择否定项。',
   'medication-history': '用药史：只写患者长期或近期实际使用的药物（名称、用法、时长）；医生本次开立或建议的药物不写入。',
   'physical-exam': '体格检查：只写本次明确完成的查体结果和测量值，数值与单位原样保留；不得臆造正常查体，不得把建议查体或 AI 候选查体写成已完成结果；意识、面容等一般情况只在病例明确描述时填写。',
-  'auxiliary-results': '辅助检查：只写本次已有的检验检查结果及关键数值，保留原始数值和单位；待做或建议的检查不写入，不由结果推断诊断。',
+  'auxiliary-results': '辅助检查：只写本次已有的检验检查结果及关键数值，保留原始数值和单位；待做或建议的检查不写入。只有申请、没有报告时返回空字符串，不复述待查状态，不由结果推断诊断。',
   diagnosis: '诊断：只写病例上下文中医生已选定的正式诊断名称并保持主次顺序；待鉴别方向、低置信诊断和未选诊断不得写入。',
   treatment: '处理与医嘱：只概括病例上下文中医生已选定的用药、检查、检验、处置和明确处理意见；不新增、不调整方案，不做剂量换算。',
-  precautions: '注意事项：只针对医生已选正式诊断给出具体、可执行的注意事项和复诊指征，避免“多休息、多喝水”等空泛套话；不带入待鉴别方向或未选诊断。',
+  precautions: '注意事项：只针对医生已选正式诊断给出具体、可执行的注意事项和复诊指征，避免“多休息、多喝水”等空泛套话；不带入待鉴别方向或未选诊断。慢病配药宣教限定已选病种，160字内涵盖规律用药、家庭监测、饮食和复诊。保留医生明确交代的复诊时间及最新编辑，修订与回写时不补回默认期限。',
   administrative: '页眉、身份、科室、签名及就诊/签名时间等行政字段由 HIS 填写，不从病例生成，一律返回空字符串。',
   generic: '其他字段：依据字段名称和所属章节，只填写病例中与之直接对应的明确事实；无法确定时返回空字符串。',
 };
@@ -123,7 +125,7 @@ const ADMINISTRATIVE_FIELD_NAMES = new Set([
   '病历号', '门诊号', '住院号', '证件号', '身份证号', '姓名', '性别', '年龄', '患者姓名', '患者性别', '患者年龄',
   'idpi', 'napi', 'patientname', 'patientid', 'cdclinic', 'clinicno',
 ]);
-const MEASUREMENT_FIELD_PATTERN = /^(?:体温|脉搏|心率|呼吸|呼吸频率|收缩压|舒张压|血压|身高|体重|腰围|臀围|BMI|血氧饱和度|血氧|SpO2|指尖血糖|随机血糖)$/iu;
+const MEASUREMENT_FIELD_PATTERN = /^(?:体温|脉搏|心率|呼吸|呼吸频率|收缩压|舒张压|血压|身高|体重|腰围|臀围|BMI|血氧饱和度|血氧|SpO2|指尖血糖|空腹血糖|随机血糖)$/iu;
 const DATETIME_TYPES = new Set(['date', 'datetime', 'time']);
 const DURATION_FIELD_PATTERN = /持续(?:时间|时长|多久)|病程(?:时间|时长)|(?:发作|症状|病情|患病)时长|duration/iu;
 
@@ -242,6 +244,10 @@ function resolveShape(
   // Narrative duration fields describe an interval (e.g. "3天"), while actual
   // date/time controls retain their declared shape even when their label overlaps.
   if (isOutpatientEmrDurationField(field)) return 'narrative';
+  if (name === '时间' && (field.recordField === 'chiefComplaint' || field.recordField === 'historyOfPresentIllness')
+    && siblings.some(other => other.articleTemplateId === field.articleTemplateId && /^(?:持续时间|时间|时长|病程)单位\d*$/u.test(compact(other.name)))) {
+    return 'narrative';
+  }
   if (/(?:时间|日期)$/u.test(name)) return 'datetime';
   if (FLAG_DETAIL_PATTERN.test(name) && hasSiblingPresenceFlag(field, siblings)) return 'flag-detail';
   return 'narrative';

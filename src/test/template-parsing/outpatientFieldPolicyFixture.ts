@@ -1,9 +1,9 @@
-import { resolveOutpatientEmrUnmentionedDefault } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
+import { OUTPATIENT_EMR_PROMPT_VERSION, resolveOutpatientEmrUnmentionedDefault } from '@features/outpatient-emr/lib/outpatientEmrPromptGenerator';
 import type { PersistOutpatientEmrTemplateSnapshotInput, OutpatientEmrTemplateSnapshotReceipt } from '@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService';
 import type { OutpatientEmrTemplateField, OutpatientFieldPolicy } from '@features/outpatient-emr/types';
 
 export function syntheticFieldPolicy(fields: OutpatientEmrTemplateField[]): OutpatientFieldPolicy {
-  return { schemaVersion: 'outpatient-emr-field-policy.v1', templateState: 'enabled', revision: 0, ruleSetVersion: 'outpatient-emr-field-prompt.v5',
+  return { schemaVersion: 'outpatient-emr-field-policy.v1', templateState: 'enabled', revision: 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
     fields: fields.map(f => {
       const ai = !f.readonly && !/页眉|页脚|签名|^就诊时间$/.test(f.name);
       return { fieldId: f.id, meaning: f.name, aiSuitable: ai, generationSource: ai ? 'default' : 'protected',

@@ -91,6 +91,15 @@ describe('saved outpatient field rules on the device wire', () => {
     await expect(deliverToOutpatientSdk(request, result)).resolves.toEqual(result);
   });
 
+  it('accepts a previous server rule-library version and still transmits its saved field rules', async () => {
+    const previous = { ...wire.configured, fieldPolicy: { ...wire.configured.fieldPolicy, ruleSetVersion: 'outpatient-emr-field-prompt.v5' } };
+    boundary.post.mockResolvedValue(previous);
+    const { model, analysis } = setup();
+    await expect(analysis.start(visit())).resolves.toBe(true);
+    expect(model.mock.calls[0][0][0].content).toContain('持续时间由相邻栏填写。');
+    expect(analysis.fieldValues.value.duration).toBe('3');
+  });
+
   it('re-reads the revision on retry and keeps the doctor edit when the version is disabled', async () => {
     boundary.post.mockResolvedValueOnce(wire.configured).mockResolvedValueOnce(wire.disabled);
     const { model, analysis } = setup();

@@ -93,6 +93,28 @@ describe('outpatient EMR field prompt generator (real template)', () => {
     expect(resolveOutpatientEmrFieldPromptProfile(field).shape).toBe('datetime');
   });
 
+  it('pairs a bare time field with its duration unit only in the same clinical chapter', () => {
+    const base = fields.find(f => f.id === '现病史文本')!;
+    const quantity = { ...base, id: 'q', name: '时间', type: 'text' };
+    const unit = { ...base, id: 'u', name: '时间单位1' };
+    expect(resolveOutpatientEmrFieldPromptProfile(quantity, [quantity, unit]).shape).toBe('narrative');
+    expect(resolveOutpatientEmrFieldPromptProfile(quantity, [{ ...unit, articleTemplateId: 'elsewhere' }]).shape).toBe('datetime');
+    expect(resolveOutpatientEmrFieldPromptProfile({ ...quantity, type: 'datetime' }, [unit]).shape).toBe('datetime');
+  });
+
+  it('sends refill, examination and source-conflict rules alongside both clinical sources', () => {
+    const names = ['主诉文本', '高血压病史标志', '体温', '注意事项文本'];
+    const [system, user] = buildOutpatientEmrPromptMessages({
+      request: { templateId: 'SYN', templateName: '合成门诊', recordContext: { recordText: '仅来高血压复诊配药，病史另记糖尿病；本次未测体温。' } },
+      fields: fields.filter(f => names.includes(f.id)),
+    });
+    for (const guard of ['已选病种', '医生未核实时返回空字符串', '候选查体', '160字', '不补回默认期限']) {
+      expect(system.content).toContain(guard);
+    }
+    expect(user.content).toContain('病史另记糖尿病');
+    expect(user.content).toContain('本次未测体温');
+  });
+
   it('emits only the category rules used by the requested fields, with a version', () => {
     const subset = fields.filter((field) => ['主诉文本', '吸烟史标志'].includes(field.id));
     const [system] = buildOutpatientEmrPromptMessages({
