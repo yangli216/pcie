@@ -6,9 +6,15 @@
 2. 文档/契约先更新，再实现生产代码和Vitest测试；跨仓任务使用development-harness/HARNESS.md。
 3. 默认执行yarn type-check、yarn test:unit、yarn build；Rust变化补cargo check。真实Tauri运行、HIS/PHIS和第三方服务验收与合成测试分别报告。
 
+## 源码启动与验证
+
+后续问题排查、修复复现与界面验证必须从当前 `pcie` 工作树启动；桌面实例在本仓库执行 `yarn tauri dev`，不得直接使用系统已安装的 PCIE App。核对启动日志和进程可执行路径，确认实际操作的是当前源码实例；出现单实例或 HTTP Bridge 端口冲突时，先核对进程来源并排除冲突，不得静默改用安装版。
+
+浏览器组件预览同样直接加载当前源码，并注明合成依赖及验证边界；不能将组件预览当作原生桌面验收。需要制作安装包时，遵守 [测试构建规则](./AGENTS.md#硬约束禁止)。
+
 ## 分段语音转写
 
-停录失败恢复补 `useVoiceTranscriptionReview.test.ts` 与 `VoiceCapsule.test.ts`，覆盖实时中断后补录失败传播、异常/非法结果门禁、整段成功空文本时保留审核前缀和当前段草稿待医生核对、完整录音重试、再次失败、续采前缀、重复点击、放弃/卸载迟到隔离、失败后未修改草稿不可确认、强制编辑后可确认（含录音保存失败、无可用音频）、无音频确认只提交文字而不保存或上传空音频、及重试覆盖手动编辑；上传回归核对 WAV MIME、文件名与原始字节，仍使用 Fake。
+停录审核运行 `useVoiceTranscriptionReview.test.ts` 与 `VoiceCapsule.test.ts`，使用合成录音覆盖[分段 ASR 与停录恢复](../TESTING_STRATEGY.md#34-分段-asr-与停录恢复)中的客户端场景。
 
 分段语音回归执行 `yarn test:unit src/services/segmentedSpeechTranscriber.test.ts src/services/speechConfig.test.ts src/services/aliyunSpeech.test.ts`，覆盖顺序/背压、边界重叠、空结果/失败、关闭后的迟到回调及停止后完整转写。真实验证区分停止前字幕、停止后完整文本和医学病历；默认使用 Fake 转写，真实模型仍需独立机构与显式运行。
 

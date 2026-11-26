@@ -21,38 +21,57 @@ const template: VoiceOutpatientEmrTemplateInput = {
 };
 
 interface TestSdk {
-  startVoice(patient: { idPi: string; idVis: string; outpatientEmr: VoiceOutpatientEmrTemplateInput }): Promise<unknown>;
+  startVoice(patient?: { idPi: string; idVis?: string; outpatientEmr?: VoiceOutpatientEmrTemplateInput }): Promise<unknown>;
+  stop(): Promise<unknown>;
   on(type: string, callback: (data: unknown) => void): void;
   _http: { post(path: string, data: unknown): Promise<unknown> };
   _resumeEventChannelIfNeeded(): void;
+  _ensureInteractionChannel(): void;
   _dispatchEnvelope(envelope: unknown): void;
 }
 
-async function dispatchToHis(source: VoiceOutpatientEmrTemplateInput, payload: OutpatientEmrRecordConfirmedPayload) {
+async function dispatchToHis(
+  source: VoiceOutpatientEmrTemplateInput, payload: OutpatientEmrRecordConfirmedPayload,
+  repeatEntry = false,
+) {
   const module = { exports: {} };
   runInNewContext(sdkSource, { module, exports: module.exports, console });
   const Sdk = module.exports as new () => TestSdk;
   const sdk = new Sdk();
   sdk._http.post = vi.fn().mockResolvedValue({ status: 'success' });
   sdk._resumeEventChannelIfNeeded = vi.fn();
+  sdk._ensureInteractionChannel = vi.fn();
   const patient = { idPi: 'SYN-WIRE-PATIENT', idVis: visitId, outpatientEmr: source };
   await sdk.startVoice(patient);
   expect(sdk._http.post).toHaveBeenCalledWith('/consultation/start-voice', patient);
+  if (repeatEntry) {
+    await sdk.startVoice({ ...patient, outpatientEmr: { ...source, requestId: 'SYN-REPEATED-ENTRY' } });
+    await sdk.startVoice();
+    await sdk.startVoice({ idPi: patient.idPi });
+  }
 
   const confirmed = vi.fn();
   const error = vi.fn();
   sdk.on('record-confirmed', confirmed);
   sdk.on('error', error);
-  sdk._dispatchEnvelope(JSON.parse(JSON.stringify({
+  const envelope = JSON.parse(JSON.stringify({
     state: 'ready',
     event: {
       id: [visitId, source.requestId, payload.resultType, timestamp].join(':'),
       type: payload.resultType, consultationId: visitId, requestId: source.requestId,
       timestamp, terminal: false, payload,
     },
-  })));
+  }));
+  sdk._dispatchEnvelope(envelope);
   expect(error.mock.calls).toEqual([]);
   expect(confirmed.mock.calls).toEqual([[payload]]);
+  if (repeatEntry) {
+    await sdk.startVoice(patient);
+    sdk._dispatchEnvelope(envelope);
+    expect(confirmed.mock.calls).toEqual([[payload]]);
+    expect(error.mock.calls).toEqual([]);
+  }
+  return { sdk, confirmed, error };
 }
 
 type ReviewedRecord = Partial<Record<OutpatientEmrRecordField, string>>;
@@ -80,6 +99,35 @@ async function buildVoicePayload(
 }
 
 describe('voice template writeback delivered through the distributed HIS SDK', () => {
+  it('delivers the original request once after repeated entry changes or omits the template', async () => {
+    const source = { ...template, targetFieldIds: ['主诉文本'] };
+    const values = { 主诉文本: '重复入口前医生确认的合成病历' };
+    const payload = await buildVoicePayload(source, values, { chiefComplaint: values.主诉文本 }, values);
+    await dispatchToHis(source, payload, true);
+  });
+
+  it.each(['stop', 'cancel', 'new-visit'] as const)('accepts a new binding after %s', async (ending) => {
+    const source = { ...template, targetFieldIds: ['主诉文本'] };
+    const values = { 主诉文本: '原就诊合成主诉' };
+    const payload = await buildVoicePayload(source, values, { chiefComplaint: values.主诉文本 }, values);
+    const { sdk, confirmed, error } = await dispatchToHis(source, payload);
+    if (ending === 'stop') await sdk.stop();
+    if (ending === 'cancel') sdk._dispatchEnvelope({
+      event: { id: 'SYN-CANCELLED', consultationId: visitId, type: 'cancelled', payload: { resultType: 'cancelled' } },
+    });
+    const nextVisit = ending === 'new-visit' ? 'SYN-NEXT-VISIT' : visitId;
+    const nextSource = { ...source, requestId: 'SYN-NEXT-REQUEST', templateName: '合成新模板' };
+    await sdk.startVoice({ idPi: 'SYN-WIRE-PATIENT', idVis: nextVisit, outpatientEmr: nextSource });
+    const nextPayload = await buildVoicePayload(nextSource, values, { chiefComplaint: values.主诉文本 }, values);
+    nextPayload.consultationId = nextVisit;
+    nextPayload.visitId = nextVisit;
+    sdk._dispatchEnvelope({ event: {
+      id: 'SYN-NEXT-RESULT', consultationId: nextVisit, type: 'record-confirmed', payload: nextPayload,
+    } });
+    expect(error.mock.calls).toEqual([]);
+    expect(confirmed.mock.calls).toEqual([[payload], [nextPayload]]);
+  });
+
   it('delivers a single direct field with the text confirmed by the doctor', async () => {
     const source = { ...template, targetFieldIds: ['主诉文本'] };
     const values = { 主诉文本: '反复干咳三天。' };

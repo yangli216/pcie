@@ -180,7 +180,8 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
     const { voiceTemplateDraft, voiceTemplateDocument } = cached;
     if (!matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDraft, context, template.identity.templateHash)) return null;
     if (voiceTemplateDocument && !matchesVoiceOutpatientRecognitionTemplate(voiceTemplateDocument, context, template.identity.templateHash)) return null;
-    if (voiceTemplateDraft?.policyRevision !== template.identity.policyRevision
+    if (voiceTemplateDraft?.snapshotId !== template.identity.snapshotId
+      || voiceTemplateDraft?.policyRevision !== template.identity.policyRevision
       || voiceTemplateDraft?.ruleSetVersion !== template.identity.ruleSetVersion) return null;
     const chapters = Array.isArray(voiceTemplateDocument?.chapters) ? voiceTemplateDocument.chapters : [];
     const legacyTexts = Object.fromEntries(chapters.flatMap(chapter =>
@@ -434,7 +435,8 @@ export function useVoiceConsultation(options: VoiceConsultationOptions) {
           outpatientTemplate = await prepareVoiceOutpatientRecognitionTemplate(
             templateContext, [patient?.naPi, patient?.patientName, patient?.idPi, patient?.patientId, consultationId], isCurrent,
           );
-        } catch {
+        } catch (error) {
+          console.warn('[VoiceConsultation] Outpatient template preparation failed:', error);
           voiceTemplateError = '本次门诊模板准备失败，已保留语音病历。';
         }
         if (!isCurrent()) return;

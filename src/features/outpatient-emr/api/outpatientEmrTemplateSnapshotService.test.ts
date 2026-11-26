@@ -149,6 +149,7 @@ describe('outpatientEmrTemplateSnapshotService', () => {
       templateHash,
     })).toEqual({
       schemaVersion: 'outpatient-emr-template-pair-resolve.v2',
+      supportsFieldVisibility: true,
       templateId: request.templateId,
       templateHash,
     });
@@ -156,6 +157,7 @@ describe('outpatientEmrTemplateSnapshotService', () => {
       '/v1/client/outpatient-emr/templates/snapshots/resolve',
       {
         schemaVersion: 'outpatient-emr-template-pair-resolve.v2',
+        supportsFieldVisibility: true,
         templateId: request.templateId,
         templateHash,
       },

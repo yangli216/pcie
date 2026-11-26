@@ -2,7 +2,7 @@
 
 ## 分段语音转写
 
-停止后的整段转写异常或非法结果必须显示未完成状态，保留当前完整 WAV 和分段草稿；失败时医生可强制编辑文字：改出非空且不同于失败时内容的文字后可直接确认，确认即视为医生核对后的文字；重试整段转写仍可用，成功返回非空文字后以转写结果覆盖当前停录段（含手动编辑），继续采集仍须重试成功；录音保存失败（无可用录音）时同样允许医生编辑出非空且不同于失败草稿的文字后确认；无音频只禁止重试转写和继续采集，不阻断医生核对后的文字生成，且不得伪装转写成功或保存空音频。成功返回空文本则单独提示未识别到新增文字，保留当前段草稿和先前审核文字供医生核对，允许重试、续采或手动补充；确认仍要求非空文字。重试只发送当前停录段，成功后与先前已审核文字拼接；重试中禁止重复请求与编辑，放弃仍可用。关闭、放弃、续采或卸载须使旧请求失效。录音保存失败时不得用空 Blob 假装可重试。
+停录后的草稿保留、人工编辑、确认与续采条件以[语音停录后的文字审核](./PRODUCT.md#语音停录后的文字审核)为准。
 
 分段 ASR 的录音中文字仅为草稿，停止后整段转写校正；音频窗口和并发必须有界，关闭或会话切换禁止迟到结果串线。模式及分段时长由后台 bootstrap 下发，不新增客户端供应商凭据；默认回归使用 Fake，真实模型结果另记。
 
@@ -40,6 +40,7 @@
 2. 契约同步：`src-tauri/src/http_server.rs` 或 `complete_consultation` 结果结构变化时，必须同步更新 `api.md`。
 3. 规则同步：包管理器、验证命令、目录职责、Review 关注点变化时，必须同步更新本文件。
 4. 交付顺序：`ARCHITECTURE/API/PRODUCT/AGENTS -> 代码 -> 构建/测试/手测说明`
+5. 修复复现与界面验证遵守 [源码启动与验证](./HARNESS.md#源码启动与验证)，确认运行实例来自当前工作树。
 
 ## 硬约束（禁止）
 
@@ -55,7 +56,7 @@
 8. **主窗口几何出口禁止绕过**：业务组件和 feature composable 不得直接调用 Tauri `setSize / setPosition`；主窗口尺寸与位置统一由 `app/shell/useWindowTransitionCoordinator.ts` 编排，并经 `useWindowManagement.ts` 应用，纯 `workArea` / DPI / clamp 规则归 `windowGeometry.ts`。独立原生窗口的创建尺寸仍由各自窗口 service 管理，但必须设置合理 min size 并校验当前工作区。
 9. **品牌与兼容协议禁止混改**：正式产品名统一为“全医慧助（PCIE）”，英文展开统一为“Primary Care Intelligent Expert”；历史 `MedHermes` / `med-hermes` 只允许在已发布的 HIS SDK 全局对象、SDK 文件/路由、深链 scheme、HTTP Header、Bundle Identifier 和迁移说明中作为兼容标识保留。品牌更新不得直接全局替换这些技术契约；如需废弃，必须先提供双栈迁移、版本计划和 HIS 联调验证。
 10. **正式发布线禁止分叉复用**：当前仓库只有 `main` 可以发布正式桌面客户端，自 `1.4.0` 起版本必须严格高于所有历史公开版本；`feature/two-chronic-diseases` 不合并回 `main`，后续移出当前仓库，不得继续使用本仓库正式更新通道、tag 或版本号。禁止复用历史 tag / draft / `latest.json`；发布前必须核对三处版本一致、兼容 Bundle Identifier 与 updater 公钥不变，并验证 `latest.json` 中每个平台的 URL 文件名和签名都来自同一次构建，验证成功后才允许把 draft 转为 latest 正式发布。
-11. **测试构建与正式发布禁止混用**：功能验收必须优先使用 `yarn release:test X.Y.Z` 或手动 `Test Build` 工作流。测试构建只能产生本机产物或 GitHub Actions Artifact，禁止修改或提交三处正式版本、创建 tag / GitHub Release / draft / `latest.json`，也禁止上传到客户端正式或测试更新源。验收通过后只能在干净 `main` 上用同一候选版本执行 `yarn release X.Y.Z`；正式 tag 仍须满足唯一、单调递增和 release preflight。候选工作流上传前必须验证真实安装包存在，来源清单不得单独满足产物门禁。
+11. **测试构建与正式发布禁止混用**：需要安装包验收时，使用 `yarn release:test X.Y.Z` 或手动 `Test Build` 工作流；日常修复验证按[源码启动与验证](./HARNESS.md#源码启动与验证)执行。测试构建只能产生本机产物或 GitHub Actions Artifact，禁止修改或提交三处正式版本、创建 tag / GitHub Release / draft / `latest.json`，也禁止上传到客户端正式或测试更新源。验收通过后只能在干净 `main` 上用同一候选版本执行 `yarn release X.Y.Z`；正式 tag 仍须满足唯一、单调递增和 release preflight。候选工作流上传前必须验证真实安装包存在，来源清单不得单独满足产物门禁。
 12. **Win7 legacy 发布线禁止混入普通正式发布**：Windows 7 只允许使用同一 `main` 源码上的 `tauri.win7.conf.json` 独立 flavor，不维护长期业务分支。普通客户端继续使用稳定 `X.Y.Z`；Win7 对外发布版本必须使用独立 SemVer 预发布线 `X.Y.Z-win7`，同一普通版本基线上的热修依次使用 `X.Y.Z-win7.1`、`.2`，且 `X.Y.Z` 必须等于所选源码 commit 的三处稳定版本。由于 WiX MSI 只接受 `0–65535` 的纯数字第四段，构建期间三处临时内部版本必须确定性映射为 `X.Y.Z-0`（首版）或 `X.Y.Z-N`（热修），公开版本仍须编译进客户端，供 updater 比较、请求头、强更策略、界面、`latest.json` 和来源清单使用；禁止把内部 MSI 版本上传为通道版本或暴露为当前客户端版本。不得为 Win7 热修修改或提交普通客户端三处版本，也不得把 Win7 预发布版本用于普通正式 tag。`Win7 Legacy Test Build` 必须保持 Artifact-only、updater 关闭；只有 `Win7 Legacy Release Build` 可以用独立 Win7 updater 密钥生成签名发布包，并且只允许进入 `win7-testing / win7-production`。必须使用独立 identifier / UpgradeCode、外置安装的 WebView2 109、`x86_64-win7-windows-msvc + build-std`、独立 `latest.json / policy.json /` 回滚历史，禁止复用普通正式 `stable` target、UpgradeCode、签名密钥、`production / testing`、tag、Release 或 draft。GitHub 托管 Runner 禁止依赖内网发布服务可达性，触发人必须提供目标通道前置版本做离线 preflight，`WIN7_UPDATE_SERVER_BASE_URL` 只用于生成下载地址；内网 PCIE Server 必须按完整公开 SemVer 和该通道历史最高版本执行最终单调递增门禁，同版本只允许补传，降级只能走显式回滚入口。Win7 原生窗口 region 裁剪必须只由 `win7-legacy` Cargo feature 启用；任何主窗口几何变更前先恢复 full region，球态稳定后才能应用中心圆或五圆联合 region，不得让正式 Windows/macOS 路径启用该裁剪。Win7 包保留 `med-hermes` 深链时不得与普通正式客户端共机安装；发布包必须记录公开版本、内部 MSI 版本、安全责任人和支持截止日期，且 Windows 7 SP1 x64 的 `N -> N+1` 实机升级冒烟完成前不得进入 `win7-production` 或描述为正式支持版本。
 13. **门诊动态模板正式契约与字段 prompt 门禁**：`features/outpatient-emr` 在白云线作为正式能力交付，当前 `outpatient-emr-template-pair.v1` 模板对（六字段源可按 api.md 使用成对明确 Base64 data URI，经 PCIE Server 解码，hash/解析仍基于解码原文）、`targetFieldIds` 白名单、含 `manual-override` 的映射来源枚举和 `outpatient-emr-field-prompt.v6` 字段规则为唯一正式契约。早期实验协议（`htmlContent / templateSource / sourceFormat`、HTML 字典属性、单源解析、自动范围推断及失败后旧路径兜底）已删除且不得恢复；后续不兼容调整必须由用户指定版本、HIS 联调与退出条件，不得静默改 wire，也不得以 deprecated 分支、隐藏开关或“先保留不用”的死代码承载双读双写。签名快照 v2 返回生效字段规则，模型提示由 `lib/outpatientEmrPromptGenerator.ts` 按字段类别、值形态和预置草稿统一组装。逐字段配置见[门诊字段维护](../pcie-server/docs/outpatient-emr-field-rules.md)，从服务端消费已维护的正文规则，禁止在源码里按机构或字段 ID 硬编码分支。新增语义类别必须从既有业务 prompt（语音病历、阴性候选核查、查体扩展、注意事项诊断作用域等）抽象，并同步规则版本与单测。患者姓名、患者 ID 和就诊 ID 不进入模型消息。
 

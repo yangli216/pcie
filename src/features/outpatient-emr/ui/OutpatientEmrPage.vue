@@ -165,6 +165,7 @@ async function handleCancel(): Promise<void> {
           v-if="template"
           :sanitized-html="template.sanitizedHtml"
           :fields="targetFields"
+          :visibility-fields="template.fields"
           :field-values="fieldValues"
           :field-sources="fieldValueSources"
           :conflict-field-ids="conflictFieldIds"

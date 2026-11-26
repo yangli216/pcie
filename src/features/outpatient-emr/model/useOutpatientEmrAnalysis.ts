@@ -258,7 +258,8 @@ export function useOutpatientEmrAnalysis(
       const localRequest = { ...nextRequest, ...prepared.source };
       const identityWords = [localRequest.patient?.name, localRequest.patient?.idPi, localRequest.visitId];
       const policy = parsedTemplate.fieldPolicy;
-      if (initialDraft && policy && (initialDraft.policyRevision !== policy.revision || initialDraft.ruleSetVersion !== policy.ruleSetVersion)) {
+      if (initialDraft && policy && (initialDraft.snapshotId !== parsedTemplate.snapshotId
+        || initialDraft.policyRevision !== policy.revision || initialDraft.ruleSetVersion !== policy.ruleSetVersion)) {
         initialDraft = undefined;
       }
       const previousValues = fieldValues.value;
@@ -357,7 +358,8 @@ export function useOutpatientEmrAnalysis(
     if (templateHash.value !== prepared.templateHash) throw new OutpatientEmrError('REQUEST_ID_CONFLICT', '当前模板版本已变化，请重新核对。');
     const previous = template.value.fieldPolicy;
     const next = prepared.template.fieldPolicy;
-    if (next?.revision !== previous?.revision || next?.ruleSetVersion !== previous?.ruleSetVersion) {
+    if (prepared.template.snapshotId !== template.value.snapshotId
+      || next?.revision !== previous?.revision || next?.ruleSetVersion !== previous?.ruleSetVersion) {
       const values = { ...fieldValues.value };
       const sources = { ...fieldValueSources.value };
       for (const f of prepared.template.targetFields) {

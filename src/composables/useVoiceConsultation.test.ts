@@ -330,6 +330,26 @@ describe('confirmed voice transcript template preparation', () => {
     } finally { prepare.mockRestore(); hash.mockRestore(); }
   });
 
+  it.each(['deleted-snapshot', undefined])('refreshes the server and rejects a cached draft from snapshot %s', async oldId => {
+    const { api, prepared } = templateRound();
+    prepared.identity.snapshotId = 'recreated-snapshot';
+    prepared.identity.policyRevision = 0;
+    const cached = {
+      consultationId: 'visit-1', transcribedText: '相同转写', savedAt: Date.now(), ownerScope: 'patient-1',
+      intentResult: { ...result, voiceTemplateDraft: { ...prepared.identity, snapshotId: oldId, fieldValues: {} } },
+    };
+    vi.mocked(loadVoiceConsultationCacheEntry).mockReturnValueOnce(cached).mockReturnValueOnce(cached);
+    const prepare = vi.spyOn(templates, 'prepareVoiceOutpatientRecognitionTemplate').mockResolvedValue(prepared);
+    try {
+      await expect(api.resumeCachedVoiceResult()).resolves.toBe(false);
+      mocks.processTranscript.mockResolvedValueOnce({ ...result, voiceTemplateDraft: { ...prepared.identity, fieldValues: {} } });
+      await api.handleVoiceStop(new Blob([]), '相同转写');
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(mocks.processTranscript).toHaveBeenCalledOnce();
+      expect(api.intentSource.value).toBe('llm');
+    } finally { prepare.mockRestore(); }
+  });
+
   it('regenerates on the first voice stream for identical text bound to different template bytes', async () => {
     const { api, prepared } = templateRound();
     const draft = { ...prepared.identity, fieldValues: { 合成字段: '新一轮结果' } };
@@ -350,7 +370,9 @@ describe('confirmed voice transcript template preparation', () => {
 
   it('keeps the original note if template preparation fails and exposes only the template failure status', async () => {
     const { api } = templateRound();
-    const prepare = vi.spyOn(templates, 'prepareVoiceOutpatientRecognitionTemplate').mockRejectedValueOnce(new Error('private fixture source'));
+    const failure = new Error('private fixture source');
+    const prepare = vi.spyOn(templates, 'prepareVoiceOutpatientRecognitionTemplate').mockRejectedValueOnce(failure);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       mocks.processTranscript.mockResolvedValueOnce(result);
       await api.handleVoiceStop(new Blob(['audio']), '保留原语音病历');
@@ -361,7 +383,8 @@ describe('confirmed voice transcript template preparation', () => {
       expect(api.intentResult.value?.voiceTemplateError).not.toContain('private');
       expect(api.intentResult.value?.voiceTemplateDraft).toBeUndefined();
       expect(result).not.toHaveProperty('voiceTemplateError');
-    } finally { prepare.mockRestore(); }
+      expect(warn).toHaveBeenCalledWith('[VoiceConsultation] Outpatient template preparation failed:', failure);
+    } finally { prepare.mockRestore(); warn.mockRestore(); }
   });
 
   it('ignores the old preparation when a new template request replaces the same visit', async () => {

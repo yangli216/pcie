@@ -78,14 +78,6 @@
         </button>
       </div>
 
-      <VoiceTranscriptionStatus
-        v-if="transcriptionStatus === 'failed' || transcriptionStatus === 'empty'"
-        :kind="transcriptionStatus === 'failed' ? 'error' : 'info'"
-        :message="transcriptionStatus === 'empty' ? '整段转写未识别到新增文字。可核对已有文字、手动补充或重试。' : transcriptionError"
-        :can-retry="canRetryTranscription && !confirmingAbandon && !isFinalizing"
-        @retry="transcriptionReview.retry"
-      />
-
       <!-- Collapsed: single-line preview -->
       <div class="lyrics-row preview" v-if="!isExpanded" @click="isExpanded = true">
         <div class="preview-text">{{ editableText || '未识别到文字' }}</div>
@@ -99,7 +91,7 @@
           :readonly="!canEditTranscript || isFinalizing"
           aria-label="语音转写文字"
           :placeholder="transcriptionPlaceholder"
-          :rows="transcriptionStatus === 'failed' || transcriptionStatus === 'empty' ? 2 : 6"
+          rows="6"
         ></textarea>
       </div>
 
@@ -138,10 +130,7 @@ const getPrimaryColor = () => {
   return getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() || '#0891B2';
 };
 import { RealtimeSpeechService } from '@/services/aliyunSpeech';
-import { transcribeAudio } from '@/services/llm';
-import { DEFAULT_RETRY_CONFIG } from '@/services/llm/types';
 import { useVoiceTranscriptionReview } from '../model/useVoiceTranscriptionReview';
-import VoiceTranscriptionStatus from './VoiceTranscriptionStatus.vue';
 import Icon from '@shared/ui/Icon.vue';
 import {
   appendVoiceTranscript,
@@ -172,9 +161,7 @@ const prefersReducedMotion = ref(false);
 const isStopped = ref(false);
 const isExpanded = ref(false);
 const isStopping = ref(false);
-const transcriptionReview = useVoiceTranscriptionReview({
-  retryTranscription: (audio) => transcribeAudio(audio, undefined, { ...DEFAULT_RETRY_CONFIG, maxRetries: 0 }),
-});
+const transcriptionReview = useVoiceTranscriptionReview();
 const {
   text: editableText,
   status: transcriptionStatus,
@@ -183,17 +170,16 @@ const {
   canContinue: canContinueRecording,
   canEdit: canEditTranscript,
   canConfirm: canConfirmTranscript,
-  canRetry: canRetryTranscription,
 } = transcriptionReview;
-const stoppedLabel = computed(() => isTranscribing.value
-  ? '正在完成整段转写…'
-  : transcriptionStatus.value === 'failed' ? '整段转写未完成'
-  : transcriptionStatus.value === 'empty' ? '未识别到新增文字' : '音频采集完成');
+const stoppedLabel = computed(() => {
+  if (isTranscribing.value) return '正在完成整段转写…';
+  if (transcriptionStatus.value === 'failed') return `${transcriptionError.value}，请编辑后确认`;
+  if (transcriptionStatus.value === 'empty') return '未识别到新增文字';
+  return '音频采集完成';
+});
 const transcriptionPlaceholder = computed(() => {
   if (canContinueRecording.value) return '可审核并编辑转写文字';
-  if (transcriptionStatus.value === 'failed') return canRetryTranscription.value
-    ? '整段转写未完成，可重试或手动填写后确认'
-    : '录音不可用，可手动填写后确认';
+  if (transcriptionStatus.value === 'failed') return '请手动填写并核对文字后确认';
   return '整段转写尚未完成';
 });
 const isFinalizing = ref(false);
@@ -206,10 +192,9 @@ let currentSegmentTranscript = '';
 let recordingEpoch = 0;
 let disposed = false;
 
-// Failed or empty transcription needs room for its explanation and retry action.
-watch([isStopped, isExpanded, transcriptionStatus], ([stopped, expanded, status]) => {
+watch([isStopped, isExpanded], ([stopped, expanded]) => {
   if (stopped) {
-    emit('window-stage-change', expanded || status === 'failed' || status === 'empty' ? 'expanded' : 'stopped');
+    emit('window-stage-change', expanded ? 'expanded' : 'stopped');
   }
 });
 

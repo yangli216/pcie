@@ -1068,6 +1068,7 @@
     this._destroyed = false;
     this._browserCtx = null;
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = null;
     this._currentConsultationId = null;
     this._lastEventConsultationId = null;
@@ -1252,6 +1253,7 @@
   MedHermes.prototype.startConsultation = function (patient) {
     var self = this;
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = getPatientId(patient);
     this._currentConsultationId = getPatientAnchorId(patient);
     this._lastResultKey = '';
@@ -1278,6 +1280,7 @@
     var self = this;
     var payload = assign({}, patient, { action: action });
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = getPatientId(patient);
     this._currentConsultationId = getPatientAnchorId(patient);
     this._lastResultKey = '';
@@ -1316,20 +1319,33 @@
     } catch (error) {
       return Promise.reject(error);
     }
-    this._voiceTemplateScope = payload && payload.outpatientEmr ? {
-      visitId: payload.idVis,
-      templateId: payload.outpatientEmr.templateId,
-      templateName: payload.outpatientEmr.templateName,
-      requestId: payload.outpatientEmr.requestId,
-      targetFieldIds: payload.outpatientEmr.targetFieldIds.slice()
-    } : null;
-    if (payload) {
-      this._currentPatientId = getPatientId(payload);
-      this._currentConsultationId = getPatientAnchorId(payload);
+    var patientId = getPatientId(payload) || this._currentPatientId;
+    var explicitVisitId = payload && (payload.idVis || payload.visitId);
+    var previousSession = this._voiceSessionIdentity;
+    var reopening = previousSession && patientId
+      && previousSession.patientId === patientId
+      && (!explicitVisitId || previousSession.consultationId === explicitVisitId);
+    if (!reopening) {
+      this._voiceTemplateScope = payload && payload.outpatientEmr ? {
+        visitId: payload.idVis,
+        templateId: payload.outpatientEmr.templateId,
+        templateName: payload.outpatientEmr.templateName,
+        requestId: payload.outpatientEmr.requestId,
+        targetFieldIds: payload.outpatientEmr.targetFieldIds.slice()
+      } : null;
+      if (payload) {
+        this._currentPatientId = getPatientId(payload);
+        this._currentConsultationId = getPatientAnchorId(payload);
+      }
+      this._voiceSessionIdentity = {
+        patientId: this._currentPatientId,
+        consultationId: this._currentConsultationId
+      };
+      this._lastResultKey = '';
+      this._lastEventId = '';
+      this._lastEventConsultationId = null;
     }
-    this._lastResultKey = '';
-    this._lastEventId = '';
-    this._lastEventConsultationId = null;
+    var startedSession = this._voiceSessionIdentity;
 
     return this._callWithFallback(
       function () { return self._http.post('/consultation/start-voice', payload || {}); },
@@ -1338,6 +1354,12 @@
     ).then(function (result) {
       self._resumeEventChannelIfNeeded();
       return result;
+    }).catch(function (error) {
+      if (!reopening && self._voiceSessionIdentity === startedSession) {
+        self._voiceSessionIdentity = null;
+        self._voiceTemplateScope = null;
+      }
+      throw error;
     });
   };
 
@@ -1390,6 +1412,7 @@
     }
 
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = payload.admissionId;
     this._currentConsultationId = payload.admissionId;
     this._lastResultKey = '';
@@ -1519,6 +1542,7 @@
     this._rejectReplacedOutpatientEmrRequests(payload);
 
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = payload.visitId;
     this._currentConsultationId = payload.visitId;
     this._lastResultKey = '';
@@ -1540,6 +1564,7 @@
   MedHermes.prototype.stop = function () {
     var self = this;
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = null;
     this._currentConsultationId = null;
     this._lastEventConsultationId = null;
@@ -1564,6 +1589,7 @@
     var self = this;
     var payload = assign({ idPi: patientId }, optionalInfo || {});
     this._voiceTemplateScope = null;
+    this._voiceSessionIdentity = null;
     this._currentPatientId = getPatientId(payload);
     this._currentConsultationId = getPatientAnchorId(payload);
     this._lastResultKey = '';
@@ -2184,6 +2210,10 @@
     this._lastEventId = event.id || '';
     this._lastEventConsultationId = consultationId || this._lastEventConsultationId;
     if (!malformedOutpatientEvent) {
+      if (resultType === 'cancelled') {
+        this._voiceSessionIdentity = null;
+        this._voiceTemplateScope = null;
+      }
       this._emitter.emit('event', envelope);
       this._emitter.emit(resultType, record);
     }

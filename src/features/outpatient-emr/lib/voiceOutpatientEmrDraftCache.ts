@@ -4,6 +4,7 @@ export type ReviewedVoiceSections = Record<string, {
   chapterId?: string;
   fieldEditOnly?: boolean;
   supplement?: boolean;
+  snapshotId?: string;
   policyRevision?: number;
   ruleSetVersion?: string;
   text: string;

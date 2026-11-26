@@ -96,6 +96,20 @@ function assertSingleStreamingRequest() {
 }
 
 describe('inpatient production service → real LLM client → regional network boundary', () => {
+  it('keeps hidden fields in model generation and values while applying only the saved display flag', async () => {
+    boundary.post.mockImplementation(async (_path, payload) => ({
+      cacheHit: true,
+      fields: payload.fields.map((field: InpatientEmrTemplateField) => ({ ...field, visible: field.id !== '诊断依据文本' })),
+    }));
+    boundary.sse.mockImplementation(async (_path, _body, onChunk) => onChunk('{"诊断依据文本":"合成保留正文","鉴别诊断文本":"合成显示正文"}'));
+    const result = await generateInpatientEmrPreviewStream(request);
+    assertSingleStreamingRequest();
+    expect(result.template.fields.find(field => field.id === '诊断依据文本')).toMatchObject({ visible: false, aiSuitable: true });
+    expect(result.template.fields.find(field => field.id === '鉴别诊断文本')?.visible).toBe(true);
+    expect(result.fieldValues['诊断依据文本']).toBe('合成保留正文');
+    expect(result.initialFieldValues['诊断依据文本']).toBe('合成保留正文');
+  });
+
   it('sends both template sources and only the selected visit’s original clinical facts to the model', async () => {
     const visitId = 'SYN-SELECTED';
     const service = {

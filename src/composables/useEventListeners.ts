@@ -20,7 +20,6 @@ import { trackApiCall, trackError } from '../services/operationTracker';
 import {
   trackConsultationAssistEntry,
   trackSmartConsultationEntry,
-  trackVoiceConsultationEntry,
 } from '../services/featureUsageEntryTracker';
 import {
   resolveIncomingPatientTracking,
@@ -48,6 +47,7 @@ import {
   type StartConsultationPayload,
 } from '@app/events/useReceptionController';
 import { usePatientMemorySync } from '@features/patient-memory';
+import { useVoiceConsultationEntryController } from '@app/events/useVoiceConsultationEntryController';
 import {
   useSdkHandshakeController,
   type SdkHandshakePayload,
@@ -137,10 +137,13 @@ export interface EventListenersOptions {
   clearMinimizedConsultationSessions: () => void;
   /** 检查指定患者是否存在未提交语音缓存 */
   hasCachedVoiceResult: (patient?: AppPatient | null) => boolean;
+  /** 当前语音结果现场（包含生成中和部分产物）是否仍存在 */
+  hasActiveVoiceResult: () => boolean;
   /** 队列化快进模式自动触发请求 */
   queueConsultationAssistTrigger: (kind: ConsultationAssistAction) => void;
   /** 读取并固定 start-voice 中可选的动态门诊模板续接规格 */
-  prepareVoiceOutpatientEmr?: (payload: unknown) => boolean;
+  prepareVoiceOutpatientEmr?: (payload: unknown) => boolean | Promise<boolean>;
+  refreshVoiceOutpatientEmr?: () => Promise<boolean>;
   /** 清理当前语音动态门诊模板续接现场 */
   clearVoiceOutpatientEmr?: () => void;
   /** 读取当前动态门诊模板语音会话的 requestId（仅 debug 模拟转写使用） */
@@ -191,6 +194,7 @@ export function useEventListeners(options: EventListenersOptions) {
     hasCachedVoiceResult,
     queueConsultationAssistTrigger,
     prepareVoiceOutpatientEmr,
+    refreshVoiceOutpatientEmr,
     clearVoiceOutpatientEmr,
     exiting,
     resizeTimeoutRef,
@@ -239,6 +243,14 @@ export function useEventListeners(options: EventListenersOptions) {
     trackError,
   });
   const { handleSdkHandshake } = useSdkHandshakeController();
+  const { handleStartVoice, handleVoiceDeepLink } = useVoiceConsultationEntryController({
+    currentPatient, currentView, isWorking,
+    hasActiveVoiceResult: options.hasActiveVoiceResult,
+    ensureReceptionContext, mergeCurrentPatient,
+    prepareVoiceOutpatientEmr, refreshVoiceOutpatientEmr, clearVoiceOutpatientEmr,
+    openVoiceConsultation: navigation.openVoiceConsultation,
+    openVoiceEntry: outpatientScenarioRouter.openVoiceEntry,
+  });
 
   // ========== 事件监听句柄 ==========
 
@@ -262,9 +274,7 @@ export function useEventListeners(options: EventListenersOptions) {
 
           // Simple routing based on URL
           if (url.includes('voice-consultation')) {
-            clearVoiceOutpatientEmr?.();
-            resetVoiceSessionState();
-            navigation.startVoiceInteraction();
+            void handleVoiceDeepLink(url);
           } else if (!isWorking.value) {
             workMode.enterWorkMode();
           }
@@ -396,43 +406,6 @@ export function useEventListeners(options: EventListenersOptions) {
     currentPatient.value = null;
     // 无条件重申球态几何；即使响应式状态已先变为 ball，也要修复可能被迟到 resize 留下的错误外窗高度。
     await workMode.exitWork();
-  }
-
-  /**
-   * 注册语音问诊事件监听
-   */
-  async function handleVoiceConsultationEvent(
-    event: TauriEvent<SessionAssistPayload | null>
-  ): Promise<void> {
-    console.log('Received start voice consultation command');
-    const incomingPatient = resolveIncomingPatientTracking(event.payload as Record<string, unknown> | null | undefined);
-    trackApiCall('his_start_voice', true, undefined, {
-      patientId: incomingPatient.patientId,
-    });
-
-    const success = await ensureReceptionContext(event.payload);
-    if (isWorking.value && currentView.value === 'voice-interaction') {
-      console.info('[EventListeners] Duplicate start voice request ignored while voice interaction is already active');
-      return;
-    }
-    if (!success) {
-      clearVoiceOutpatientEmr?.();
-      return;
-    }
-
-    // 走到这里说明接诊上下文已存在且身份一致，payload 可能带额外字段需要合并
-    mergeCurrentPatient(event.payload);
-
-    if (prepareVoiceOutpatientEmr && !prepareVoiceOutpatientEmr(event.payload)) {
-      return;
-    }
-
-    trackVoiceConsultationEntry({
-      patient: currentPatient.value,
-      payload: event.payload as Record<string, unknown> | null | undefined,
-    });
-
-    await outpatientScenarioRouter.openVoiceEntry();
   }
 
   async function handleSimulatedVoiceTranscriptEvent(
@@ -603,7 +576,7 @@ export function useEventListeners(options: EventListenersOptions) {
 
   const voiceConsultationListener = useTauriEventListener<SessionAssistPayload | null>({
     eventName: 'start-voice-consultation',
-    handler: (event) => { void handleVoiceConsultationEvent(event); },
+    handler: (event) => { void handleStartVoice(event.payload); },
     logContext: 'EventListeners',
     autoStart: false,
     throwOnError: true,

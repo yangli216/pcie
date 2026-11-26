@@ -3,10 +3,6 @@ import { appendVoiceTranscript } from '../lib/voiceRecordingContinuation';
 
 export type VoiceTranscriptionStatus = 'idle' | 'transcribing' | 'failed' | 'empty' | 'ready';
 
-interface ReviewOptions {
-  retryTranscription: (audio: Blob) => Promise<string>;
-}
-
 interface StoppedRecording {
   audio: Blob;
   prefix: string;
@@ -14,17 +10,12 @@ interface StoppedRecording {
   finish: () => Promise<string>;
 }
 
-/** Owns only the current stopped segment; previously reviewed text is kept as a frozen prefix. */
-export function useVoiceTranscriptionReview(options: ReviewOptions) {
+export function useVoiceTranscriptionReview() {
   const status = ref<VoiceTranscriptionStatus>('idle');
   const text = ref('');
   const errorMessage = ref('');
-  let audio: Blob | null = null;
-  let prefix = '';
   let requestId = 0;
-  /** 当前停录段首次失败时的文字快照：失败后须由医生改出不同的非空文字才可确认；重试再失败不重拍快照。 */
   const failedText = ref('');
-  let hasFailedSnapshot = false;
 
   const isPending = computed(() => status.value === 'transcribing');
   const canContinue = computed(() => status.value === 'ready' || status.value === 'empty');
@@ -36,37 +27,36 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
     && text.value.trim() !== failedText.value.trim()
   ));
   const canConfirm = computed(() => (canContinue.value && Boolean(text.value.trim())) || isFailedTextEdited.value);
-  const canRetry = computed(() => (status.value === 'failed' || status.value === 'empty') && Boolean(audio?.size));
 
   function reset() {
     requestId += 1;
-    audio = null;
-    prefix = '';
     text.value = '';
     failedText.value = '';
-    hasFailedSnapshot = false;
     errorMessage.value = '';
     status.value = 'idle';
   }
 
   function markFailed(message: string) {
     errorMessage.value = message;
-    if (!hasFailedSnapshot) {
-      failedText.value = text.value;
-      hasFailedSnapshot = true;
-    }
+    failedText.value = text.value;
     status.value = 'failed';
   }
 
-  async function resolveTranscription(transcribe: () => Promise<string>) {
-    const currentRequest = ++requestId;
+  async function complete({ audio, prefix, draft, finish }: StoppedRecording) {
+    reset();
+    const currentRequest = requestId;
+    text.value = appendVoiceTranscript(prefix, draft);
+    if (!audio.size) {
+      markFailed('录音保存失败');
+      return;
+    }
+
     status.value = 'transcribing';
-    errorMessage.value = '';
     try {
-      const result = await transcribe();
+      const result = await finish();
       if (currentRequest !== requestId) return;
       if (typeof result !== 'string') {
-        markFailed('转写结果异常，录音已保留。请重试，或手动编辑文字后确认。');
+        markFailed('转写结果异常');
         return;
       }
       if (result.trim()) {
@@ -77,31 +67,13 @@ export function useVoiceTranscriptionReview(options: ReviewOptions) {
       }
     } catch {
       if (currentRequest !== requestId) return;
-      markFailed('整段转写失败，录音已保留。请重试，或手动编辑文字后确认。');
+      markFailed('整段转写未完成');
     }
-  }
-
-  async function complete(recording: StoppedRecording) {
-    reset();
-    audio = recording.audio;
-    prefix = recording.prefix;
-    text.value = appendVoiceTranscript(prefix, recording.draft);
-    if (!audio.size) {
-      markFailed('录音保存失败，无法重试。请编辑并核对文字后确认，或放弃后重新采集。');
-      return;
-    }
-    await resolveTranscription(recording.finish);
-  }
-
-  async function retry() {
-    if (!canRetry.value || !audio) return;
-    const recording = audio;
-    await resolveTranscription(() => options.retryTranscription(recording));
   }
 
   return {
     status: readonly(status), text, errorMessage: readonly(errorMessage),
-    isPending, canContinue, canEdit, canConfirm, canRetry,
-    complete, retry, reset,
+    isPending, canContinue, canEdit, canConfirm,
+    complete, reset,
   };
 }

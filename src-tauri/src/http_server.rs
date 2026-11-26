@@ -761,6 +761,33 @@ fn parse_start_voice_patient(data: &[u8]) -> Result<Option<PatientInfo>, serde_j
     serde_json::from_slice::<PatientInfo>(data).map(Some)
 }
 
+fn prepare_start_voice_context(
+    state: &SharedAppState,
+    patient: Option<&PatientInfo>,
+) -> Result<(), String> {
+    let mut current = state.current_consultation.lock().map_err(|error| error.to_string())?;
+    let same_encounter = current.as_ref().is_some_and(|active| {
+        !active.id_pi.is_empty() && patient.is_none_or(|incoming| {
+            incoming.id_pi == active.id_pi
+                && incoming.id_vis.as_ref().is_none_or(|visit| Some(visit) == active.id_vis.as_ref())
+        })
+    });
+    let cancelled = state.last_result.lock().map_err(|error| error.to_string())?
+        .as_ref().is_some_and(|result| result.record["resultType"] == "cancelled");
+    // Reopening an unfinished encounter must not erase a pending HIS writeback.
+    if !same_encounter || cancelled {
+        clear_consultation_events(state)?;
+    }
+    if let Some(patient) = patient {
+        let mut next = patient.clone();
+        if same_encounter && next.id_vis.is_none() {
+            next.id_vis = current.as_ref().and_then(|active| active.id_vis.clone());
+        }
+        *current = Some(next);
+    }
+    Ok(())
+}
+
 async fn start_voice_consultation(
     data: web::Bytes,
     app_handle: web::Data<tauri::AppHandle>,
@@ -812,13 +839,8 @@ async fn start_voice_consultation(
         .as_ref()
         .map(|template| template.request_id.clone());
 
-    if let Err(error) = clear_consultation_events(state.get_ref()) {
-        eprintln!("Failed to clear consultation events: {}", error);
-    }
-
-    if let Some(patient) = patient.as_ref() {
-        let mut current = state.current_consultation.lock().unwrap();
-        *current = Some(patient.clone());
+    if let Err(error) = prepare_start_voice_context(state.get_ref(), patient.as_ref()) {
+        eprintln!("Failed to prepare voice consultation context: {}", error);
     }
 
     // Emit event to Frontend
@@ -2923,6 +2945,69 @@ pub fn run_server(app_handle: tauri::AppHandle, state: SharedAppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn start_voice_test_state() -> SharedAppState {
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+        let (result_tx, _) = tokio::sync::broadcast::channel(16);
+        let state = Arc::new(crate::AppState {
+            current_consultation: Mutex::new(Some(debug_complete_patient())),
+            last_result: Mutex::new(None),
+            event_queue: Mutex::new(VecDeque::new()),
+            browser_context: Mutex::new(None),
+            result_tx,
+        });
+        append_consultation_event(&state, ConsultationResult {
+            status: Some("pending".to_string()),
+            consultation_id: "visit-1".to_string(),
+            timestamp: 123,
+            record: serde_json::json!({
+                "resultType": "record-confirmed", "requestId": "request-1",
+                "referenceStatus": "pending", "chiefComplaint": "合成病历中间产物"
+            }),
+        }).unwrap();
+        state
+    }
+
+    #[test]
+    fn start_voice_repeat_preserves_pending_result_and_event_queue() {
+        let state = start_voice_test_state();
+        let patient_only: PatientInfo = serde_json::from_value(serde_json::json!({
+            "idPi": "patient-1"
+        })).unwrap();
+        for incoming in [Some(debug_complete_patient()), None, Some(patient_only)] {
+            prepare_start_voice_context(&state, incoming.as_ref()).unwrap();
+            let last = state.last_result.lock().unwrap();
+            let result = last.as_ref().unwrap();
+            assert_eq!(result.consultation_id, "visit-1");
+            assert_eq!(result.record["requestId"], "request-1");
+            assert_eq!(result.record["referenceStatus"], "pending");
+            assert_eq!(result.record["chiefComplaint"], "合成病历中间产物");
+            assert_eq!(state.event_queue.lock().unwrap().len(), 1);
+            assert_eq!(state.current_consultation.lock().unwrap().as_ref().unwrap().id_vis.as_deref(), Some("visit-1"));
+        }
+    }
+
+    #[test]
+    fn start_voice_new_or_cancelled_encounter_clears_previous_events() {
+        for change in ["patient", "visit", "stopped", "cancelled"] {
+            let state = start_voice_test_state();
+            let mut incoming = debug_complete_patient();
+            match change {
+                "patient" => incoming.id_pi = "patient-2".to_string(),
+                "visit" => incoming.id_vis = Some("visit-2".to_string()),
+                "stopped" => *state.current_consultation.lock().unwrap() = None,
+                "cancelled" => {
+                    state.last_result.lock().unwrap().as_mut().unwrap().record["resultType"] = "cancelled".into();
+                },
+                _ => unreachable!(),
+            }
+            prepare_start_voice_context(&state, Some(&incoming)).unwrap();
+            assert!(state.last_result.lock().unwrap().is_none(), "{change}");
+            assert!(state.event_queue.lock().unwrap().is_empty(), "{change}");
+            assert_eq!(state.current_consultation.lock().unwrap().as_ref().unwrap().id_pi, incoming.id_pi);
+        }
+    }
 
     #[test]
     fn start_voice_invalid_json_cannot_discard_a_supplied_template() {

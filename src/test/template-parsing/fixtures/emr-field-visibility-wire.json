@@ -1,0 +1,255 @@
+{
+  "request" : {
+    "schemaVersion" : "outpatient-emr-template-pair-snapshot.v2",
+    "supportsFieldVisibility" : true,
+    "templateId" : "TPL-001",
+    "templateName" : "门诊初诊病历",
+    "templateHash" : "9cdc3076add7f93e4cd3d8de045976af9033221a853f11808944b254e09ff126",
+    "templateHtml" : "<section data-id='article-chief' data-article='chiefComplaint' data-name='主诉'><span data-id='chiefComplaint' data-name='主诉' data-type='text' data-readonly='false'>咳嗽</span></section>",
+    "templateDefinition" : "[{\"ID\":\"article-chief\",\"NAME\":\"主诉\",\"ARTICLE\":\"chiefComplaint\",\"eles\":[{\"ID\":\"chiefComplaint\",\"NAME\":\"主诉\",\"TYPE\":\"text\",\"READONLY\":false,\"TEXT\":\"咳嗽\",\"VALUE\":\"\"}]}]",
+    "parseResult" : {
+      "schemaVersion" : "outpatient-emr-template-pair.v1",
+      "fields" : [ {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      } ]
+    }
+  },
+  "adminRequest" : {
+    "fieldId" : "chiefComplaint",
+    "expectedRevision" : 0,
+    "generationMode" : "ai",
+    "meaningOverride" : null,
+    "customBody" : "保留本次主诉与持续时间",
+    "additionalConstraint" : null,
+    "visible" : false
+  },
+  "adminResponse" : {
+    "id" : "snapshot-history",
+    "idOrg" : "ORG001",
+    "idRegion" : "REGION001",
+    "idDevice" : "DEV001",
+    "cdDevice" : "PCIE-TEST-001",
+    "templateId" : "TPL-001",
+    "templateName" : "门诊初诊病历",
+    "templateHash" : "9cdc3076add7f93e4cd3d8de045976af9033221a853f11808944b254e09ff126",
+    "templateHtml" : "<section data-id='article-chief' data-article='chiefComplaint' data-name='主诉'><span data-id='chiefComplaint' data-name='主诉' data-type='text' data-readonly='false'>咳嗽</span></section>",
+    "templateDefinition" : "[{\"ID\":\"article-chief\",\"NAME\":\"主诉\",\"ARTICLE\":\"chiefComplaint\",\"eles\":[{\"ID\":\"chiefComplaint\",\"NAME\":\"主诉\",\"TYPE\":\"text\",\"READONLY\":false,\"TEXT\":\"咳嗽\",\"VALUE\":\"\"}]}]",
+    "parseResult" : {
+      "schemaVersion" : "outpatient-emr-template-pair.v1",
+      "fields" : [ {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      } ]
+    },
+    "mappingOverrides" : [ ],
+    "templateState" : "enabled",
+    "revision" : 1,
+    "aiFieldCount" : 1,
+    "customPromptCount" : 1,
+    "ruleSetVersion" : "outpatient-emr-field-prompt.v6",
+    "fields" : [ {
+      "originalField" : {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      },
+      "settings" : {
+        "generationMode" : "ai",
+        "visible" : false,
+        "meaningOverride" : null,
+        "additionalConstraint" : null,
+        "customBody" : "保留本次主诉与持续时间"
+      },
+      "effective" : {
+        "fieldId" : "chiefComplaint",
+        "meaning" : "患者本次就诊的主要症状及持续时间",
+        "aiSuitable" : true,
+        "generationSource" : "manual-override",
+        "promptSource" : "custom",
+        "resolvedPrompt" : "保留本次主诉与持续时间\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+        "unmentionedDefault" : null
+      },
+      "defaultMeaning" : "患者本次就诊的主要症状及持续时间",
+      "defaultAiSuitable" : true,
+      "defaultPrompt" : "字段含义：患者本次就诊的主要症状及持续时间。\n普通主诉简写主要症状或体征及有据的持续时间，如“咳嗽3天”，不输出加号。仅在明确为慢病复诊配药时写本次已选病种及“复诊配药”。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+      "defaultBody" : "字段含义：患者本次就诊的主要症状及持续时间。\n普通主诉简写主要症状或体征及有据的持续时间，如“咳嗽3天”，不输出加号。仅在明确为慢病复诊配药时写本次已选病种及“复诊配药”。",
+      "formatRule" : "仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。"
+    } ],
+    "fieldCount" : 1,
+    "writableFieldCount" : 1,
+    "dictionaryFieldCount" : 0,
+    "mappedFieldCount" : 1,
+    "receivedAt" : 1787803200000,
+    "createdAt" : 1795568400000,
+    "updatedAt" : 1795579297675
+  },
+  "resolved" : {
+    "schemaVersion" : "outpatient-emr-template-pair-resolution.v2",
+    "cacheHit" : true,
+    "id" : "snapshot-history",
+    "templateId" : "TPL-001",
+    "templateHash" : "9cdc3076add7f93e4cd3d8de045976af9033221a853f11808944b254e09ff126",
+    "parseResult" : {
+      "schemaVersion" : "outpatient-emr-template-pair.v1",
+      "fields" : [ {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      } ]
+    },
+    "receivedAt" : 1787803200000,
+    "fieldPolicy" : {
+      "schemaVersion" : "outpatient-emr-field-policy.v1",
+      "ruleSetVersion" : "outpatient-emr-field-prompt.v6",
+      "templateState" : "enabled",
+      "revision" : 1,
+      "fields" : [ {
+        "fieldId" : "chiefComplaint",
+        "meaning" : "患者本次就诊的主要症状及持续时间",
+        "aiSuitable" : true,
+        "generationSource" : "manual-override",
+        "promptSource" : "custom",
+        "resolvedPrompt" : "保留本次主诉与持续时间\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+        "unmentionedDefault" : null
+      } ],
+      "fieldVisibility" : {
+        "chiefComplaint" : false
+      }
+    }
+  },
+  "registered" : {
+    "id" : "snapshot-history",
+    "templateHash" : "9cdc3076add7f93e4cd3d8de045976af9033221a853f11808944b254e09ff126",
+    "deduplicated" : true,
+    "receivedAt" : 1787803200000,
+    "schemaVersion" : "outpatient-emr-template-pair-receipt.v2",
+    "templateId" : "TPL-001",
+    "parseResult" : {
+      "schemaVersion" : "outpatient-emr-template-pair.v1",
+      "fields" : [ {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      } ]
+    },
+    "fieldPolicy" : {
+      "schemaVersion" : "outpatient-emr-field-policy.v1",
+      "ruleSetVersion" : "outpatient-emr-field-prompt.v6",
+      "templateState" : "enabled",
+      "revision" : 1,
+      "fields" : [ {
+        "fieldId" : "chiefComplaint",
+        "meaning" : "患者本次就诊的主要症状及持续时间",
+        "aiSuitable" : true,
+        "generationSource" : "manual-override",
+        "promptSource" : "custom",
+        "resolvedPrompt" : "保留本次主诉与持续时间\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+        "unmentionedDefault" : null
+      } ],
+      "fieldVisibility" : {
+        "chiefComplaint" : false
+      }
+    }
+  },
+  "disabled" : {
+    "schemaVersion" : "outpatient-emr-template-pair-resolution.v2",
+    "cacheHit" : true,
+    "id" : "snapshot-history",
+    "templateId" : "TPL-001",
+    "templateHash" : "9cdc3076add7f93e4cd3d8de045976af9033221a853f11808944b254e09ff126",
+    "parseResult" : {
+      "schemaVersion" : "outpatient-emr-template-pair.v1",
+      "fields" : [ {
+        "id" : "chiefComplaint",
+        "name" : "主诉",
+        "type" : "text",
+        "articleTemplateId" : "article-chief",
+        "articleId" : "chiefComplaint",
+        "articleName" : "主诉",
+        "articleDefinitionName" : "主诉",
+        "readonly" : false,
+        "aiSuitable" : true,
+        "baselineValue" : "咳嗽",
+        "baselineDictionaryValue" : "",
+        "dictionaryItems" : [ ],
+        "recordField" : "chiefComplaint",
+        "mappingSource" : "canonical-id",
+        "projectionMode" : "direct"
+      } ]
+    },
+    "receivedAt" : 1787803200000,
+    "fieldPolicy" : {
+      "schemaVersion" : "outpatient-emr-field-policy.v1",
+      "ruleSetVersion" : "outpatient-emr-field-prompt.v6",
+      "templateState" : "disabled",
+      "revision" : 3,
+      "fields" : [ ],
+      "fieldVisibility" : {
+        "chiefComplaint" : false
+      }
+    }
+  }
+}

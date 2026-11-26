@@ -733,10 +733,12 @@ export function buildEditableOutpatientEmrPreviewHtml(
   editable = true,
   fieldSources: Readonly<Record<string, OutpatientEmrFieldValueSource>> = {},
   conflictFieldIds: ReadonlySet<string> = new Set(),
+  visibilityFields: readonly OutpatientEmrTemplateField[] = editableFields,
 ): string {
   const template = createTemplateFragment(sanitizeExternalHtml(sanitizedHtml));
   normalizeTemplateForPreview(template);
   const editableFieldsById = new Map(editableFields.map((field) => [field.id, field]));
+  const hiddenIds = new Set(visibilityFields.filter(field => field.visible === false).map(field => field.id));
 
   // The HIS editor draws braces around field values using its own stylesheet.
   template.content.querySelectorAll('.tag-filed > .tag-marker').forEach((marker) => {
@@ -745,6 +747,7 @@ export function buildEditableOutpatientEmrPreviewHtml(
   });
   template.content.querySelectorAll<HTMLElement>('[data-id][data-type]').forEach((element) => {
     const fieldId = element.getAttribute('data-id') || '';
+    if (hiddenIds.has(fieldId)) { element.remove(); return; }
     const field = editableFieldsById.get(fieldId);
     if (!field) return;
 

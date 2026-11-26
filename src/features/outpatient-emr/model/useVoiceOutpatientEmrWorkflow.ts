@@ -1,8 +1,9 @@
 import { computed, shallowRef, watch, type Ref } from 'vue';
 import type { AppPatient } from '@/types/appState';
-import { getPatientContextAnchorId } from '@/utils/patientContext';
+import { getPatientContextAnchorId, getPatientContextId } from '@/utils/patientContext';
 import { getFeedbackActor } from '@/services/feedbackContext';
 import { resolveVoiceOutpatientEmrStartContext } from '../lib/voiceOutpatientEmr';
+import { prepareVoiceOutpatientRecognitionTemplate } from '../lib/voiceOutpatientEmrRecognition';
 import { clearVoiceOutpatientEmrRecordDraftCache } from '../lib/voiceOutpatientEmrDraftCache';
 import type { VoiceOutpatientEmrStartContext } from '../types';
 
@@ -21,7 +22,7 @@ export function useVoiceOutpatientEmrWorkflow(
     startContext.value = null;
   }
 
-  function prepareFromStartVoice(payload: unknown): boolean {
+  async function prepareFromStartVoice(payload: unknown): Promise<boolean> {
     const resolution = resolveVoiceOutpatientEmrStartContext(payload);
     if (resolution.kind === 'none') {
       clear();
@@ -39,11 +40,31 @@ export function useVoiceOutpatientEmrWorkflow(
       return false;
     }
     const displayOrgName = getFeedbackActor().orgName;
-    startContext.value = {
+    const session = {
       ...resolution.context,
       ...(displayOrgName ? { displayOrgName } : {}),
     };
-    return true;
+    startContext.value = session;
+    return refreshTemplate();
+  }
+
+  async function refreshTemplate(): Promise<boolean> {
+    const session = startContext.value;
+    if (!session) return true;
+    const patientId = getPatientContextId(options.currentPatient.value);
+    const isCurrent = () => startContext.value === session
+      && getPatientContextAnchorId(options.currentPatient.value) === session.visitId
+      && getPatientContextId(options.currentPatient.value) === patientId;
+    try {
+      // Every accepted start reads the server, even for the same template and request.
+      await prepareVoiceOutpatientRecognitionTemplate(session, [], isCurrent);
+    } catch (error) {
+      if (isCurrent()) {
+        console.error('[VoiceOutpatientEmr] Template synchronization failed at voice start:', error);
+        options.notify?.('门诊模板同步失败，可继续录音，确认转写后将重试。', 'error');
+      }
+    }
+    return isCurrent();
   }
 
   watch(
@@ -58,6 +79,7 @@ export function useVoiceOutpatientEmrWorkflow(
     hasTemplateContinuation: computed(() => Boolean(startContext.value)),
     deferredWritebackRequestId: computed(() => startContext.value?.template.requestId || ''),
     prepareFromStartVoice,
+    refreshTemplate,
     clear,
   };
 }

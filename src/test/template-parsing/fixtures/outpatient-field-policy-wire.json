@@ -341,5 +341,213 @@
       "revision": 3,
       "fields": []
     }
+  },
+  "afterDelete": {
+    "schemaVersion": "outpatient-emr-template-pair-resolution.v2",
+    "cacheHit": false,
+    "id": null,
+    "templateId": "SYN-CHIEF",
+    "templateHash": "7e5cdf683f3a485b7786bbd9dfad2b7178379b5920dc72fe22fa7f47df899f90",
+    "parseResult": null,
+    "receivedAt": null,
+    "fieldPolicy": null
+  },
+  "recreated": {
+    "id": "SYN-POLICY-SNAPSHOT-NEW",
+    "templateHash": "7e5cdf683f3a485b7786bbd9dfad2b7178379b5920dc72fe22fa7f47df899f90",
+    "deduplicated": false,
+    "receivedAt": 1795579297644,
+    "schemaVersion": "outpatient-emr-template-pair-receipt.v2",
+    "templateId": "SYN-CHIEF",
+    "parseResult": {
+      "schemaVersion": "outpatient-emr-template-pair.v1",
+      "fields": [
+        {
+          "id": "symptom",
+          "name": "症状名称",
+          "type": "text",
+          "articleTemplateId": "chief",
+          "articleId": "主诉",
+          "articleName": "主诉",
+          "articleDefinitionName": "主诉",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "",
+          "baselineDictionaryValue": "",
+          "dictionaryItems": [],
+          "recordField": "chiefComplaint",
+          "mappingSource": "deterministic-article",
+          "projectionMode": "section-compose"
+        },
+        {
+          "id": "duration",
+          "name": "持续时间",
+          "type": "number",
+          "articleTemplateId": "chief",
+          "articleId": "主诉",
+          "articleName": "主诉",
+          "articleDefinitionName": "主诉",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "",
+          "baselineDictionaryValue": "",
+          "dictionaryItems": [],
+          "recordField": "chiefComplaint",
+          "mappingSource": "deterministic-article",
+          "projectionMode": "section-compose"
+        },
+        {
+          "id": "manualRemark",
+          "name": "登记备注",
+          "type": "text",
+          "articleTemplateId": "notes",
+          "articleId": "备注",
+          "articleName": "备注",
+          "articleDefinitionName": "备注",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "HIS已登记",
+          "baselineDictionaryValue": "HIS已登记",
+          "dictionaryItems": [],
+          "recordField": null,
+          "mappingSource": "unmapped",
+          "projectionMode": null
+        }
+      ]
+    },
+    "fieldPolicy": {
+      "schemaVersion": "outpatient-emr-field-policy.v1",
+      "ruleSetVersion": "outpatient-emr-field-prompt.v6",
+      "templateState": "enabled",
+      "revision": 0,
+      "fields": [
+        {
+          "fieldId": "symptom",
+          "meaning": "本次就诊的主要症状名称",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：本次就诊的主要症状名称。\n仅填写这一栏描述的主诉成分。症状名称栏只写症状，持续时间由相邻栏承载。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+          "unmentionedDefault": null
+        },
+        {
+          "fieldId": "duration",
+          "meaning": "主要症状在本次就诊前已持续的时间",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位或相邻有单位槽时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。数值栏只填数值，单位沿用模板。",
+          "unmentionedDefault": null
+        },
+        {
+          "fieldId": "manualRemark",
+          "meaning": "登记备注（备注）",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：登记备注（备注）。\n按本栏临床含义和原句组织已有事实。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+          "unmentionedDefault": null
+        }
+      ]
+    }
+  },
+  "recreatedResolution": {
+    "schemaVersion": "outpatient-emr-template-pair-resolution.v2",
+    "cacheHit": true,
+    "id": "SYN-POLICY-SNAPSHOT-NEW",
+    "templateId": "SYN-CHIEF",
+    "templateHash": "7e5cdf683f3a485b7786bbd9dfad2b7178379b5920dc72fe22fa7f47df899f90",
+    "parseResult": {
+      "schemaVersion": "outpatient-emr-template-pair.v1",
+      "fields": [
+        {
+          "id": "symptom",
+          "name": "症状名称",
+          "type": "text",
+          "articleTemplateId": "chief",
+          "articleId": "主诉",
+          "articleName": "主诉",
+          "articleDefinitionName": "主诉",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "",
+          "baselineDictionaryValue": "",
+          "dictionaryItems": [],
+          "recordField": "chiefComplaint",
+          "mappingSource": "deterministic-article",
+          "projectionMode": "section-compose"
+        },
+        {
+          "id": "duration",
+          "name": "持续时间",
+          "type": "number",
+          "articleTemplateId": "chief",
+          "articleId": "主诉",
+          "articleName": "主诉",
+          "articleDefinitionName": "主诉",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "",
+          "baselineDictionaryValue": "",
+          "dictionaryItems": [],
+          "recordField": "chiefComplaint",
+          "mappingSource": "deterministic-article",
+          "projectionMode": "section-compose"
+        },
+        {
+          "id": "manualRemark",
+          "name": "登记备注",
+          "type": "text",
+          "articleTemplateId": "notes",
+          "articleId": "备注",
+          "articleName": "备注",
+          "articleDefinitionName": "备注",
+          "readonly": false,
+          "aiSuitable": false,
+          "baselineValue": "HIS已登记",
+          "baselineDictionaryValue": "HIS已登记",
+          "dictionaryItems": [],
+          "recordField": null,
+          "mappingSource": "unmapped",
+          "projectionMode": null
+        }
+      ]
+    },
+    "receivedAt": 1795050000000,
+    "fieldPolicy": {
+      "schemaVersion": "outpatient-emr-field-policy.v1",
+      "ruleSetVersion": "outpatient-emr-field-prompt.v6",
+      "templateState": "enabled",
+      "revision": 0,
+      "fields": [
+        {
+          "fieldId": "symptom",
+          "meaning": "本次就诊的主要症状名称",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：本次就诊的主要症状名称。\n仅填写这一栏描述的主诉成分。症状名称栏只写症状，持续时间由相邻栏承载。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+          "unmentionedDefault": null
+        },
+        {
+          "fieldId": "duration",
+          "meaning": "主要症状在本次就诊前已持续的时间",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：主要症状在本次就诊前已持续的时间。\n只提取该症状的持续时间。模板原句已印单位或相邻有单位槽时只填数量，否则保留资料中的单位。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。数值栏只填数值，单位沿用模板。",
+          "unmentionedDefault": null
+        },
+        {
+          "fieldId": "manualRemark",
+          "meaning": "登记备注（备注）",
+          "aiSuitable": true,
+          "generationSource": "default",
+          "promptSource": "default",
+          "resolvedPrompt": "字段含义：登记备注（备注）。\n按本栏临床含义和原句组织已有事实。\n仅依据本次有来源的资料。优先医生本轮修订和已确认事实，缺项可回看问诊或转写原文。未问不等于否认，预置、建议和候选不作事实。栏名与模板原句所指冲突且未经医生核实时返回空字符串。只返回本栏正文。",
+          "unmentionedDefault": null
+        }
+      ]
+    }
   }
 }

@@ -302,6 +302,35 @@ describe('first-pass voice recognition with a bound outpatient template', () => 
     expect(getPreparedVoiceOutpatientTemplate(context)).toBeUndefined();
   });
 
+  it.each(['resolved', 'rejected'])('keeps the newest lookup when an earlier refresh arrives late (%s)', async status => {
+    const context = session();
+    let finish!: (response: snapshots.OutpatientEmrTemplateSnapshotResolution) => void;
+    let fail!: (error: Error) => void;
+    vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = resolve; fail = reject;
+    }));
+    const previous = prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    await vi.waitFor(() => expect(snapshots.resolveOutpatientEmrTemplateSnapshot).toHaveBeenCalledOnce());
+    const latest = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    if (status === 'rejected') fail(new Error('superseded lookup failed'));
+    else finish({ schemaVersion: 'outpatient-emr-template-pair-resolution.v2', cacheHit: false,
+      id: null, templateId: context.template.templateId, templateHash: latest!.identity.templateHash,
+      parseResult: null, fieldPolicy: null, receivedAt: null });
+    await expect(previous).resolves.toBeUndefined();
+    expect(getPreparedVoiceOutpatientTemplate(context)?.template.snapshotId).toBe(latest?.identity.snapshotId);
+    expect(snapshots.persistOutpatientEmrTemplateSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('clears the previous prepared template when a fresh server lookup fails', async () => {
+    const context = session();
+    await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    expect(getPreparedVoiceOutpatientTemplate(context)).toBeDefined();
+    vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot).mockRejectedValueOnce(new Error('synthetic network failure'));
+    await expect(prepareVoiceOutpatientRecognitionTemplate(context, [], () => true)).rejects.toThrow('synthetic network failure');
+    expect(snapshots.resolveOutpatientEmrTemplateSnapshot).toHaveBeenCalledTimes(2);
+    expect(getPreparedVoiceOutpatientTemplate(context)).toBeUndefined();
+  });
+
   it('keeps approved historical mappings and never re-registers a hit', async () => {
     const first = session();
     await prepareVoiceOutpatientRecognitionTemplate(first, [], () => true);

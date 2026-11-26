@@ -2,6 +2,7 @@
 import { createApp, ref, type App } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { listen } from '@tauri-apps/api/event';
+import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import type { ViewType } from '@/constants/windowSizes';
 import { buildPatientContext } from '@/utils/patientContext';
 import { useReceptionSessionController } from '@features/reception/model/useReceptionSessionController';
@@ -18,11 +19,19 @@ vi.mock('@/services/featureUsageEntryTracker', () => ({ trackVoiceConsultationEn
 let app: App | undefined;
 afterEach(() => { app?.unmount(); });
 
-it('keeps the active patient and template when another start-voice event arrives during capture', async () => {
+it('keeps the active patient and template across repeated capture and result entry events', async () => {
   const currentView = ref<ViewType>('reception-capsule');
+  const isWorking = ref(true);
+  let hasActiveVoiceResult = false;
+  const openVoiceConsultation = vi.fn(async () => {
+    currentView.value = 'voice-consultation';
+    isWorking.value = true;
+  });
   const patient = { idPi: 'SYN-P1', idVis: 'SYN-V1' };
   const currentPatient = ref(buildPatientContext({ payload: patient, receptionEnsured: true }));
-  const prepareVoiceOutpatientEmr = vi.fn(() => true);
+  let finishPreparation!: (ready: boolean) => void;
+  const prepareVoiceOutpatientEmr = vi.fn(() => new Promise<boolean>(resolve => { finishPreparation = resolve; }));
+  const refreshVoiceOutpatientEmr = vi.fn(async () => true);
   const clearVoiceOutpatientEmr = vi.fn();
   const showToast = vi.fn();
   const startVoiceInteraction = vi.fn(async () => { currentView.value = 'voice-interaction'; });
@@ -30,14 +39,14 @@ it('keeps the active patient and template when another start-voice event arrives
   app = createApp({
     setup() {
       listeners = useEventListeners({
-        currentView, currentPatient, isWorking: ref(true), showToast, prepareVoiceOutpatientEmr, clearVoiceOutpatientEmr,
+        currentView, currentPatient, isWorking, showToast, prepareVoiceOutpatientEmr, refreshVoiceOutpatientEmr, clearVoiceOutpatientEmr,
         appWindow: ref(null), transitioning: ref(false), isHovered: ref(false), hoveredBtnIndex: ref(-1),
         ringMenuRef: ref(null), inpatientEmrRequest: ref(null), exiting: ref(false), resizeTimeoutRef: ref(null),
         receptionSession: useReceptionSessionController(currentPatient),
         handleWindowMove: vi.fn(), persistCurrentWindowSize: vi.fn(),
         workMode: { enterWorkMode: vi.fn(), openReceptionCapsule: vi.fn(), resizeReceptionCapsule: vi.fn(), exitWork: vi.fn() },
         navigation: {
-          openConsultation: vi.fn(), openVoiceConsultation: vi.fn(), openTreatmentPlan: vi.fn(),
+          openConsultation: vi.fn(), openVoiceConsultation, openTreatmentPlan: vi.fn(),
           openOutpatientFollowUp: vi.fn(), openReportInterpretation: vi.fn(), openInpatientEmr: vi.fn(),
           openDifferentialDiagnosis: vi.fn(), startVoiceInteraction,
         },
@@ -45,7 +54,7 @@ it('keeps the active patient and template when another start-voice event arrives
           begin: vi.fn(), updateProgress: vi.fn(), updatePartial: vi.fn(), complete: vi.fn(), fail: vi.fn(),
         },
         resetVoiceSessionState: vi.fn(), clearVoiceConsultationCache: vi.fn(), clearMinimizedConsultationSessions: vi.fn(),
-        hasCachedVoiceResult: () => false, queueConsultationAssistTrigger: vi.fn(),
+        hasCachedVoiceResult: () => false, hasActiveVoiceResult: () => hasActiveVoiceResult, queueConsultationAssistTrigger: vi.fn(),
       });
       return () => null;
     },
@@ -62,6 +71,9 @@ it('keeps the active patient and template when another start-voice event arrives
   };
   const first = { ...patient, outpatientEmr: template };
   handle({ event, id: 1, payload: first });
+  await vi.waitFor(() => expect(prepareVoiceOutpatientEmr).toHaveBeenCalledOnce());
+  expect(startVoiceInteraction).not.toHaveBeenCalled();
+  finishPreparation(true);
   await vi.waitFor(() => expect(startVoiceInteraction).toHaveBeenCalledOnce());
   expect(prepareVoiceOutpatientEmr).toHaveBeenCalledWith(first);
   const activePatient = currentPatient.value;
@@ -73,7 +85,36 @@ it('keeps the active patient and template when another start-voice event arrives
 
   expect(currentPatient.value).toBe(activePatient);
   expect(prepareVoiceOutpatientEmr).toHaveBeenCalledOnce();
+  expect(refreshVoiceOutpatientEmr).toHaveBeenCalledTimes(2);
   expect(clearVoiceOutpatientEmr).not.toHaveBeenCalled();
   expect(startVoiceInteraction).toHaveBeenCalledOnce();
+  const handleDeepLink = vi.mocked(onOpenUrl).mock.calls[0]?.[0];
+  if (!handleDeepLink) throw new Error('Missing deep link listener');
+  handleDeepLink([`med-hermes://voice-consultation?data=${encodeURIComponent(JSON.stringify(first))}`]);
+  await Promise.resolve();
+  expect(prepareVoiceOutpatientEmr).toHaveBeenCalledOnce();
+  expect(clearVoiceOutpatientEmr).not.toHaveBeenCalled();
+  expect(startVoiceInteraction).toHaveBeenCalledOnce();
+  expect(currentPatient.value).toBe(activePatient);
   expect(showToast).toHaveBeenCalledWith('当前已接诊其他患者，请先结束当前就诊', 'error');
+
+  // The production event listener must consult live state after capture finishes.
+  currentView.value = 'voice-consultation';
+  hasActiveVoiceResult = true;
+  handle({ event, id: 5, payload: patient });
+  handle({ event, id: 6, payload: { ...first, outpatientEmr: { ...template, requestId: 'SYN-REQ-2' } } });
+  await Promise.resolve();
+  expect(openVoiceConsultation).not.toHaveBeenCalled();
+  expect(prepareVoiceOutpatientEmr).toHaveBeenCalledOnce();
+  expect(startVoiceInteraction).toHaveBeenCalledOnce();
+  expect(currentPatient.value).toBe(activePatient);
+
+  isWorking.value = false;
+  handle({ event, id: 7, payload: null });
+  await vi.waitFor(() => expect(openVoiceConsultation).toHaveBeenCalledOnce());
+  expect(currentView.value).toBe('voice-consultation');
+  expect(currentPatient.value).toBe(activePatient);
+  expect(prepareVoiceOutpatientEmr).toHaveBeenCalledOnce();
+  expect(clearVoiceOutpatientEmr).not.toHaveBeenCalled();
+  expect(startVoiceInteraction).toHaveBeenCalledOnce();
 });

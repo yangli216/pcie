@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useVoiceOutpatientEmrRecord, VoiceOutpatientEmrFieldReview } from '@features/outpatient-emr';
+import VoiceOutpatientEmrVisibleChapter from '@features/outpatient-emr/ui/VoiceOutpatientEmrVisibleChapter.vue';
 import { renderOutpatientEmrNarrativeSections } from '@features/outpatient-emr/lib/outpatientEmrNarrative';
 import { matchesVoiceOutpatientRecognitionTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { buildVoiceOutpatientEmrRecordContext } from '@features/outpatient-emr/lib/voiceOutpatientEmr';
@@ -793,6 +794,7 @@ const recordSections = computed(() => voiceTemplateContext.value ? templateRecor
     hasFemaleHistoryFields.value || (key !== 'menstrualHistory' && key !== 'maritalReproductiveHistory'),
   ).map(key => ({
     key, label: WRITEBACK_RECORD_FIELD_LABELS[key], text: recordSectionRefs[key].value, recordKey: key,
+    hasHiddenFields: false, displayFields: [],
     readonly: false, bindingNote: '', facts: getRecordFieldFactHighlights(key), suggestions: getRecordFieldFactSuggestions(key),
   })));
 
@@ -3850,7 +3852,17 @@ useChronicRefillTimingPresentation(() => ({
 
           <div class="record-fields">
             <template v-for="section in recordSections" :key="section.key">
+              <VoiceOutpatientEmrVisibleChapter
+                v-if="section.hasHiddenFields"
+                :title="section.label" :fields="section.displayFields"
+                :target-field-ids="'fieldIds' in section ? section.fieldIds : []"
+                :values="voiceTemplateDraft.fieldValues.value" :sources="voiceTemplateDraft.fieldValueSources.value"
+                :conflicts="voiceTemplateDraft.conflictFieldIds.value"
+                :editable="!section.readonly && !isResultUnavailable && !isWritebackBusy"
+                @update-field="voiceTemplateDraft.updateChapterField"
+              />
               <VoiceRecordFieldEditor
+                v-else
                 :model-value="section.text"
                 :title="section.label" presentation="document" :rows="3"
                 :grow="section.recordKey === 'historyOfPresentIllness'"
@@ -3863,7 +3875,7 @@ useChronicRefillTimingPresentation(() => ({
                 @update:model-value="updateReviewedRecord(section, $event)"
                 @dismiss-fact-suggestion="dismissFactSuggestion"
               />
-              <p v-if="section.bindingNote" class="template-binding-note">{{ section.bindingNote }}</p>
+              <p v-if="section.bindingNote && !section.hasHiddenFields" class="template-binding-note">{{ section.bindingNote }}</p>
             </template>
           </div>
         </section>

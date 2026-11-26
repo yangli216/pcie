@@ -63,6 +63,8 @@ export interface InpatientEmrTemplateField {
   templateText?: { rendered?: string; attributeDefault?: string };
   meaning: string;
   aiSuitable: boolean;
+  /** PCIE display only; independent of generation and writeback. */
+  visible?: boolean;
   rule: InpatientEmrFieldRule;
 }
 

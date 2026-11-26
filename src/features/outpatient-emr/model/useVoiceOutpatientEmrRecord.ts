@@ -160,7 +160,8 @@ export function useVoiceOutpatientEmrRecord(
     const context = templateSource.matchingContext.value;
     const document = options.document?.value;
     const policy = preparedTemplate.value?.fieldPolicy;
-    if (policy && (document?.policyRevision !== policy.revision || document?.ruleSetVersion !== policy.ruleSetVersion)) return;
+    if (policy && (document?.snapshotId !== preparedTemplate.value?.snapshotId
+      || document?.policyRevision !== policy.revision || document?.ruleSetVersion !== policy.ruleSetVersion)) return;
     return context && analysis.analysisErrorCode.value !== 'REQUEST_ID_CONFLICT' && matchesVoiceOutpatientRecognitionTemplate(document, context,
       analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(context)?.templateHash || options.initialDraft?.value?.templateHash)
       ? document : undefined;
@@ -173,7 +174,8 @@ export function useVoiceOutpatientEmrRecord(
     const initial = options.initialDraft?.value;
     const waitingForLeaves = ['idle', 'analyzing'].includes(analysis.analysisStatus.value);
     const active = preparedTemplate.value;
-    const initialMatches = initial && active?.fieldPolicy && initial.policyRevision === active.fieldPolicy.revision
+    const initialMatches = initial && active?.fieldPolicy && initial.snapshotId === active.snapshotId
+      && initial.policyRevision === active.fieldPolicy.revision
       && initial.ruleSetVersion === active.fieldPolicy.ruleSetVersion;
     const initialValues = waitingForLeaves && session && initialMatches && matchesVoiceOutpatientRecognitionTemplate(initial, session,
       analysis.templateHash.value || getPreparedVoiceOutpatientTemplate(session)?.templateHash)
@@ -213,6 +215,8 @@ export function useVoiceOutpatientEmrRecord(
         || Object.prototype.hasOwnProperty.call(boundValues.value, field.id)
       )).map(field => field.id);
       return { key: chapter.id, label: chapter.title, text, fieldIds, fields, recordFields, direct, directText, boundFieldIds,
+        displayFields: chapter.fields.map(slot => slot.field),
+        hasHiddenFields: chapter.fields.some(slot => slot.field.visible === false),
         sections: chapter.sections, available: boundFieldIds.length > 0 };
     });
   });
@@ -364,7 +368,7 @@ export function useVoiceOutpatientEmrRecord(
       applySupplementPatch(targets, leaves);
       reviewedSections.value = { ...reviewedSections.value, [key]: {
         chapterId: row.key, supplement: true, text: '',
-        policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion,
+        snapshotId: analysis.template.value?.snapshotId, policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion,
         values: { ...reviewedSections.value[key]?.values, ...leaves },
       } };
     }
@@ -378,7 +382,7 @@ export function useVoiceOutpatientEmrRecord(
     const fieldEdits = collectDoctorEdits();
     if (!chapters.length && !Object.keys(fieldEdits).length) return;
     return { visitId: request.visitId, requestId: request.requestId, templateId: request.templateId,
-      templateHash: analysis.templateHash.value, policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion, targetFieldIds: [...request.targetFieldIds], chapters, fieldEdits };
+      templateHash: analysis.templateHash.value, snapshotId: analysis.template.value?.snapshotId, policyRevision: analysis.template.value?.fieldPolicy?.revision, ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion, targetFieldIds: [...request.targetFieldIds], chapters, fieldEdits };
   });
 
   function restoreReviewSnapshot(snapshot?: VoiceOutpatientEmrReviewSnapshot): void {
@@ -403,7 +407,8 @@ export function useVoiceOutpatientEmrRecord(
         || !chapterRows.value.some(row => row.key === edit.chapterId && row.fieldIds.length)) continue;
       const key = chapterKey(edit.chapterId);
       if (reviewedSections.value[key]) continue;
-      const samePolicy = snapshot.policyRevision === analysis.template.value.fieldPolicy?.revision
+      const samePolicy = snapshot.snapshotId === analysis.template.value.snapshotId
+        && snapshot.policyRevision === analysis.template.value.fieldPolicy?.revision
         && snapshot.ruleSetVersion === analysis.template.value.fieldPolicy?.ruleSetVersion;
       if (edit.supplement && !samePolicy) continue;
       reviewedSections.value = { ...reviewedSections.value, [key]: samePolicy ? edit : { ...edit, values: undefined } };
@@ -428,7 +433,8 @@ export function useVoiceOutpatientEmrRecord(
     const fields = chapter ? chapter.fields.filter(item => item.editable).map(item => item.field)
       : analysis.targetFields.value.filter(field => field.recordField === key);
     const policy = analysis.template.value.fieldPolicy;
-    const samePolicy = edit.policyRevision === policy?.revision && edit.ruleSetVersion === policy?.ruleSetVersion;
+    const samePolicy = edit.snapshotId === analysis.template.value.snapshotId
+      && edit.policyRevision === policy?.revision && edit.ruleSetVersion === policy?.ruleSetVersion;
     if (edit.supplement) {
       if (!samePolicy) {
         const retained = { ...reviewedSections.value };
@@ -480,16 +486,17 @@ export function useVoiceOutpatientEmrRecord(
         signal: run.signal,
       });
       if (run.signal.aborted || sectionRuns.get(key) !== run
+        || refreshed.snapshotId !== analysis.template.value?.snapshotId
         || refreshed.fieldPolicy?.revision !== analysis.template.value?.fieldPolicy?.revision
         || refreshed.fieldPolicy?.ruleSetVersion !== analysis.template.value?.fieldPolicy?.ruleSetVersion) return false;
       analysis.replaceReviewedSectionValues(allowed.filter(f => !analysis.isIndividuallyEdited(f.id)), result);
       reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], values: result,
-        policyRevision: refreshed.fieldPolicy?.revision, ruleSetVersion: refreshed.fieldPolicy?.ruleSetVersion } };
+        snapshotId: refreshed.snapshotId, policyRevision: refreshed.fieldPolicy?.revision, ruleSetVersion: refreshed.fieldPolicy?.ruleSetVersion } };
       return true;
     } catch (cause) {
       if (run.signal.aborted || sectionRuns.get(key) !== run) return false;
       const reason = cause instanceof Error ? cause.message : String(cause);
-      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], policyRevision: analysis.template.value?.fieldPolicy?.revision,
+      reviewedSections.value = { ...reviewedSections.value, [key]: { ...reviewedSections.value[key], snapshotId: analysis.template.value?.snapshotId, policyRevision: analysis.template.value?.fieldPolicy?.revision,
         ruleSetVersion: analysis.template.value?.fieldPolicy?.ruleSetVersion, error: '病历修订后的模板字段更新失败：' + reason } };
       return false;
     } finally {

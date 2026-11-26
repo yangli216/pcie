@@ -177,6 +177,7 @@ async function mountResult(
     legacyCache?: boolean;
     templateError?: string;
     fieldValues?: Record<string, string | null>;
+    snapshotId?: string;
     policyRevision?: number;
     decoded?: { templateHtml: string; templateDefinition: string };
     streaming?: Ref<boolean>;
@@ -199,7 +200,7 @@ async function mountResult(
   if (options.templateError) intent.voiceTemplateError = options.templateError;
   else if (!options.legacyCache) intent.voiceTemplateDraft = {
     visitId: context.visitId, templateId: template.templateId, requestId: template.requestId,
-    policyRevision: options.policyRevision ?? 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
+    snapshotId: options.snapshotId ?? 'SYN-SNAPSHOT', policyRevision: options.policyRevision ?? 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
     templateHash: await hashOutpatientEmrTemplate(source.templateHtml, source.templateDefinition),
     targetFieldIds: [...template.targetFieldIds], fieldValues: options.fieldValues ?? {},
   };
@@ -339,7 +340,7 @@ describe('voice result with an HIS outpatient template', () => {
     host.diagnosis.mockResolvedValue(JSON.stringify([{ id: 'SYN-DX', code: 'J06.900', name: '急性上呼吸道感染', rate: '95%' }]));
     host.regenerate.mockResolvedValue(JSON.stringify({ templateFieldValues: { duration: '4', manualRemark: '越权的模型值' } }));
     await mountResult(context, ref(true), ref(false), [], undefined, '男', [], {
-      policyRevision: 2, fieldValues: { symptom: '咳嗽', duration: '3' }, diagnoses: [],
+      snapshotId: policyWire.configured.id, policyRevision: 2, fieldValues: { symptom: '咳嗽', duration: '3' }, diagnoses: [],
     });
     await vi.waitFor(() => expect(recordText('主诉')).toBe('咳嗽3天'));
     const beforeSupplement = http.mock.calls.length;
@@ -461,12 +462,12 @@ describe('voice result with an HIS outpatient template', () => {
     expect(host.received[0].dictionarySelections.家族史分类.value).toBe('1');
   });
 
-  it('keeps the clinical result when initial template preparation fails and retries the binding only on request', async () => {
+  it('requires an explicit retry after initial template preparation fails', async () => {
     await mountResult(templateContext(), ref(true), ref(false), [], undefined, '男', [], {
       templateError: '本次门诊模板准备失败，已保留语音病历。',
     });
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('模板准备失败'));
-    expect(recordLabels().every(title => ['主诉：', '现病史：'].includes(title))).toBe(true);
+    expect(recordLabels()).toEqual([]);
     expect(submit().disabled).toBe(true);
     expect(host.model).not.toHaveBeenCalled();
     clickButton(container, '重试模板回写字段');
@@ -474,6 +475,44 @@ describe('voice result with an HIS outpatient template', () => {
     expect(host.model).toHaveBeenCalledTimes(1);
     expect(recordLabels()).toEqual(['主诉：', '现病史：']);
     expect(recordLine('现病史').textContent).toContain('咳嗽3天');
+  });
+
+  it.each([false, true])('renders saved visibility rules without treating hidden fields as a preparation failure (all hidden=%s)', async allHidden => {
+    const { templateHtml, templateDefinition, templateId, templateName } = policyWire.request;
+    const context = { visitId: 'SYN-VOICE-TPL-VISIT', template: { templateId, templateName, templateHtml, templateDefinition,
+      requestId: 'SYN-VOICE-VISIBILITY', targetFieldIds: ['symptom', 'duration', 'manualRemark'] } };
+    const api = await vi.importActual<typeof snapshots>('@features/outpatient-emr/api/outpatientEmrTemplateSnapshotService');
+    const response = { ...policyWire.configured, fieldPolicy: { ...policyWire.configured.fieldPolicy,
+      fieldVisibility: allHidden ? { symptom: false, duration: false, manualRemark: false } : { symptom: false } } };
+    const http = vi.spyOn(regionalClient, 'regionalPost').mockImplementation(async (_path, request) => {
+      if (!(request as { supportsFieldVisibility?: boolean }).supportsFieldVisibility) {
+        throw new Error('此版本配置了字段展示，请升级客户端后重试');
+      }
+      return response as any;
+    });
+    const resolve = vi.mocked(snapshots.resolveOutpatientEmrTemplateSnapshot);
+    const previous = resolve.getMockImplementation()!;
+    resolve.mockImplementation(api.resolveOutpatientEmrTemplateSnapshot);
+    onTestFinished(() => { http.mockRestore(); resolve.mockImplementation(previous); });
+    const prepared = await prepareVoiceOutpatientRecognitionTemplate(context, [], () => true);
+    expect(prepared?.identity.snapshotId).toBe(response.id);
+    expect(prepared?.fields.map(field => field.id)).toEqual(expect.arrayContaining(['symptom', 'duration']));
+    await mountResult(context, ref(true), ref(false), [], undefined, '男', [], {
+      snapshotId: response.id, policyRevision: response.fieldPolicy.revision, fieldValues: { symptom: '咳嗽', duration: '3' },
+    });
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    expect(http).toHaveBeenCalledWith('/v1/client/outpatient-emr/templates/snapshots/resolve',
+      expect.objectContaining({ supportsFieldVisibility: true }));
+    expect(container.querySelector('.template-status [role="alert"]')).toBeNull();
+    expect(container.querySelector('.vcn-left-panel [data-outpatient-emr-field-id="symptom"]')).toBeNull();
+    const body = container.querySelector('.record-fields')!;
+    expect(body.textContent).not.toContain('咳嗽');
+    if (allHidden) expect(body.textContent?.trim()).toBe('');
+    else expect(body.querySelector('[data-outpatient-emr-field-id="duration"]')?.textContent).toContain('3');
+    expect(host.model).not.toHaveBeenCalled();
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues).toMatchObject({ symptom: '咳嗽', duration: '3' });
   });
 
   it('renders the mapped draft in the original sections, preserves doctor edits and sends one combined result', async () => {

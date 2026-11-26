@@ -62,6 +62,7 @@ export interface OutpatientEmrTemplateParseSnapshot {
 
 export interface OutpatientEmrTemplateSnapshotRequest {
   schemaVersion: 'outpatient-emr-template-pair-snapshot.v2';
+  supportsFieldVisibility: true;
   templateId: string;
   templateName: string;
   templateHash: string;
@@ -83,6 +84,7 @@ export interface OutpatientEmrTemplateSnapshotReceipt {
 
 export interface OutpatientEmrTemplateSnapshotResolveRequest {
   schemaVersion: typeof RESOLVE_SCHEMA;
+  supportsFieldVisibility: true;
   templateId: string;
   templateHash: string;
 }
@@ -292,7 +294,12 @@ function parseSnapshot(value: unknown): OutpatientEmrTemplateParseSnapshot {
 }
 
 function parsePolicy(value: unknown): OutpatientFieldPolicy {
-  const policy = requireExactObject(value, ['schemaVersion','templateState','revision','ruleSetVersion','fields'], 'fieldPolicy');
+  const hasVisibility = isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'fieldVisibility');
+  const policy = requireExactObject(value, ['schemaVersion','templateState','revision','ruleSetVersion','fields',
+    ...(hasVisibility ? ['fieldVisibility'] : [])], 'fieldPolicy');
+  if (hasVisibility && (!isRecord(policy.fieldVisibility) || Object.values(policy.fieldVisibility).some(item => typeof item !== 'boolean'))) {
+    throw new Error('门诊模板字段展示配置不兼容。');
+  }
   const state = policy.templateState;
   if (policy.schemaVersion !== 'outpatient-emr-field-policy.v1' || (state !== 'enabled' && state !== 'disabled' && state !== 'deleted')
     || typeof policy.ruleSetVersion !== 'string' || !/^outpatient-emr-field-prompt\.v[1-9]\d*$/.test(policy.ruleSetVersion)
@@ -317,7 +324,8 @@ function parsePolicy(value: unknown): OutpatientFieldPolicy {
     if (valid) fields.set(id, item as unknown as OutpatientFieldRule);
   }
   return { schemaVersion: 'outpatient-emr-field-policy.v1', templateState: state,
-    revision: requireTimestamp(policy.revision, 'fieldPolicy.revision'), ruleSetVersion: policy.ruleSetVersion, fields: [...fields.values()] };
+    revision: requireTimestamp(policy.revision, 'fieldPolicy.revision'), ruleSetVersion: policy.ruleSetVersion, fields: [...fields.values()],
+    ...(hasVisibility ? { fieldVisibility: policy.fieldVisibility as Record<string, boolean> } : {}) };
 }
 
 function parseResolution(
@@ -409,6 +417,7 @@ export function buildOutpatientEmrTemplateSnapshotRequest(
 ): OutpatientEmrTemplateSnapshotRequest {
   return {
     schemaVersion: 'outpatient-emr-template-pair-snapshot.v2',
+    supportsFieldVisibility: true,
     templateId: input.request.templateId,
     templateName: input.request.templateName,
     templateHash: input.templateHash,
@@ -426,6 +435,7 @@ export function buildOutpatientEmrTemplateSnapshotResolveRequest(
 ): OutpatientEmrTemplateSnapshotResolveRequest {
   return {
     schemaVersion: RESOLVE_SCHEMA,
+    supportsFieldVisibility: true,
     templateId: input.templateId,
     templateHash: input.templateHash,
   };

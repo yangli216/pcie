@@ -77,6 +77,7 @@ interface CachedBoundTemplate {
 }
 
 const boundTemplates = new WeakMap<VoiceOutpatientEmrStartContext, CachedBoundTemplate>();
+const preparationAttempts = new WeakMap<VoiceOutpatientEmrStartContext, symbol>();
 
 export function getPreparedVoiceOutpatientTemplate(
   context: VoiceOutpatientEmrStartContext, request?: OutpatientEmrAnalysisRequest,
@@ -100,12 +101,18 @@ export async function hashVoiceOutpatientRecognitionTemplate(context: VoiceOutpa
 export async function prepareVoiceOutpatientRecognitionTemplate(
   context: VoiceOutpatientEmrStartContext,
   identifiers: readonly (string | undefined)[],
-  isCurrent: () => boolean,
+  isSessionCurrent: () => boolean,
 ): Promise<VoiceOutpatientRecognitionTemplate | undefined> {
+  if (!isSessionCurrent()) return;
+  const key = toRaw(context);
+  const attempt = Symbol();
+  preparationAttempts.set(key, attempt);
+  boundTemplates.delete(key);
+  const isCurrent = () => isSessionCurrent() && preparationAttempts.get(key) === attempt;
   let prepared: PreparedOutpatientEmrTemplate | undefined;
   const { templateId, requestId, targetFieldIds, templateHtml, templateDefinition } = context.template;
   const request = { ...context.template, visitId: context.visitId, recordContext: {}, targetFieldIds: [...targetFieldIds] };
-  {
+  try {
     const [{ loadVoiceOutpatientEmrTemplateSource }, snapshots] = await Promise.all([
       import('../model/useVoiceOutpatientEmrTemplateSource'), import('../api/outpatientEmrTemplateSnapshotService'),
     ]);
@@ -118,11 +125,14 @@ export async function prepareVoiceOutpatientRecognitionTemplate(
       resolveTemplateSnapshot: snapshots.resolveOutpatientEmrTemplateSnapshot,
       persistTemplateSnapshot: snapshots.persistOutpatientEmrTemplateSnapshot,
     }, isCurrent);
+  } catch (error) {
+    if (!isCurrent()) return;
+    throw error;
   }
   if (!isCurrent() || !prepared) return;
   const { templateHash, template: parsed } = prepared;
   const identity = { visitId: request.visitId, templateId, requestId, templateHash, targetFieldIds: request.targetFieldIds,
-    policyRevision: parsed.fieldPolicy?.revision, ruleSetVersion: parsed.fieldPolicy?.ruleSetVersion };
+    snapshotId: parsed.snapshotId, policyRevision: parsed.fieldPolicy?.revision, ruleSetVersion: parsed.fieldPolicy?.ruleSetVersion };
   if (!matchesVoiceOutpatientRecognitionTemplate(identity, context)
     || templateHtml !== context.template.templateHtml || templateDefinition !== context.template.templateDefinition) return;
   boundTemplates.set(toRaw(context), { prepared, identity, templateHtml, templateDefinition });

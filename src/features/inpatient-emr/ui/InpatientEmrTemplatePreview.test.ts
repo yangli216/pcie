@@ -75,6 +75,24 @@ afterEach(() => {
 });
 
 describe('InpatientEmrTemplatePreview', () => {
+  it('removes hidden AI and HIS controls only from the preview and restores values when shown again', async () => {
+    const { state, onUpdateField } = mountPreview({
+      fields: fields.map(item => ({ ...item, visible: item.id === 'assessment' })),
+    });
+    expect(root!.querySelector('[data-id="hpi"]')).toBeNull();
+    expect(root!.querySelector('[data-id="hospitalNo"]')).toBeNull();
+    expect(root!.textContent).not.toContain('合成病史');
+    expect(field('assessment').textContent).toBe('合成分析');
+    state.fieldValues.hpi = '保留的最新病史';
+    await nextTick();
+    expect(root!.querySelector('[data-id="hpi"]')).toBeNull();
+    state.fields[0].visible = true;
+    await nextTick();
+    expect(field('hpi').textContent).toBe('保留的最新病史');
+    expect(state.fieldValues.hospitalNo).toBe('SYN-HOSPITAL');
+    expect(onUpdateField).not.toHaveBeenCalled();
+  });
+
   it('renders the original HIS layout and edits AI fields in place', async () => {
     const { state, onUpdateField } = mountPreview();
     expect(root!.textContent).not.toContain('病历阅读');

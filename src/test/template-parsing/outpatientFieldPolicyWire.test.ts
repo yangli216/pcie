@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+import { effectScope, ref } from 'vue';
+import { buildPatientContext } from '@/utils/patientContext';
+import { useVoiceOutpatientEmrWorkflow } from '@features/outpatient-emr/model/useVoiceOutpatientEmrWorkflow';
+import { getPreparedVoiceOutpatientTemplate } from '@features/outpatient-emr/lib/voiceOutpatientEmrRecognition';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { analyzeOutpatientEmrFields } from '@features/outpatient-emr/api/outpatientEmrService';
 import { buildOutpatientEmrDocument, renderVoiceOutpatientEmrChapter } from '@features/outpatient-emr/lib/outpatientEmrNarrative';
@@ -33,6 +37,37 @@ function setup() {
 beforeEach(() => { boundary.post.mockReset(); });
 
 describe('saved outpatient field rules on the device wire', () => {
+  it('queries on every voice start and registers a new server snapshot after physical deletion', async () => {
+    const { templateId, templateName, templateHtml, templateDefinition } = wire.request;
+    const payload = { idPi: 'SYN-PATIENT', idVis: 'SYN-VISIT', outpatientEmr: {
+      templateId, templateName, templateHtml, templateDefinition,
+      requestId: 'SYN-CHIEF-REQUEST', targetFieldIds: ['symptom', 'duration', 'manualRemark'],
+    } };
+    const scope = effectScope();
+    const workflow = scope.run(() => useVoiceOutpatientEmrWorkflow({
+      currentPatient: ref(buildPatientContext({ payload })),
+    }))!;
+    boundary.post.mockResolvedValueOnce(wire.configured)
+      .mockResolvedValueOnce(wire.afterDelete).mockResolvedValueOnce(wire.recreated)
+      .mockResolvedValueOnce(wire.recreatedResolution);
+    try {
+      await expect(workflow.prepareFromStartVoice(payload)).resolves.toBe(true);
+      const previous = getPreparedVoiceOutpatientTemplate(workflow.startContext.value!)!;
+      expect(previous.template.snapshotId).toBe(wire.configured.id);
+      await expect(workflow.refreshTemplate()).resolves.toBe(true);
+      const recreated = getPreparedVoiceOutpatientTemplate(workflow.startContext.value!)!;
+      expect(recreated.template.snapshotId).toBe(wire.recreated.id);
+      expect(recreated.template.fieldPolicy?.revision).toBe(0);
+      expect(recreated.template.fieldPolicy?.templateState).toBe('enabled');
+      await expect(workflow.prepareFromStartVoice(payload)).resolves.toBe(true);
+      expect(boundary.post.mock.calls.map(([path]) => path)).toEqual([resolvePath, resolvePath, registerPath, resolvePath]);
+      const registration = boundary.post.mock.calls[2][1];
+      expect(registration.parseResult.fields).toEqual(wire.request.parseResult.fields);
+      expect(registration).not.toHaveProperty('visitId');
+      expect(registration).not.toHaveProperty('recordContext');
+    } finally { scope.stop(); }
+  });
+
   it.each([
     { label: '全文', fields: [{ id: 'chiefComplaint', name: '主诉', value: '咳嗽3天' }] },
     { label: '双文本', fields: [{ id: 'symptom', name: '症状名称', value: '咳嗽' }, { id: 'duration', name: '持续时间', value: '3天' }] },

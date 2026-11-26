@@ -111,6 +111,19 @@ describe('MedHermes startVoice dynamic outpatient template', () => {
 
     expect(post).not.toHaveBeenCalled();
   });
+
+  it('allows a corrected template binding after the initial Bridge request fails', async () => {
+    const sdk = new (loadSdk())();
+    const post = stubBridge(sdk);
+    post.mockRejectedValueOnce(new Error('Synthetic Bridge failure'));
+    await expect(sdk.startVoice({ idPi: 'P001', idVis: 'VIS-001', outpatientEmr: createTemplate() }))
+      .rejects.toThrow('Synthetic Bridge failure');
+    const corrected = { ...createTemplate(), requestId: 'REQ-CORRECTED' };
+    await sdk.startVoice({ idPi: 'P001', idVis: 'VIS-001', outpatientEmr: corrected });
+    expect(post).toHaveBeenLastCalledWith('/consultation/start-voice', expect.objectContaining({ outpatientEmr: corrected }));
+    expect((sdk as unknown as { _voiceTemplateScope: { requestId: string } })._voiceTemplateScope.requestId)
+      .toBe('REQ-CORRECTED');
+  });
 });
 
 function encodeSource(text: string): string {

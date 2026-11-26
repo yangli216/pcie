@@ -211,9 +211,11 @@ export function buildEditableInpatientEmrPreviewHtml(
   const doc = new DOMParser().parseFromString(safeHtml, 'text/html');
   const aiFieldIds = new Set(fields.filter((field) => field.aiSuitable).map((field) => field.id));
   const fieldNameMap = new Map(fields.map((field) => [field.id, field.name || field.id]));
+  const hiddenIds = new Set(fields.filter(field => field.visible === false).map(field => field.id));
 
   Array.from(doc.querySelectorAll('[data-id][data-type]')).forEach((node) => {
     const id = node.getAttribute('data-id') || '';
+    if (hiddenIds.has(id)) { node.remove(); return; }
     const valueNode = node.querySelector('.tag-value') || node;
     if (Object.prototype.hasOwnProperty.call(values, id)) {
       valueNode.textContent = values[id] || '';

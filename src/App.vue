@@ -716,7 +716,9 @@ const eventListeners = useEventListeners({
   clearMinimizedConsultationSessions: minimizedSessions.clearAll,
   hasCachedVoiceResult,
   queueConsultationAssistTrigger,
+  hasActiveVoiceResult: () => intentResult.value !== null || isProcessingVoice.value,
   prepareVoiceOutpatientEmr: voiceOutpatientEmrWorkflow.prepareFromStartVoice,
+  refreshVoiceOutpatientEmr: voiceOutpatientEmrWorkflow.refreshTemplate,
   clearVoiceOutpatientEmr: voiceOutpatientEmrWorkflow.clear,
   getVoiceOutpatientEmrRequestId: () => (
     voiceOutpatientEmrWorkflow.deferredWritebackRequestId.value || null

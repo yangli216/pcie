@@ -130,7 +130,7 @@ function basePayload(): OutpatientEmrPreparedWritebackPayload {
 
 function firstVoiceDraft(fieldValues: VoiceOutpatientEmrInitialDraft['fieldValues']): VoiceOutpatientEmrInitialDraft {
   const { template, visitId } = context();
-  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH', policyRevision: 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
+  return { visitId, requestId: template.requestId, templateId: template.templateId, templateHash: 'SYN-HASH', snapshotId: 'SYN-SNAPSHOT', policyRevision: 0, ruleSetVersion: OUTPATIENT_EMR_PROMPT_VERSION,
     targetFieldIds: [...template.targetFieldIds], fieldValues };
 }
 
@@ -146,7 +146,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const { controller } = setup({ resolveTemplateSnapshot: resolveOutpatientEmrTemplateSnapshot,
       hashTemplate: async () => policyWire.configured.templateHash, analyzeFields: input => analyzeOutpatientEmrFields(input, { chatFast: model }) },
     { context: session, initialDraft: { ...firstVoiceDraft({ symptom: '咳嗽', duration: '3' }), templateId, targetFieldIds,
-      templateHash: policyWire.configured.templateHash, policyRevision: 2 } });
+      templateHash: policyWire.configured.templateHash, snapshotId: policyWire.configured.id, policyRevision: 2 } });
     await vi.waitFor(() => expect(controller.canSubmit.value).toBe(true));
     expect(model).not.toHaveBeenCalled();
     const initialRequests = http.mock.calls.length;
@@ -261,7 +261,7 @@ describe('useVoiceOutpatientEmrRecord', () => {
     const template = parseOutpatientEmrTemplate(source.templateHtml, source.templateDefinition, session.template.targetFieldIds);
     const fieldPolicy = syntheticFieldPolicy(template.fields);
     const fields = template.targetFields.map(f => ({ ...f, aiSuitable: true, generationRule: fieldPolicy.fields.find(rule => rule.fieldId === f.id) }));
-    const getPreparedVoiceTemplate = vi.fn(() => ({ template: { ...template, targetFields: fields, fieldPolicy }, source, templateHash: 'SYN-HASH' }));
+    const getPreparedVoiceTemplate = vi.fn(() => ({ template: { ...template, targetFields: fields, fieldPolicy, snapshotId: 'SYN-SNAPSHOT' }, source, templateHash: 'SYN-HASH' }));
     const unexpected = vi.fn(() => { throw new Error('不应重复准备模板'); });
     const { controller, analyzeFields } = setup({
       getPreparedVoiceTemplate, normalizeTemplateSource: unexpected, hashTemplate: unexpected,

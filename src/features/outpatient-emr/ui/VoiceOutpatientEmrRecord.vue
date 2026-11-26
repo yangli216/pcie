@@ -36,6 +36,7 @@ function update(value: string): void {
 
 <template>
   <div
+    v-if="field.visible !== false"
     class="outpatient-record-field"
     :data-outpatient-emr-field-id="field.id"
     :data-outpatient-emr-source="source"

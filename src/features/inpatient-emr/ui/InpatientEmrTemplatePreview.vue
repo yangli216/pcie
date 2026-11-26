@@ -121,7 +121,7 @@ function handlePaste(event: ClipboardEvent): void {
 
 onMounted(renderPreview);
 watch(
-  () => [props.htmlContent, props.fields.map((field) => `${field.id}:${field.name}:${field.aiSuitable}`).join('|')],
+  () => [props.htmlContent, props.fields.map((field) => `${field.id}:${field.name}:${field.aiSuitable}:${field.visible}`).join('|')],
   renderPreview,
   { flush: 'post' },
 );

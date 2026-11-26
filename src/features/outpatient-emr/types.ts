@@ -27,6 +27,7 @@ export interface VoiceOutpatientEmrStartContext {
 }
 
 export interface VoiceOutpatientEmrTemplateIdentity {
+  snapshotId?: string;
   policyRevision?: number;
   ruleSetVersion?: string;
   visitId: string;
@@ -111,9 +112,12 @@ export interface OutpatientFieldPolicy {
   revision: number;
   ruleSetVersion: string;
   fields: OutpatientFieldRule[];
+  fieldVisibility?: Readonly<Record<string, boolean>>;
 }
 
 export interface OutpatientEmrTemplateField {
+  /** PCIE display only; missing means visible. Never use to filter model or writeback data. */
+  visible?: boolean;
   generationRule?: OutpatientFieldRule;
   policyDisposition?: 'inactive' | 'unresolved';
   id: string;
@@ -149,6 +153,7 @@ export interface OutpatientEmrTemplateParseResult
   extends OutpatientEmrTemplateInspectionResult {
   targetFields: OutpatientEmrTemplateField[];
   fieldPolicy?: OutpatientFieldPolicy;
+  snapshotId?: string;
   templateSourceNotes?: OutpatientEmrTemplateSourceNote[];
 }
 

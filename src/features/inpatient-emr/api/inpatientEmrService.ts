@@ -273,6 +273,7 @@ function normalizeTemplateField(
       && (!Array.isArray(rule[key]) || (rule[key] as unknown[]).some((item) => typeof item !== 'string')))) {
     return {
       ...local,
+      visible: field?.visible !== false,
       aiSuitable: false,
       rule: { ...local.rule, source: local.aiSuitable ? 'manual_or_his' : local.rule.source },
     };
@@ -285,6 +286,7 @@ function normalizeTemplateField(
     // HTML owns identity, shape and current HIS values. The saved configuration
     // owns generation policy; neither cache metadata nor old presets can replace it.
     ...local,
+    visible: field.visible !== false,
     meaning: typeof field.meaning === 'string' && field.meaning.trim() ? field.meaning : local.meaning,
     aiSuitable,
     rule: {

@@ -14,6 +14,7 @@ import type {
 const props = withDefaults(defineProps<{
   sanitizedHtml: string;
   fields: OutpatientEmrTemplateField[];
+  visibilityFields?: OutpatientEmrTemplateField[];
   fieldValues: Record<string, string>;
   fieldSources?: Record<string, OutpatientEmrFieldValueSource>;
   conflictFieldIds?: ReadonlySet<string>;
@@ -48,6 +49,7 @@ function renderPreview(): void {
     props.editable,
     props.fieldSources,
     props.conflictFieldIds,
+    props.visibilityFields ?? props.fields,
   );
   applyOutpatientEmrHeaderValues(previewRoot.value, props.headerValues);
 }
@@ -132,6 +134,7 @@ watch(
   () => [
     props.sanitizedHtml,
     props.editable,
+    (props.visibilityFields ?? props.fields).map(field => `${field.id}:${field.visible}`).join('|'),
     props.fields.map((field) => (
       `${field.id}:${field.type}:${field.dictionaryItems.map((item) => `${item.value}=${item.text}`).join(',')}`
     )).join('|'),

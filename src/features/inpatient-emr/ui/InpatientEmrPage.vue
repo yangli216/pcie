@@ -251,6 +251,7 @@ const activeStep = computed(() => steps.value.find((step) => step.key === active
 const activeStepLabel = computed(() => activeStep.value?.title || '准备生成');
 const activeStepDetail = computed(() => activeStep.value?.detail || '正在整理住院病历上下文');
 const aiFields = computed(() => result.value?.template.fields.filter((field) => field.aiSuitable) || []);
+const visibleAiFields = computed(() => aiFields.value.filter(field => field.visible !== false));
 const filledFieldCount = computed(() => aiFields.value.filter((field) => result.value?.fieldValues[field.id]?.trim()).length);
 const actionDisabled = computed(() => !props.request || isGenerating.value || isWritingBack.value || writebackStatus.value === 'pending');
 const previewEditable = computed(() => Boolean(result.value) && !actionDisabled.value && writebackStatus.value !== 'success');
@@ -572,9 +573,9 @@ onBeforeUnmount(() => {
             :trace="result?.trace"
           />
           <details v-if="result" class="field-panel">
-            <summary>生成字段说明 · {{ aiFields.length }} 项</summary>
+            <summary>生成字段说明 · {{ visibleAiFields.length }} 项</summary>
             <div class="field-list">
-              <article v-for="field in aiFields" :key="field.id" class="field-prompt-card">
+              <article v-for="field in visibleAiFields" :key="field.id" class="field-prompt-card">
                 <strong>{{ field.name || field.id }}</strong>
                 <p>{{ field.meaning }}</p>
                 <details class="field-prompt-detail">
@@ -584,7 +585,7 @@ onBeforeUnmount(() => {
                 </details>
               </article>
             </div>
-            <p v-if="aiFields.length === 0" class="no-ai-fields">当前模板没有识别到 AI 生成字段</p>
+            <p v-if="visibleAiFields.length === 0" class="no-ai-fields">当前模板没有可展示的 AI 生成字段</p>
           </details>
         </template>
       </aside>

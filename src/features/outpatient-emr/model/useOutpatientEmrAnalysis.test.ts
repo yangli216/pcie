@@ -198,7 +198,8 @@ describe('useOutpatientEmrAnalysis analysis sessions', () => {
     expect(persistTemplateSnapshot).not.toHaveBeenCalled();
     expect(analyzeFields).toHaveBeenCalledOnce();
     expect(analysis.template.value?.fields.map(({ generationRule, aiSuitable, ...field }) => ({ ...field, aiSuitable })))
-      .toEqual(cachedTemplate.fields.map(field => ({ ...field, aiSuitable: true })));
+      .toEqual(cachedTemplate.fields.map(field => ({ ...field, aiSuitable: true, visible: true })));
+    expect(analysis.template.value?.snapshotId).toBe('snapshot-history');
     expect(analysis.targetFields.value.every(field => field.generationRule?.aiSuitable)).toBe(true);
   });
 

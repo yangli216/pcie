@@ -36,6 +36,29 @@ afterEach(() => {
 });
 
 describe('OutpatientEmrTemplatePreview', () => {
+  it('hides configured target and non-target fields without clearing values or emitting edits', async () => {
+    const state = reactive({
+      visibilityFields: [{ ...fields[0], visible: false }, { ...fields[0], id: 'hisOnly', visible: false, readonly: true }],
+      fieldValues: { personalHistory: '保留的正文', hisOnly: '保留的 HIS 原值' },
+    });
+    const onUpdateField = vi.fn();
+    root = document.createElement('div');
+    document.body.append(root);
+    app = createApp({ setup: () => () => h(OutpatientEmrTemplatePreview, {
+      sanitizedHtml: '<p><span data-id="personalHistory" data-type="text">原模板值</span><span data-id="hisOnly" data-type="text">HIS值</span><b>保留固定文字</b></p>',
+      fields, ...state, onUpdateField,
+    }) });
+    app.mount(root);
+    expect(root.querySelector('[data-id="personalHistory"]')).toBeNull();
+    expect(root.querySelector('[data-id="hisOnly"]')).toBeNull();
+    expect(root.textContent).toContain('保留固定文字');
+    state.visibilityFields[0].visible = true;
+    await nextTick(); await nextTick();
+    expect(root.querySelector('[data-outpatient-emr-field-id="personalHistory"]')?.textContent).toBe('保留的正文');
+    expect(state.fieldValues.hisOnly).toBe('保留的 HIS 原值');
+    expect(onUpdateField).not.toHaveBeenCalled();
+  });
+
   it('keeps HIS placeholders in the document and restores them when a field is cleared', async () => {
     const template = parseOutpatientEmrTemplate(hisHtml, hisDefinition, ['主诉文本', '痰声标志']);
     const fieldValues = reactive<Record<string, string>>({ 主诉文本: '', 痰声标志: '无' });

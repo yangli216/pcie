@@ -16,7 +16,7 @@ const emit = defineEmits<{ 'update-field': [id: string, value: string] }>();
 const groups = computed(() => props.chapters.map(chapter => ({
   key: chapter.key,
   title: chapter.title,
-  fields: chapter.fields.filter(field => chapter.fallback || ['template', 'unmentioned-default'].includes(props.sources[field.id]) || !field.recordField || chapter.directField?.id !== field.id),
+  fields: chapter.fields.filter(field => field.visible !== false && (chapter.fallback || ['template', 'unmentioned-default'].includes(props.sources[field.id]) || !field.recordField || chapter.directField?.id !== field.id)),
 })).filter(group => group.fields.length));
 </script>
 
