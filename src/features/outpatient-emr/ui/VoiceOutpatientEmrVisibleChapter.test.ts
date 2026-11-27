@@ -16,6 +16,21 @@ const field: OutpatientEmrTemplateField = {
 afterEach(() => { app?.unmount(); root?.remove(); });
 
 describe('voice chapter display configuration', () => {
+  it('uses the chapter title for a prefixed paragraph control while retaining its original writeback key', async () => {
+    const history = { ...field, id: '请输入既往史', name: '请输入既往史', type: 'text',
+      articleId: 'history', articleName: '既往史', articleDefinitionName: '既往史',
+      dictionaryItems: [], recordField: 'pastMedicalHistory' as const, projectionMode: 'section-compose' as const };
+    root = document.createElement('div'); document.body.append(root);
+    app = createApp({ setup: () => () => h(VoiceOutpatientEmrVisibleChapter, {
+      title: '既往史', fields: [history, { ...field, id: 'hidden', visible: false }], targetFieldIds: [history.id],
+      values: { [history.id]: '类似发病史未详。' }, sources: { [history.id]: 'ai' }, conflicts: new Set<string>(), editable: true,
+    }) });
+    app.mount(root); await nextTick();
+    expect(root.textContent).toContain('既往史：');
+    expect(root.textContent).not.toContain('请输入既往史：');
+    expect(root.querySelector('[data-outpatient-emr-field-id="请输入既往史"]')?.textContent).toContain('类似发病史未详。');
+  });
+
   it('edits only a visible authorized slot and preserves hidden and non-target values', async () => {
     const fields = reactive([
       { ...field, id: 'hidden', name: '不展示字段', visible: false },

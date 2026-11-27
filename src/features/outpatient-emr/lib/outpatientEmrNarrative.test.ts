@@ -152,6 +152,22 @@ describe('outpatient clinical narrative', () => {
 
 
 describe('the rendered HIS chapter document', () => {
+  it.each(['请输入既往史', '请填写既往史'])('renders the full history body without repeating the input instruction %s', name => {
+    const full = { ...customField(name, name, 'pastMedicalHistory'), articleId: 'history', articleTemplateId: 'history',
+      articleName: '既往史', articleDefinitionName: '既往史', projectionMode: 'section-compose' as const };
+    const source = `<section data-id="history" data-article="既往史"><span data-id="${name}" data-type="text"></span></section>`;
+    const [chapter] = buildOutpatientEmrDocument({ sanitizedHtml: source, fields: [full], targetFields: [full] });
+    const body = '有哮喘史。类似发病史、乙肝及结核史未详。';
+    expect(outpatientEmrChapterTextField(chapter)?.id).toBe(name);
+    expect(renderVoiceOutpatientEmrChapter(chapter, { [name]: body })).toBe(body);
+    expect(describeOutpatientEmrNarrative(chapter.sections)[0].clauses).toEqual([
+      [{ kind: 'field', id: name, name }],
+    ]);
+    // Matching is local to paragraph presentation; neither source metadata nor keys change.
+    expect(full.name).toBe(name);
+    expect(full.projectionMode).toBe('section-compose');
+  });
+
   it('preserves actual chapters and headings for a partial target list, independent of target or JSON order', () => {
     const parsed = parseOutpatientEmrTemplate(html, definition, ['收缩压', '注意事项文本', '就诊时间', '痰声标志']);
     const chapters = buildOutpatientEmrDocument({ ...parsed, fields: [...parsed.fields].reverse() });
@@ -174,7 +190,7 @@ describe('the rendered HIS chapter document', () => {
         `<p><span data-id="${field.id}" data-type="text"></span>${suffix}</p>`).join('') + '</section>';
       return buildOutpatientEmrDocument({ sanitizedHtml: html, fields, targetFields: fields })[0];
     }
-    for (const name of ['体重', '发病时间', '症状持续时间', '其他观察补充']) {
+    for (const name of ['体重', '发病时间', '症状持续时间', '其他观察补充', '请输入手术名称']) {
       expect(outpatientEmrChapterTextField(chapter([customField('narrow', name)]))).toBeUndefined();
     }
     const full = customField('body', '观察结果文本');

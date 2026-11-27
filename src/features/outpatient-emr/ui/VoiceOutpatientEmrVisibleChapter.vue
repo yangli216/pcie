@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import type { ClinicalRecordExplicitFact, ClinicalRecordFactSuggestion } from '@features/clinical-result';
 import type { OutpatientEmrFieldValueSource, OutpatientEmrTemplateField } from '../types';
 import { voiceFieldSuggestions } from '../lib/voiceOutpatientEmrSupplements';
+import { outpatientEmrChapterFieldTitle } from '../lib/outpatientEmrNarrative';
 import VoiceOutpatientEmrRecord from './VoiceOutpatientEmrRecord.vue';
 
 const props = withDefaults(defineProps<{
@@ -30,7 +31,7 @@ const visibleFields = computed(() => props.fields.filter(field => field.visible 
 <template>
   <section v-if="visibleFields.length" :aria-label="title">
     <VoiceOutpatientEmrRecord v-for="{ field, facts, suggestions } in visibleFields" :key="field.id"
-      :field="field" :title="field.name || title"
+      :field="field" :title="outpatientEmrChapterFieldTitle(field, title)"
       :value="values[field.id] ?? field.baselineValue" :source="sources[field.id]"
       :conflict="conflicts.has(field.id)" :editable="editable && !field.readonly && targetFieldIds.includes(field.id)"
       :fact-highlights="facts" :fact-suggestions="suggestions"

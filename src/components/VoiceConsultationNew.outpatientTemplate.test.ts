@@ -573,6 +573,31 @@ describe('voice result with an HIS outpatient template', () => {
     expect(Object.keys(result.fieldValues).every(id => context.template.targetFieldIds.includes(id))).toBe(true);
   });
 
+  it('renders required history items as plain template prose and writes doctor edits under the original field ID', async () => {
+    const context = fiveFieldTemplateContext(false);
+    const body = '类似发病史未详；乙肝、结核、肺炎史未详；哮喘、过敏性鼻炎史未详；手术、外伤、输血史未详；药物过敏史未详。';
+    await mountResult(context, ref(true), ref(false), [], undefined, '女', [{
+      id: 'SYN-HPI-EXTRA', field: 'historyOfPresentIllness', question: '核对是否咯血',
+      negativeRecordText: '无咯血。', rationale: '合成额外候选', priority: 'general', status: 'pending',
+    }], { fieldValues: { 主诉文本: '咳嗽3天', 现病史文本: '患者咳嗽3天。', 请输入既往史: body },
+      record: { pastMedicalHistory: '' } });
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    expect(recordText('既往史')).toBe(body);
+    expect(recordLine('既往史').textContent).not.toContain('请输入既往史：');
+    expect(recordLine('既往史').querySelector('.clinical-record-annotation')).toBeNull();
+    expect(recordLine('现病史').querySelector('[data-clinical-fact-id="SYN-HPI-EXTRA"]')).not.toBeNull();
+    const edited = body.replace('药物过敏史未详', '医生核对：青霉素过敏');
+    await editField('既往史', edited);
+    expect(host.model).not.toHaveBeenCalled();
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues.请输入既往史).toBe(edited);
+    expect(host.received[0].emrFieldValues.请输入既往史).toBe(edited);
+    expect(host.received[0].pastMedicalHistory).toBe(edited);
+    // The separate validation projection still follows the original section-compose metadata.
+    expect(host.received[0].outpatientRecord.pastMedicalHistory).toBe(`请输入既往史：${edited}`);
+  });
+
   it.each(['清空', '移除', '修改'] as const)('keeps a %s decision on the visible examination leaf without a second model call', async action => {
     const context = fiveFieldTemplateContext(true);
     await mountResult(context, ref(true), ref(false), [], undefined, '女', [{

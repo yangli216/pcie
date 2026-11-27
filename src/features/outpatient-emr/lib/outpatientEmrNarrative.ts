@@ -35,18 +35,34 @@ export interface OutpatientEmrDocumentChapter {
   referenceSlots?: Array<{ id: string; name: string; htmlText: string; readonly: boolean }>;
 }
 
+function chapterBodyNameMatches(field: OutpatientEmrTemplateField, titles: readonly string[]): boolean {
+  const normalize = (label: string) => label.trim().replace(/^(?:请输入|请填写)\s*/u, '').replace(/[：:]$/u, '').trim();
+  const names = new Set(titles.filter(Boolean).map(normalize));
+  return [field.name, field.id].some(label => {
+    const name = normalize(label);
+    return names.has(name) || names.has(name.replace(/(?:结果文本|文本|全文|正文|内容|详情|描述)$/u, ''))
+      || ['全文', '章节正文', '正文'].includes(name);
+  });
+}
+
+/** Input instructions name the control, not another clinical paragraph. */
+export function outpatientEmrChapterFieldTitle(field: OutpatientEmrTemplateField, title: string): string {
+  return ['text', 'textarea'].includes(field.type.toLowerCase()) && !field.dictionaryItems.length
+    && resolveOutpatientEmrFieldPromptProfile(field).shape === 'narrative'
+    && chapterBodyNameMatches(field, [title, field.articleId, field.articleDefinitionName])
+    ? title : field.name || title;
+}
+
 /** A bare input can be a duration, a measurement or a detail. Only a named full-body
  * text slot in its own clause can safely receive reviewed chapter prose verbatim. */
 export function outpatientEmrChapterTextField(chapter: OutpatientEmrDocumentChapter): OutpatientEmrTemplateField | undefined {
   const fields = chapter.fields.filter(slot => slot.editable).map(slot => slot.field);
-  const titles = new Set([chapter.title, ...fields.flatMap(field => [field.articleId, field.articleDefinitionName])].filter(Boolean));
+  const titles = [chapter.title, ...fields.flatMap(field => [field.articleId, field.articleDefinitionName])];
   const candidates = fields.filter(field => {
     if (!['text', 'textarea'].includes(field.type) || field.dictionaryItems.length
       || [field.name, field.id].some(label => /(?:时间|时长|日期|多久)$/u.test(label))
       || resolveOutpatientEmrFieldPromptProfile(field, fields).shape !== 'narrative') return false;
-    const equivalent = [field.name, field.id].some(name => titles.has(name) || titles.has(name.replace(/(?:结果文本|文本|全文|正文|内容|详情|描述)$/u, '')))
-      || ['全文', '章节正文', '正文'].includes(field.name);
-    return equivalent && chapter.sections.some(section => section.clauses.some(clause => !clause.separator
+    return chapterBodyNameMatches(field, titles) && chapter.sections.some(section => section.clauses.some(clause => !clause.separator
       && clause.parts.length === 1 && clause.parts[0].kind === 'field' && clause.parts[0].field.id === field.id));
   });
   return candidates.length === 1 ? candidates[0] : undefined;
@@ -312,7 +328,8 @@ function scanNarrative(
     if (section.fields.length === 1 && section.clauses.length === 1 && parts.length === 1
       && !section.clauses[0].separator && parts[0].kind === 'field' && field.dictionaryItems.length === 0
       && ['text', 'textarea'].includes(field.type.toLowerCase())
-      && (field.projectionMode !== 'section-compose' || field.name === section.title)) {
+      && (field.projectionMode !== 'section-compose' || field.name === section.title
+        || (chapterBodyNameMatches(field, [section.title]) && resolveOutpatientEmrFieldPromptProfile(field, section.fields).shape === 'narrative'))) {
       section.directField = field;
     }
   }
