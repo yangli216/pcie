@@ -165,6 +165,36 @@ function templateContext(): VoiceOutpatientEmrStartContext {
   };
 }
 
+function fiveFieldTemplateContext(hiddenVitals: boolean): VoiceOutpatientEmrStartContext {
+  const context = templateContext();
+  const extra = [
+    { id: 'past', title: '既往史', fields: ['请输入既往史'] },
+    { id: 'exam', title: '体格检查', fields: ['体温', '其他体格检查'] },
+    { id: 'notes', title: '注意事项及宣教', fields: ['注意事项文本'] },
+  ];
+  const definition = JSON.parse(context.template.templateDefinition);
+  for (const chapter of extra) {
+    context.template.targetFieldIds.push(...chapter.fields);
+    context.template.templateHtml += `<section data-id="${chapter.id}" data-article="${chapter.title}" data-name="${chapter.title}">`
+      + chapter.fields.map(id => `<span data-id="${id}" data-name="${id}" data-type="text" data-readonly="false"></span>`).join('') + '</section>';
+    definition.push({ ID: chapter.id, NAME: chapter.title, ARTICLE: chapter.title, eles: chapter.fields.map(id => ({
+      ID: id, NAME: id, TYPE: 'text', READONLY: false, VALUE: '', TEXT: '',
+    })) });
+  }
+  context.template.templateDefinition = JSON.stringify(definition);
+  const persist = vi.mocked(snapshots.persistOutpatientEmrTemplateSnapshot);
+  const previous = persist.getMockImplementation()!;
+  persist.mockImplementation(async input => {
+    const receipt = syntheticReceipt(input);
+    receipt.fieldPolicy!.fieldVisibility = { 体温: !hiddenVitals };
+    receipt.fieldPolicy!.fields = receipt.fieldPolicy!.fields.map(rule => rule.fieldId === '体温'
+      ? { ...rule, aiSuitable: false, promptSource: 'not_ai', resolvedPrompt: null, unmentionedDefault: null } : rule);
+    return receipt;
+  });
+  onTestFinished(() => { persist.mockImplementation(previous); });
+  return context;
+}
+
 async function mountResult(
   context: VoiceOutpatientEmrStartContext,
   factsReady: Ref<boolean> = ref(true),
@@ -513,6 +543,57 @@ describe('voice result with an HIS outpatient template', () => {
     submit().click();
     await vi.waitFor(() => expect(host.received).toHaveLength(1));
     expect(host.received[0].fieldValues).toMatchObject({ symptom: '咳嗽', duration: '3' });
+  });
+
+  it.each([false, true])('binds same-stream examination candidates and education to empty template leaves (hidden vitals=%s)', async hiddenVitals => {
+    const context = fiveFieldTemplateContext(hiddenVitals);
+    const suggestions = [{ id: 'SYN-EXAM', field: 'physicalExam', question: '核查腹部体征',
+      negativeRecordText: '腹软，无反跳痛。', rationale: '合成待核查项', priority: 'critical', status: 'pending', chapterId: 'exam' }] as const;
+    await mountResult(context, ref(true), ref(false), [], undefined, '女', [...suggestions], {
+      fieldValues: { 主诉文本: '上腹痛半天', 现病史文本: '持续性上腹痛半天，未呕吐。', 请输入既往史: '', 其他体格检查: '', 注意事项文本: '' },
+      record: { chiefComplaint: '上腹痛半天', historyOfPresentIllness: '持续性上腹痛半天，未呕吐。',
+        pastMedicalHistory: '', physicalExam: '', precautions: '按医嘱复诊，携带检查报告。' },
+    });
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    const exam = recordLine(hiddenVitals ? '其他体格检查' : '体格检查');
+    expect(exam.textContent).toContain('腹软，无反跳痛。');
+    expect(exam.querySelector('[data-clinical-fact-id="SYN-EXAM"]')).not.toBeNull();
+    expect(recordText('注意事项及宣教')).toContain('携带检查报告');
+    expect(recordText('既往史')).toContain('未记录');
+    if (hiddenVitals) expect(container.querySelector('[data-outpatient-emr-field-id="体温"]')).toBeNull();
+    expect(host.model).not.toHaveBeenCalled();
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    const result = host.received[0];
+    for (const values of [result.fieldValues, result.emrFieldValues]) {
+      expect(values.其他体格检查).toBe('腹软，无反跳痛。');
+      expect(values.注意事项文本).toContain('携带检查报告');
+      expect(values).not.toHaveProperty('请输入既往史');
+    }
+    expect(Object.keys(result.fieldValues).every(id => context.template.targetFieldIds.includes(id))).toBe(true);
+  });
+
+  it.each(['清空', '移除', '修改'] as const)('keeps a %s decision on the visible examination leaf without a second model call', async action => {
+    const context = fiveFieldTemplateContext(true);
+    await mountResult(context, ref(true), ref(false), [], undefined, '女', [{
+      id: 'SYN-EXAM', field: 'physicalExam', question: '核查腹部体征', negativeRecordText: '腹软，无反跳痛。',
+      rationale: '合成待核查项', priority: 'critical', status: 'pending',
+    }], { fieldValues: { 主诉文本: '上腹痛半天', 其他体格检查: '', 注意事项文本: '' } });
+    await vi.waitFor(() => expect(submit().disabled).toBe(false));
+    const expected = action === '修改' ? '医生记录的腹部体征。' : '';
+    if (action === '移除') {
+      recordLine('其他体格检查').querySelector<HTMLButtonElement>('[data-clinical-fact-id="SYN-EXAM"]')!.click();
+      await nextTick();
+      clickButton(recordLine('其他体格检查'), '移除');
+    } else {
+      await editField('其他体格检查', expected);
+    }
+    await vi.waitFor(() => expect(recordText('其他体格检查')).toBe(expected || '未记录（点击补充）'));
+    expect(host.model).not.toHaveBeenCalled();
+    submit().click();
+    await vi.waitFor(() => expect(host.received).toHaveLength(1));
+    expect(host.received[0].fieldValues.其他体格检查).toBe(expected);
+    expect(host.received[0].emrFieldValues.其他体格检查).toBe(expected);
   });
 
   it('renders the mapped draft in the original sections, preserves doctor edits and sends one combined result', async () => {

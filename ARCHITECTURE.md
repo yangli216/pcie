@@ -1240,6 +1240,8 @@ floating-ball 保持当前问诊页面展开，并在同一运行期内更新页
 
 ### 2. 语音问诊数据流
 
+门诊模板结果的 `useVoiceOutpatientEmrSupplements` 将同轮 `record_suggestions` 和诊断作用域内的注意事项绑定到确定且唯一的 AI 叙述字段，复用门诊字段映射与候选去重，不使用显示状态筛选生成对象。`useVoiceOutpatientEmrRecord` 继续持有字段值、医生修改、请求身份与回执锁；补充通过已有字段写入动作提交，不能直接修改组件或 store。混合隐藏章节的 `VoiceOutpatientEmrVisibleChapter` 同时接收字段正文和对应的事实/AI 补充标记，编辑、移除及回写仍使用原字段 ID。多个同义章节、字典/数值/局部字段、人工/HIS 字段不接收推测的全文投影。
+
 `app/events/useVoiceConsultationEntryController.ts` 管理 `start-voice-consultation` 与兼容 `med-hermes://voice-consultation` 深链的入口编排：先核对接诊身份，同患者同就诊已有内存中的结果（含流式占位与部分产物）时只唤起既有结果视图；不合并新的启动参数、不准备模板、不重置语音轮次，也不重新路由至录音或报告入口。结果状态由现有 `useVoiceConsultation` 持有，App 仅注入状态查询与导航。采集中重复启动仍核对当前绑定模板；无现场时才执行模板准备与原场景路由。`useEventListeners` 只注册事件并转交控制器。Bridge 对同次就诊重复启动保留 `last_result / event_queue`，避免破坏 pending 回执匹配；结束就诊和新就诊仍清理旧结果。 `sdk/med-hermes-sdk.js` 同步保留当前语音就诊身份、模板 scope 和事件去重游标，重复启动仍透传请求以唤起窗口；取消、结束、切换入口或明确切换就诊后重新建立绑定。
 
 ```

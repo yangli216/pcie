@@ -42,6 +42,7 @@ import {
   type OutpatientEmrAnalysisDependencies,
 } from './useOutpatientEmrAnalysis';
 import { useVoiceOutpatientEmrTemplateSource } from './useVoiceOutpatientEmrTemplateSource';
+import { useVoiceOutpatientEmrSupplements, type VoiceOutpatientEmrSupplements } from './useVoiceOutpatientEmrSupplements';
 
 export interface VoiceOutpatientEmrRecordOptions {
   context: Ref<VoiceOutpatientEmrStartContext | null>;
@@ -54,6 +55,7 @@ export interface VoiceOutpatientEmrRecordOptions {
   document?: Readonly<Ref<VoiceOutpatientEmrDocument | undefined>>;
   streaming?: Readonly<Ref<boolean>>;
   awaitInitialDraft?: Readonly<Ref<boolean>>;
+  supplements?: Readonly<Ref<VoiceOutpatientEmrSupplements>>;
 }
 
 /** Owns the current voice result's template draft; the result page owns submission. */
@@ -215,10 +217,31 @@ export function useVoiceOutpatientEmrRecord(
         || Object.prototype.hasOwnProperty.call(boundValues.value, field.id)
       )).map(field => field.id);
       return { key: chapter.id, label: chapter.title, text, fieldIds, fields, recordFields, direct, directText, boundFieldIds,
+        reviewed: Boolean(edit && !edit.fieldEditOnly && !edit.supplement),
         displayFields: chapter.fields.map(slot => slot.field),
         hasHiddenFields: chapter.fields.some(slot => slot.field.visible === false),
         sections: chapter.sections, available: boundFieldIds.length > 0 };
     });
+  });
+
+  useVoiceOutpatientEmrSupplements({
+    owner: () => analysis.request.value,
+    ready: () => isCurrent.value && analysis.analysisStatus.value === 'ready'
+      && !options.streaming?.value && !options.awaitingFeedback?.value,
+    chapters: () => chapterRows.value,
+    source: () => options.supplements?.value,
+    // Preserve the existing, resolved direct paragraph when binding a candidate.
+    // In particular, a restored result may still supply that paragraph separately.
+    values: () => ({ ...analysis.fieldValues.value, ...Object.fromEntries(chapterRows.value.flatMap(row =>
+      row.direct && row.directText !== undefined ? [[row.direct.id, row.directText]] : [])) }),
+    sources: () => analysis.fieldValueSources.value,
+    isEdited: id => {
+      if (analysis.isIndividuallyEdited(id)) return true;
+      const row = chapterRows.value.find(chapter => chapter.fieldIds.includes(id));
+      const edit = row && reviewedSections.value[chapterKey(row.key)];
+      return Boolean(edit && !edit.fieldEditOnly && !edit.supplement);
+    },
+    apply: analysis.replaceReviewedSectionValues,
   });
 
   const reviewFieldSections = computed(() => [

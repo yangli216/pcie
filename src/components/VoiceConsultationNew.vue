@@ -756,6 +756,7 @@ const voiceTemplateDraft = useVoiceOutpatientEmrRecord({
   document: computed(() => props.intentResult?.voiceTemplateDocument),
   streaming: computed(() => props.intentSource === 'llm' && props.intentResult?.generation?.status === 'streaming'),
   getLegacyRecord: () => props.intentResult?.outpatientRecord,
+  supplements: computed(() => ({ suggestions: factSuggestions.value, precautions: precautions.value })),
   awaitInitialDraft: computed(() => resultChannel.value === 'voice' && props.intentSource === 'llm'
     && !props.intentResult?.voiceTemplateDraft),
   awaitingFeedback: waitingWritebackFeedback,
@@ -777,7 +778,9 @@ const templateRecordSections = computed(() => voiceTemplateDraft.chapterRows.val
     return chapter.recordFields.includes(item.field)
       && voiceTemplateDraft.chapterRows.value.filter(row => row.recordFields.includes(item.field)).length === 1;
   });
-  const text = suggestions.reduce(mergeClinicalRecordSuggestionIntoText, chapter.text);
+  const text = chapter.reviewed ? chapter.text : suggestions.filter(item => !chapter.fields.some(field =>
+    field.recordField === item.field && voiceTemplateDraft.fieldValueSources.value[field.id] === 'doctor',
+  )).reduce(mergeClinicalRecordSuggestionIntoText, chapter.text);
   const facts = recordFactConfirmation.explicitFacts.value.filter(fact =>
     chapter.recordFields.includes(fact.field) || text.includes(fact.text));
   const boundCount = chapter.boundFieldIds.length;
@@ -3858,8 +3861,10 @@ useChronicRefillTimingPresentation(() => ({
                 :target-field-ids="'fieldIds' in section ? section.fieldIds : []"
                 :values="voiceTemplateDraft.fieldValues.value" :sources="voiceTemplateDraft.fieldValueSources.value"
                 :conflicts="voiceTemplateDraft.conflictFieldIds.value"
+                :fact-highlights="section.facts" :fact-suggestions="section.suggestions"
                 :editable="!section.readonly && !isResultUnavailable && !isWritebackBusy"
                 @update-field="voiceTemplateDraft.updateChapterField"
+                @dismiss-fact-suggestion="dismissFactSuggestion"
               />
               <VoiceRecordFieldEditor
                 v-else
